@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>StableHordeDetector</AssemblyName>
+    <Description>A BepInEx plugin for AI Roguelite to detect Stable Horde models.</Description>
+    <Version>1.0.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>..\AIRL\libs\Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>..\AIRL\libs\BepInEx.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>..\AIRL\libs\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\AIRL\libs\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+        <HintPath>..\AIRL\libs\UnityEngine.dll</HintPath>
+        <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+        <HintPath>..\AIRL\libs\UnityEngine.CoreModule.dll</HintPath>
+        <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

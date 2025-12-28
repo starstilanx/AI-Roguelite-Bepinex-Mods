@@ -1,0 +1,175 @@
+using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
+using System.IO;
+using UnityEngine;
+
+namespace AIROG_NPCExpansion
+{
+    [Serializable]
+    public class NPCData
+    {
+        public string Name;
+        public string Description;
+        public string Personality;
+        public string Scenario;
+        public string FirstMessage;
+        public string MessageExamples;
+        public string CreatorNotes;
+        public string SystemPrompt;
+        public string PostHistoryInstructions;
+        public List<string> AlternateGreetings;
+        public List<string> Tags;
+        public List<string> InteractionTraits;
+        public Dictionary<string, string> Extensions;
+
+        // Relationship System
+        public int Affinity = 0; // -100 to 100
+        public string RelationshipStatus = "Stranger";
+        public List<string> InteractionHistory = new List<string>();
+
+        // Equipment System
+        public Dictionary<string, string> EquippedUuids = new Dictionary<string, string>();
+
+        // Autonomy Settings
+        public bool AllowAutoEquip = true;
+        public bool AllowSelfPreservation = true;
+        public bool AllowEconomicActivity = false;
+        public bool AllowWorldInteraction = true;
+        
+        // Stats & Skills
+        public Dictionary<SS.PlayerAttribute, long> Attributes = new Dictionary<SS.PlayerAttribute, long>();
+        public Dictionary<string, PlayerSkill> Skills = new Dictionary<string, PlayerSkill>();
+        public List<string> Abilities = new List<string>();
+
+        public NPCData()
+        {
+            AlternateGreetings = new List<string>();
+            Tags = new List<string>();
+            InteractionTraits = new List<string>();
+            Extensions = new Dictionary<string, string>();
+            InteractionHistory = new List<string>();
+            EquippedUuids = new Dictionary<string, string>();
+            Attributes = new Dictionary<SS.PlayerAttribute, long>();
+            Skills = new Dictionary<string, PlayerSkill>();
+            Abilities = new List<string>();
+            
+            // Default attributes
+            Attributes[SS.PlayerAttribute.Strength] = 10;
+            Attributes[SS.PlayerAttribute.Dexterity] = 10;
+            Attributes[SS.PlayerAttribute.Intellect] = 10;
+            Attributes[SS.PlayerAttribute.Cunning] = 10;
+            Attributes[SS.PlayerAttribute.Charisma] = 10;
+        }
+
+        public void ChangeAffinity(int delta, string reason = null)
+        {
+            Affinity = Mathf.Clamp(Affinity + delta, -100, 100);
+            
+            if (!string.IsNullOrEmpty(reason))
+            {
+                InteractionHistory.Insert(0, reason);
+                if (InteractionHistory.Count > 5) InteractionHistory.RemoveAt(5);
+            }
+
+            // Update status based on affinity
+            if (Affinity >= 80) RelationshipStatus = "Soulmate";
+            else if (Affinity >= 50) RelationshipStatus = "Close Friend";
+            else if (Affinity >= 20) RelationshipStatus = "Friend";
+            else if (Affinity > -20) RelationshipStatus = "Stranger";
+            else if (Affinity > -50) RelationshipStatus = "Disliked";
+            else if (Affinity > -80) RelationshipStatus = "Enemy";
+            else RelationshipStatus = "Nemesis";
+        }
+
+        public static Dictionary<string, NPCData> LoreCache = new Dictionary<string, NPCData>();
+
+        public static NPCData CreateDefault(string name)
+        {
+            return new NPCData
+            {
+                Name = name,
+                Description = "",
+                Personality = "",
+                Scenario = "",
+                FirstMessage = "",
+                MessageExamples = ""
+            };
+        }
+
+        public static void Save(string uuid, NPCData data)
+        {
+            LoreCache[uuid] = data;
+            
+            // 1. Save to global plugin folder (Global Backup)
+            try
+            {
+                string globalPath = Path.Combine(NPCExpansionPlugin.NPCDataPath, uuid + ".json");
+                File.WriteAllText(globalPath, JsonConvert.SerializeObject(data, Formatting.Indented));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[AIROG_NPCExpansion] Failed global save: {ex.Message}");
+            }
+        }
+
+        public static NPCData Load(string uuid)
+        {
+            // 1. Check Cache
+            if (LoreCache.TryGetValue(uuid, out var cachedData)) return cachedData;
+
+            // 2. Check Global Folder
+            string globalPath = Path.Combine(NPCExpansionPlugin.NPCDataPath, uuid + ".json");
+            if (File.Exists(globalPath))
+            {
+                try
+                {
+                    var data = JsonConvert.DeserializeObject<NPCData>(File.ReadAllText(globalPath));
+                    LoreCache[uuid] = data;
+                    return data;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[AIROG_NPCExpansion] Failed global load: {ex.Message}");
+                }
+            }
+            return null;
+        }
+
+        public static void SaveSessionLore(string saveDir)
+        {
+            if (LoreCache.Count == 0) return;
+            try
+            {
+                string path = Path.Combine(saveDir, "npcexpansion_lore.json");
+                File.WriteAllText(path, JsonConvert.SerializeObject(LoreCache, Formatting.Indented));
+                Debug.Log($"[AIROG_NPCExpansion] Saved {LoreCache.Count} lore entries to save folder.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[AIROG_NPCExpansion] Failed to save lore bundle: {ex.Message}");
+            }
+        }
+
+        public static void LoadSessionLore(string saveDir)
+        {
+            LoreCache.Clear(); // Clear existing cache for new session
+            string path = Path.Combine(saveDir, "npcexpansion_lore.json");
+            if (!File.Exists(path)) return;
+
+            try
+            {
+                var loaded = JsonConvert.DeserializeObject<Dictionary<string, NPCData>>(File.ReadAllText(path));
+                foreach (var kvp in loaded)
+                {
+                    LoreCache[kvp.Key] = kvp.Value;
+                }
+                Debug.Log($"[AIROG_NPCExpansion] Loaded {loaded.Count} lore entries from save folder.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[AIROG_NPCExpansion] Failed to load lore bundle: {ex.Message}");
+            }
+        }
+    }
+}

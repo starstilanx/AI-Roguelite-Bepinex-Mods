@@ -1,0 +1,5 @@
+d:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_NPCExpansion\obj\Debug\net40\AIROG_NPCExpansion.csproj.AssemblyReference.cache
+d:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_NPCExpansion\obj\Debug\net40\AIROG_NPCExpansion.GeneratedMSBuildEditorConfig.editorconfig
+d:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_NPCExpansion\obj\Debug\net40\AIROG_NPCExpansion.AssemblyInfoInputs.cache
+d:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_NPCExpansion\obj\Debug\net40\AIROG_NPCExpansion.AssemblyInfo.cs
+d:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_NPCExpansion\obj\Debug\net40\AIROG_NPCExpansion.csproj.CoreCompileInputs.cache
