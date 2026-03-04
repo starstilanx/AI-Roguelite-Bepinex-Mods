@@ -23,6 +23,19 @@ namespace AIROG_NPCExpansion
             if (data.AllowEconomicActivity)
                 EconomicActivity(npc, data, manager);
 
+            // Auto-migrate: Use Scenario as Goal if Goal is missing (for existing saves)
+            if (string.IsNullOrEmpty(data.CurrentGoal) && !string.IsNullOrEmpty(data.Scenario))
+            {
+                data.CurrentGoal = data.Scenario;
+                NPCData.Save(npc.uuid, data);
+            }
+
+            // Pursue Narrative Goal
+            if (!string.IsNullOrEmpty(data.CurrentGoal))
+                await PursueGoal(npc, data, manager);
+
+            await PerformAbility(npc, data, manager);
+
             if (data.AllowWorldInteraction)
                 await WorldInteraction(npc, data, manager); // Awaited WorldInteraction
         }
@@ -94,12 +107,16 @@ namespace AIROG_NPCExpansion
                 if (!IsItemValidForSlot(item, slot)) continue;
 
                 double power = CalculateItemPower(npc, item, manager);
+                // Debug.Log($"[NPCAutonomy] Checking {item.GetPrettyName()} for {slot}: Power {power}"); // VERBOSE
+
                 if (power > bestPower)
                 {
                     bestPower = power;
                     best = item;
                 }
             }
+
+            if (best != null) Debug.Log($"[NPCAutonomy] Best for {slot} is {best.GetPrettyName()} (Pow: {bestPower})");
 
             return best;
         }
@@ -146,7 +163,88 @@ namespace AIROG_NPCExpansion
                 power += Utils.CalculatePlayerDamage(npc.level, new CauseOfEvent(item), npc.level, manager.GetDifficulty());
             }
 
+            // --- ROLE SUITABILITY BONUS ---
+            NPCData data = NPCData.Load(npc.uuid);
+            if (data != null)
+            {
+                float suitability = GetItemSuitability(npc, data, item);
+                power *= suitability;
+            }
+
             return power;
+        }
+
+        private static float GetItemSuitability(GameCharacter npc, NPCData data, GameItem item)
+        {
+            float score = 1.0f;
+            var roles = GetRoleKeywords(npc, data);
+            string itemName = item.GetPrettyName().ToLowerInvariant();
+            string itemDesc = (item.description ?? "").ToLowerInvariant();
+
+            bool isMagicUser = roles.Contains("mage") || roles.Contains("wizard") || roles.Contains("sorcerer") || roles.Contains("warlock") || roles.Contains("priest") || roles.Contains("cleric") || roles.Contains("enchanter") || roles.Contains("scholar");
+            bool isWarrior = roles.Contains("warrior") || roles.Contains("fighter") || roles.Contains("knight") || roles.Contains("soldier") || roles.Contains("barbarian") || roles.Contains("guard") || roles.Contains("paladin");
+            bool isRogue = roles.Contains("rogue") || roles.Contains("thief") || roles.Contains("assassin") || roles.Contains("ranger") || roles.Contains("hunter") || roles.Contains("scout");
+            bool isBeast = roles.Contains("beast") || roles.Contains("animal") || roles.Contains("monster");
+
+            // --- MAGIC ITEM LOGIC ---
+            if (itemName.Contains("scroll") || itemName.Contains("book") || itemName.Contains("tome") || itemName.Contains("staff") || itemName.Contains("wand") || itemName.Contains("orb") || itemName.Contains("robe") || itemName.Contains("hat") || itemName.Contains("hood"))
+            {
+                if (isMagicUser) score *= 3.0f; // Strongly preferred
+                else if (isWarrior) score *= 0.5f; // Disliked
+                else if (isBeast) score *= 0.1f; // Useless
+            }
+
+            // --- HEAVY WEAPON/ARMOR LOGIC ---
+            if (itemName.Contains("plate") || itemName.Contains("mail") || itemName.Contains("shield") || itemName.Contains("sword") || itemName.Contains("axe") || itemName.Contains("hammer") || itemName.Contains("mace") || itemName.Contains("helm"))
+            {
+                if (isWarrior) score *= 2.0f;
+                else if (isMagicUser) score *= 0.6f;
+                else if (isBeast) score *= 0.1f;
+            }
+
+            // --- ROGUE LOGIC ---
+            if (itemName.Contains("dagger") || itemName.Contains("knife") || itemName.Contains("bow") || itemName.Contains("arrow") || itemName.Contains("cloak") || itemName.Contains("leather") || itemName.Contains("poison"))
+            {
+                if (isRogue) score *= 2.5f;
+                else if (isWarrior) score *= 1.0f; // Warriors can use bows/daggers
+                else if (isMagicUser) score *= 0.8f; 
+            }
+
+            // --- FOOD/CONSUMABLES ---
+            if (item.IsConsumable())
+            {
+                if (isBeast && (itemName.Contains("meat") || itemName.Contains("raw") || itemName.Contains("flesh"))) score *= 5.0f;
+            }
+
+            return score;
+        }
+
+        private static HashSet<string> GetRoleKeywords(GameCharacter npc, NPCData data)
+        {
+            HashSet<string> keywords = new HashSet<string>();
+            
+            // 1. Tags
+            if (data.Tags != null)
+            {
+                foreach (var t in data.Tags) keywords.Add(t.ToLowerInvariant());
+            }
+
+            // 2. Generation Instructions (Strongest Signal)
+            if (!string.IsNullOrEmpty(data.GenerationInstructions))
+            {
+                var parts = data.GenerationInstructions.ToLowerInvariant().Split(new[] { ' ', ',', '.' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (var p in parts) keywords.Add(p);
+            }
+
+            // 3. Name/Description Fallback
+            if (keywords.Count == 0)
+            {
+                string combo = (npc.GetPrettyName() + " " + npc.description).ToLowerInvariant();
+                var parts = combo.Split(new[] { ' ', ',', '.' }, StringSplitOptions.RemoveEmptyEntries);
+                 foreach (var p in parts) keywords.Add(p);
+            }
+
+            return keywords;
         }
 
         private static void SelfPreservation(GameCharacter npc, NPCData data, GameplayManager manager)
@@ -162,7 +260,7 @@ namespace AIROG_NPCExpansion
                     npc.health = Math.Min(npc.maxHealth, npc.health + healAmount);
                     npc.items.Remove(healingItem);
                     
-                    manager.gameLogView.LogText(GameLogView.AiDecision($"{npc.GetPrettyName()} uses {healingItem.GetPrettyName()} to heal wounds."));
+                    _ = manager.gameLogView.LogText(GameLogView.AiDecision($"{npc.GetPrettyName()} uses {healingItem.GetPrettyName()} to heal wounds."));
                 }
             }
         }
@@ -206,31 +304,72 @@ namespace AIROG_NPCExpansion
             if (manager.currentPlace == null) return;
             if (npc.items == null) npc.items = new List<GameItem>();
 
+            // --- ENEMY HOSTILITY EARLY BAIL-OUT ---
+            // Hostile enemies should NOT be casually examining objects when the player is present.
+            // They should be focused on combat, not admiring art or warming by fires.
+            bool isHostile = npc.IsEnemyType() || npc.sentimentV2 <= -2.0f; // Scorned or worse
+            bool playerIsInSamePlace = manager.playerCharacter != null && manager.currentPlace != null;
+            
+            if (isHostile && playerIsInSamePlace)
+            {
+                // Hostile enemies only do combat-relevant actions, skip all world interactions
+                Debug.Log($"[NPCAutonomy] Skipping world interaction for hostile {npc.GetPrettyName()} - player present");
+                return;
+            }
+
+            // --- 0. COMPANION ANTI-LOOT CHECK ---
+            // If NPC is a follower, they should NOT auto-loot containers or loose items.
+            // They wait for the player to distribute equipment.
+            bool isFollower = false;
+            if (manager.playerCharacter != null && manager.playerCharacter.pcGameEntity != null && manager.playerCharacter.pcGameEntity.followers != null)
+            {
+                 isFollower = manager.playerCharacter.pcGameEntity.followers.Contains(npc);
+            }
+
             // 1. Look for items to pick up (Smarter logic)
-            if (npc.items.Count < 20)
+            // Skip looting for followers
+            if (!isFollower && npc.items.Count < 20)
             {
                 var candidates = new List<(ThingGameEntity source, GameItem item, bool isFromStorage)>();
 
-                foreach (var thing in manager.currentPlace.things)
+                // Ensure things collection is not null
+                var things = manager.currentPlace.things;
+                if (things == null) things = new List<ThingGameEntity>();
+
+                foreach (var thing in things)
                 {
-                    if (thing is StorageThingGameEntity storage && storage.items.Count > 0)
+                    if (thing is StorageThingGameEntity storage && storage.items != null && storage.items.Count > 0)
                     {
                         foreach (var stItem in storage.items)
                         {
-                            candidates.Add((thing, stItem, true));
+                            if (stItem != null) candidates.Add((thing, stItem, true));
                         }
                     }
                     else if (thing.storedItemInfo != null)
                     {
                         // We partially hydrate to evaluate
-                        GameItem tempItem = (GameItem)thing.storedItemInfo.GetPartiallyHydrated(manager);
-                        candidates.Add((thing, tempItem, false));
+                        try
+                        {
+                            GameItem tempItem = (GameItem)thing.storedItemInfo.GetPartiallyHydrated(manager);
+                            if (tempItem != null) candidates.Add((thing, tempItem, false));
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[NPCAutonomy] Failed to hydrate storedItemInfo: {ex.Message}");
+                        }
                     }
                     else if (IsLikelyLooseItem(thing.GetPrettyName()))
                     {
                         // Create a temporary item for evaluation (not yet in global map)
-                        GameItem tempItem = await GameItem.Create(thing.GetPrettyName(), thing.description, manager, npc.level, 0, GameItem.ItemQuality.COMMON, true);
-                        candidates.Add((thing, tempItem, false));
+                        try
+                        {
+                            GameItem tempItem = await GameItem.Create(thing.GetPrettyName(), thing.description, manager, npc.level, 0, GameItem.ItemQuality.COMMON, true);
+                            if (tempItem != null) candidates.Add((thing, tempItem, false));
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[NPCAutonomy] Failed to create temp item: {ex.Message}");
+                        }
                     }
                 }
 
@@ -250,7 +389,7 @@ namespace AIROG_NPCExpansion
                     else if (winner.source.storedItemInfo != null)
                     {
                         winner.source.storedItemInfo = null;
-                        // Ensure it's in the global map since GetPartiallyHydrated doesn't add it
+                        // Ensure it's in the global map
                         if (!SS.I.uuidToGameEntityMap.ContainsKey(itemToPick.uuid))
                         {
                             SS.I.uuidToGameEntityMap[itemToPick.uuid] = itemToPick;
@@ -278,19 +417,32 @@ namespace AIROG_NPCExpansion
                     itemToPick.SetParentEnt(npc); // For entity logic
 
                     string logMsg = $"{npc.GetPrettyName()} picks up {itemToPick.GetPrettyName()} from {winner.source.GetPrettyName()}.";
-                    manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
+                    _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
                     Debug.Log($"[NPCAutonomy] {logMsg}");
                     return; // Interaction spent
                 }
             }
 
-            // 2. Interact with other things (Plausibility Check)
-            // We want interaction nearly every turn IF something plausible exists.
+            // --- 2. IDLE CHANCE / FLAVOR BEHAVIOR ---
+            // 50% chance to do NOTHING (or a flavor idle) instead of examining an object.
+            // This prevents "machine gun" interactions every turn.
+            if (UnityEngine.Random.value < 0.5f)
+            {
+                 // Optional: Very small chance to bark a thought
+                 if (UnityEngine.Random.value < 0.05f) // 5% chance of idle thought
+                 {
+                     PerformIdleBark(npc, data, manager);
+                 }
+                 return;
+            }
+
+            // --- 3. INTERACT WITH THINGS ---
+            // Use manager for combat checks
             var intCandidates = manager.currentPlace.things
-                .Select(t => new { Thing = t, Plaus = GetInteractionPlausibility(npc, data, t) })
+                .Select(t => new { Thing = t, Plaus = GetInteractionPlausibility(npc, data, t, manager) })
                 .Where(x => x.Plaus.isPlausible)
-                .OrderByDescending(x => x.Plaus.score)
-                .ThenBy(x => UnityEngine.Random.value)
+                // Add JITTER to score (0.8x to 1.2x) to prevent all NPCs swarming the same "best" object
+                .OrderByDescending(x => x.Plaus.score * UnityEngine.Random.Range(0.8f, 1.2f)) 
                 .ToList();
 
             if (intCandidates.Count > 0)
@@ -298,9 +450,22 @@ namespace AIROG_NPCExpansion
                 var best = intCandidates[0];
                 string verb = best.Plaus.verb;
                 string logMsg = $"{npc.GetPrettyName()} {verb} {best.Thing.GetPrettyName()}.";
-                manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
+                _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
                 Debug.Log($"[NPCAutonomy] {logMsg}");
             }
+        }
+
+        private static void PerformIdleBark(GameCharacter npc, NPCData data, GameplayManager manager)
+        {
+            // Simple flavor thoughts based on traits
+            string msg = "looks around.";
+            if (data.InteractionTraits.Any(t => t.ToLower().Contains("paranoid"))) msg = "glances nervously over their shoulder.";
+            else if (data.InteractionTraits.Any(t => t.ToLower().Contains("curious"))) msg = "inspects their surroundings closely.";
+            else if (data.InteractionTraits.Any(t => t.ToLower().Contains("lazy"))) msg = "yawns.";
+            else if (data.InteractionTraits.Any(t => t.ToLower().Contains("aggressive"))) msg = "clenches their fist.";
+
+            string logMsg = $"{npc.GetPrettyName()} {msg}";
+            _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
         }
 
         private struct PlausResult
@@ -310,9 +475,12 @@ namespace AIROG_NPCExpansion
             public float score;
         }
 
-        private static PlausResult GetInteractionPlausibility(GameCharacter npc, NPCData data, ThingGameEntity thing)
+        private static PlausResult GetInteractionPlausibility(GameCharacter npc, NPCData data, ThingGameEntity thing, GameplayManager manager = null)
         {
             if (thing == null) return new PlausResult { isPlausible = false };
+
+            // Combat Check
+            bool inCombat = manager != null && manager.uiEncounter != null && manager.uiEncounter.IsEncounterActive();
 
             // System objects are never plausible
             string thingNameL = thing.GetPrettyName().ToLowerInvariant();
@@ -325,32 +493,47 @@ namespace AIROG_NPCExpansion
             string verb = "examines";
             float score = 1.0f;
 
+            // --- HOSTILITY CHECK ---
+            // If NPC is hostile and player is present, they shouldn't do "relaxed" things like sitting or warming hands.
+            bool isHostile = npc.IsEnemyType() || npc.sentimentV2 <= -2.0f; // Scorned or worse
+            bool playerIsHere = (manager != null && manager.currentPlace == npc.parentPlace);
+
             // Use NPC tags for logic
             bool isBeast = data.Tags != null && data.Tags.Any(t => t.ToLower().Contains("beast") || t.ToLower().Contains("animal") || t.ToLower().Contains("spider") || t.ToLower().Contains("monster"));
             bool isHumanoid = data.Tags != null && data.Tags.Any(t => t.ToLower().Contains("human") || t.ToLower().Contains("person") || t.ToLower().Contains("humanoid") || t.ToLower().Contains("civilized"));
             bool isPious = data.InteractionTraits != null && data.InteractionTraits.Any(t => t.ToLower().Contains("pious") || t.ToLower().Contains("religious") || t.ToLower().Contains("holy"));
             bool isCurious = data.InteractionTraits != null && data.InteractionTraits.Any(t => t.ToLower().Contains("curious") || t.ToLower().Contains("investigative"));
+            
+            // New Role Logic
+            var roles = GetRoleKeywords(npc, data);
+            bool isMagicUser = roles.Contains("mage") || roles.Contains("wizard") || roles.Contains("sorcerer") || roles.Contains("warlock") || roles.Contains("priest") || roles.Contains("cleric");
+            bool isWarrior = roles.Contains("warrior") || roles.Contains("fighter") || roles.Contains("soldier") || roles.Contains("guard") || roles.Contains("mercenary");
 
             string thingDesc = (thing.GetPotentiallyNullDescription() ?? "").ToLowerInvariant();
             string thingName = thing.GetPrettyName().ToLowerInvariant();
 
-            // Example specific plausibility rules
+            // --- SPECIFIC OBJECT RULES ---
+
             if (thingName.Contains("altar") || thingName.Contains("shrine") || thingName.Contains("statue of a deity"))
             {
-                if (isBeast) return new PlausResult { isPlausible = false }; // "some random giant spider wouldn't care about an altar"
+                if (inCombat) return new PlausResult { isPlausible = false }; 
+                if (isBeast) return new PlausResult { isPlausible = false }; 
                 if (isPious) { verb = "prays at"; score = 5.0f; }
-                else if (isHumanoid) { verb = "ponderously looks at"; score = 2.0f; }
+                else if (isMagicUser || isHumanoid) { verb = "inspects the runes on"; score = 2.0f; }
             }
 
             if (thingName.Contains("chest") || thingName.Contains("box") || thingName.Contains("barrel") || thingName.Contains("crate"))
             {
+                if (inCombat) return new PlausResult { isPlausible = false };
                 if (isBeast) { verb = "sniffs at"; score = 2.0f; }
-                else if (isHumanoid) { verb = "searches through"; score = 4.0f; }
+                else if (isHumanoid) { verb = "carefully checks"; score = 4.0f; }
             }
 
             if (thingName.Contains("book") || thingName.Contains("scroll") || thingName.Contains("tome") || thingName.Contains("shelf"))
             {
+                if (inCombat) return new PlausResult { isPlausible = false };
                 if (isBeast) { verb = "confusedly paws at"; score = 1.0f; }
+                else if (isMagicUser) { verb = "intently studies"; score = 10.0f; } // Huge bonus for mages
                 else if (isHumanoid) { verb = "reads from"; score = 3.0f; }
             }
             
@@ -362,8 +545,32 @@ namespace AIROG_NPCExpansion
 
             if (thingName.Contains("fire") || thingName.Contains("hearth") || thingName.Contains("campfire"))
             {
+                if (inCombat) return new PlausResult { isPlausible = false };
+                
+                // HOSTILITY CHECK: Enemies won't cozy up to the fire if player is there
+                if (isHostile && playerIsHere) return new PlausResult { isPlausible = false };
+
                 if (isBeast) { verb = "warily circles"; score = 2.0f; }
                 else { verb = "warms themselves by"; score = 4.0f; }
+            }
+
+            if (thingName.Contains("bed") || thingName.Contains("chair") || thingName.Contains("bench") || thingName.Contains("throne"))
+            {
+                 if (inCombat) return new PlausResult { isPlausible = false };
+                 
+                 // HOSTILITY CHECK: Enemies won't sit/sleep knowing player is there
+                 if (isHostile && playerIsHere) return new PlausResult { isPlausible = false };
+
+                 if (isBeast) return new PlausResult { isPlausible = false };
+                 
+                 if (isWarrior && thingName.Contains("throne")) { verb = "boldly sits upon"; score = 3.0f; }
+                 else { verb = "rests on"; score = 3.0f; }
+            }
+
+            if (thingName.Contains("dummy") || thingName.Contains("target") || thingName.Contains("rack"))
+            {
+                if (inCombat) return new PlausResult { isPlausible = false };
+                if (isWarrior) { verb = "practices strikes on"; score = 8.0f; } // Huge bonus for warriors
             }
 
             // High curiosity increases score
@@ -376,6 +583,12 @@ namespace AIROG_NPCExpansion
         {
             if (string.IsNullOrEmpty(name)) return false;
             string n = name.ToLowerInvariant();
+            
+            // Exclude furniture/static objects explicitly
+            if (n.Contains("rack") || n.Contains("shelf") || n.Contains("cabinet") || n.Contains("chest") || 
+                n.Contains("table") || n.Contains("altar") || n.Contains("stand") || n.Contains("pedestal"))
+                return false;
+
             return n.Contains("machete") || n.Contains("sword") || n.Contains("shield") || n.Contains("armor") || 
                    n.Contains("potion") || n.Contains("book") || n.Contains("dagger") || n.Contains("staff") || 
                    n.Contains("bow") || n.Contains("helmet") || n.Contains("boots") || n.Contains("gloves") || 
@@ -388,6 +601,44 @@ namespace AIROG_NPCExpansion
             // This is now redundant but kept for any external references if needed, 
             // though we've integrated it into the new logic.
             return GetInteractionPlausibility(null, new NPCData(), thing).isPlausible;
+        }
+
+        private static async Task PursueGoal(GameCharacter npc, NPCData data, GameplayManager manager)
+        {
+             // 10% chance to act on goal per turn, OR immediately if we have no thoughts yet (for UI)
+             bool forceThink = (data.RecentThoughts == null || data.RecentThoughts.Count == 0);
+             if (forceThink || UnityEngine.Random.value < 0.1f) 
+             {
+                 string progress = string.IsNullOrEmpty(data.GoalProgress) ? "starting" : data.GoalProgress;
+                 string thought = $"Thinking about goal: {data.CurrentGoal} ({progress}).";
+                 Debug.Log($"[NPCAutonomy] {npc.GetPrettyName()}: {thought}");
+                 
+                 if (data.RecentThoughts == null) data.RecentThoughts = new List<string>();
+                 
+                 // Fix duplicate spam: Don't add if it's identical to the last one
+                 if (data.RecentThoughts.Count == 0 || data.RecentThoughts[0] != thought)
+                 {
+                     data.RecentThoughts.Insert(0, thought);
+                     if (data.RecentThoughts.Count > 5) data.RecentThoughts.RemoveAt(data.RecentThoughts.Count - 1);
+                 }
+                 
+                 NPCData.Save(npc.uuid, data);
+             }
+        }
+
+        private static async Task PerformAbility(GameCharacter npc, NPCData data, GameplayManager manager)
+        {
+            // 5% chance to perform an ability if one exists
+            if (UnityEngine.Random.value > 0.05f) return;
+
+            // Use DetailedAbilities directly to avoid the allocation overhead of the Abilities getter shim
+            if (data.DetailedAbilities.Count == 0) return;
+
+            var abil = data.DetailedAbilities[UnityEngine.Random.Range(0, data.DetailedAbilities.Count)];
+
+            string logMsg = $"{npc.GetPrettyName()} uses {abil.Name}! ({abil.Description})";
+            _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
+            Debug.Log($"[NPCAutonomy] {logMsg}");
         }
 
     }

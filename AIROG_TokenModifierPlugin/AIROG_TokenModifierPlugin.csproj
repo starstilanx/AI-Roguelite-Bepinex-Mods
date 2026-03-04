@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net40</TargetFramework>
+    <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_TokenModifierPlugin</AssemblyName>
     <Description>A BepInEx plugin to modify token counts in AI Roguelite.</Description>
     <Version>1.0.0</Version>
@@ -10,10 +10,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
-    <PackageReference Include="BepInEx.Core" Version="5.*" />
-    <PackageReference Include="BepInEx.PluginInfoProps" Version="1.*" />
-    <PackageReference Include="UnityEngine.Modules" Version="2019.4.20" IncludeAssets="compile" />
+    <Reference Include="BepInEx">
+      <HintPath>..\AIRL\libs\BepInEx.dll</HintPath>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>..\AIRL\libs\0Harmony.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>..\AIRL\libs\UnityEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>..\AIRL\libs\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
   </ItemGroup>
   
   <ItemGroup Condition="'$(TargetFramework.TrimEnd(`0123456789`))' == 'net'">
@@ -21,7 +29,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Assembly-CSharp.csproj" />
+    <Reference Include="Assembly-CSharp">
+      <HintPath>..\AIRL\libs\Assembly-CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\AIRL\libs\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>..\AIRL\libs\UnityEngine.UI.dll</HintPath>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>..\AIRL\libs\Unity.TextMeshPro.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

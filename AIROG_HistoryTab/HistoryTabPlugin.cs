@@ -1,4 +1,5 @@
 using BepInEx;
+using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.UI;
@@ -19,6 +20,7 @@ namespace AIROG_HistoryTab
         public const string PLUGIN_VERSION = "1.0.0";
 
         public static HistoryTabPlugin Instance { get; private set; }
+        public static ConfigEntry<bool> EnableLogTruncation;
 
         private void Awake()
         {
@@ -140,11 +142,16 @@ namespace AIROG_HistoryTab
                 Logger.LogInfo("HistoryTabPlugin Awake completed successfully.");
                 
                 // Truncate large logs to prevent IndexOutOfRangeException in ConsoleEncoding
-                ConsoleLogFix.Patch(harmony);
+                EnableLogTruncation = Config.Bind("General", "EnableLogTruncation", true, "Truncates extremely long log lines (e.g. from Chinese localization) preventing Windows Console crashes.");
+                ConsoleLogFix.Patch(harmony, EnableLogTruncation.Value);
+
+                // Adjust token limits for Chinese users to prevent truncated responses and JSON errors
+                ChineseTokenFix.Patch(harmony);
 
                 // Handle History Import/Export
                 HistoryImportExport.Patch(harmony);
-
+                
+                
                 // Inject default prompts
                 if (SS.I != null)
                 {
@@ -352,6 +359,8 @@ namespace AIROG_HistoryTab
         
         public static void Postfix_BuildPromptString(GameplayManager __instance, ref string __result)
         {
+            // DISABLED: Logic moved to AIROG_GenContext to optimize token usage.
+            /*
             var universe = __instance.GetCurrentUniverse();
             if (universe != null)
             {
@@ -366,6 +375,7 @@ namespace AIROG_HistoryTab
                     // Debug.Log($"[HistoryTab] History is empty for universe {universe.name}, skipping injection.");
                 }
             }
+            */
         }
 
         public static bool Prefix_IncrTime(DateTimeDisp __instance, long secs)

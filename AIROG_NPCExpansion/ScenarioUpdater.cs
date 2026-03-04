@@ -9,24 +9,33 @@ namespace AIROG_NPCExpansion
     public static class ScenarioUpdater
     {
         private static int _turnCounter = 0;
-        private const int TURNS_PER_UPDATE = 1; 
+        private static int _autonomyCounter = 0;
+        private const int TURNS_PER_UPDATE = 1;           // How often to run expensive AI scenario updates
+        private const int AUTONOMY_TURNS_PER_UPDATE = 3;  // How often to run NPC autonomy (equip, goal pursuit, world interaction)
         private static bool _isUpdating = false;
 
         public static void OnTurnHappened(int numTurns, long secs)
         {
             _turnCounter += numTurns;
-            Debug.Log($"[AIROG_NPCExpansion] OnTurnHappened: {numTurns} turns. Counter: {_turnCounter}/{TURNS_PER_UPDATE}");
+            _autonomyCounter += numTurns;
+            Debug.Log($"[AIROG_NPCExpansion] OnTurnHappened: {numTurns} turns. ScenarioCounter: {_turnCounter}/{TURNS_PER_UPDATE}, AutonomyCounter: {_autonomyCounter}/{AUTONOMY_TURNS_PER_UPDATE}");
             
             var manager = GameObject.FindObjectOfType<GameplayManager>();
             if (manager == null || manager.currentPlace == null) return;
 
-            // Trigger autonomous actions on the main thread
             var nearbyNpcs = manager.GetCharsForNpcConvoSelectorDropdown()?.Where(c => c != null && c.corpseState == GameCharacter.CorpseState.NONE).ToList();
-            if (nearbyNpcs != null)
+
+            // Run autonomy (equip decisions, goal pursuit, world interaction) on a separate, throttled cadence
+            // to avoid launching expensive async AI calls on every single turn.
+            if (_autonomyCounter >= AUTONOMY_TURNS_PER_UPDATE)
             {
-                foreach (var npc in nearbyNpcs)
+                _autonomyCounter = 0;
+                if (nearbyNpcs != null)
                 {
-                    _ = NPCAutonomy.Process(npc, manager);
+                    foreach (var npc in nearbyNpcs)
+                    {
+                        _ = NPCAutonomy.Process(npc, manager);
+                    }
                 }
             }
 

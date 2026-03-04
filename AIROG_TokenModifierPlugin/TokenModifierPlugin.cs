@@ -3,6 +3,7 @@ using BepInEx.Configuration;
 using UnityEngine;
 using HarmonyLib;
 using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
 using System.Collections.Generic;
 
 namespace AIROG_TokenModifierPlugin
@@ -66,13 +67,20 @@ namespace AIROG_TokenModifierPlugin
                     {
                         newMax = _maxTokensStory.Value;
                     }
-                    else if (currentMax == 1090 || currentMax == 15000)
+                    else if (currentMax == 1090)
                     {
                         newMax = _maxTokensChat.Value;
                     }
                     else if (currentMax == 550)
                     {
                         newMax = _maxTokensEvent.Value;
+                    }
+                    
+                    // SAFETY VALVE: If the requested tokens are high (like 15000 for grids), 
+                    // and exceed our current override, we allow it to prevent truncation/crashes.
+                    if (currentMax > newMax && currentMax >= 2000)
+                    {
+                        newMax = currentMax;
                     }
 
                     // --- SECURITY CHECK FOR SAPPHIRE SERVICE ---
@@ -91,10 +99,8 @@ namespace AIROG_TokenModifierPlugin
                     if (newMax != currentMax)
                     {
                         json["max_tokens"] = newMax;
-                        contentStr = json.ToString(Newtonsoft.Json.Formatting.None);
-                        if (Instance != null) {
-                             Instance.Logger.LogInfo($"[Harmony] Intercepted request. Replaced max_tokens {currentMax} -> {newMax}");
-                        }
+                        contentStr = json.ToString(Formatting.None);
+                        if (Instance != null) Instance.Logger.LogInfo($"Intercepted request. Replaced max_tokens {currentMax} -> {newMax}");
                     }
                 }
             }
@@ -307,8 +313,11 @@ namespace AIROG_TokenModifierPlugin
                     }
                 }
 
-                SS.I.moddableOpenaiapiCommonParams[type]["max_tokens"] = tokens;
-                Logger.LogInfo($"Set {type} max_tokens to {tokens}");
+                // We NO LONGER set max_tokens here, to avoid overriding high-cost modes (like GRD) 
+                // that might be misclassified as Chat or Story early on.
+                // The override is now handled exclusively in Prefix_DoHttpRequest.
+                // SS.I.moddableOpenaiapiCommonParams[type]["max_tokens"] = tokens;
+                // Logger.LogInfo($"Set {type} max_tokens to {tokens}");
             }
 
             // Apply to specific types

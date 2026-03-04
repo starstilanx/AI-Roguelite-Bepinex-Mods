@@ -1,8 +1,10 @@
 using HarmonyLib;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine;
+
 
 namespace AIROG_LoopBeGone
 {
@@ -36,8 +38,13 @@ namespace AIROG_LoopBeGone
             var storyChain = manager.playerCharacter?.pcGameEntity?.storyChain;
             if (storyChain == null) return originalText;
 
-            // Get last few turns for comparison
-            List<string> history = storyChain.GetLastNStoryTurnsAsStrsNoNewlines(10);
+            // Get last few turns for comparison.
+            // Note: StoryChain.GetLastNStoryTurnsAsStrsNoNewlines was removed from the game.
+            // We replicate its behavior by reading storyTurns directly and calling getCombinedStrNoNewlines().
+            List<string> history = storyChain.storyTurns
+                .Skip(Math.Max(0, storyChain.storyTurns.Count - 10))
+                .Select(t => t.getCombinedStrNoNewlines())
+                .ToList();
 
             var detection = LoopDetector.DetectLoop(originalText, history);
 

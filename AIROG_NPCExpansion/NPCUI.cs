@@ -345,11 +345,11 @@ namespace AIROG_NPCExpansion
                     if (_lastLoggedNpcUuid != npc.uuid)
                     {
                         string relColor = GetRelationshipColor(data.Affinity);
-                        manager.gameLogView.LogText($"<color=yellow>[AI Lore]</color> Relationship with {npc.GetPrettyName()}: <color={relColor}>{data.RelationshipStatus} ({data.Affinity})</color>");
+                        _ = manager.gameLogView.LogText($"<color=yellow>[AI Lore]</color> Relationship with {npc.GetPrettyName()}: <color={relColor}>{data.RelationshipStatus} ({data.Affinity})</color>");
                         
                         if (!string.IsNullOrEmpty(data.FirstMessage))
                         {
-                            manager.gameLogView.LogText($"<color=white>\"{data.FirstMessage}\"</color>");
+                            _ = manager.gameLogView.LogText($"<color=white>\"{data.FirstMessage}\"</color>");
                         }
                         _lastLoggedNpcUuid = npc.uuid;
                     }

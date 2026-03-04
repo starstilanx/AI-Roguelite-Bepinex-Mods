@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Newtonsoft.Json;
 using System.IO;
 using UnityEngine;
+using System.Linq;
 
 namespace AIROG_NPCExpansion
 {
@@ -22,6 +23,13 @@ namespace AIROG_NPCExpansion
         public List<string> Tags;
         public List<string> InteractionTraits;
         public Dictionary<string, string> Extensions;
+        public string GenerationInstructions = ""; // User-provided hints for generation
+
+        // Long-Term Memory & Narrative Goals
+        public List<string> LongTermMemories = new List<string>();
+        public string CurrentGoal = "";
+        public string GoalProgress = "";
+        public List<string> RecentThoughts = new List<string>();
 
         // Relationship System
         public int Affinity = 0; // -100 to 100
@@ -36,11 +44,50 @@ namespace AIROG_NPCExpansion
         public bool AllowSelfPreservation = true;
         public bool AllowEconomicActivity = false;
         public bool AllowWorldInteraction = true;
+        public bool IsNemesis = false;
         
         // Stats & Skills
         public Dictionary<SS.PlayerAttribute, long> Attributes = new Dictionary<SS.PlayerAttribute, long>();
         public Dictionary<string, PlayerSkill> Skills = new Dictionary<string, PlayerSkill>();
-        public List<string> Abilities = new List<string>();
+        
+        [Serializable]
+        public struct AbilityData
+        {
+            public string Name;
+            public string Description;
+
+            public AbilityData(string name, string desc)
+            {
+                Name = name;
+                Description = desc;
+            }
+
+            public override string ToString() => $"{Name}: {Description}";
+        }
+
+        public List<AbilityData> DetailedAbilities = new List<AbilityData>();
+        
+        // The Abilities property is a compatibility shim for old saves that stored a flat string list.
+        // Getter: derives names from DetailedAbilities (use DetailedAbilities directly in hot paths).
+        // Setter: migrates legacy string list by converting entries into AbilityData with no description.
+        public List<string> Abilities
+        {
+            get { return DetailedAbilities.Select(a => a.Name).ToList(); }
+            set
+            {
+                if (value == null || value.Count == 0) return;
+                // Only migrate if DetailedAbilities is empty to avoid overwriting richer data
+                if (DetailedAbilities.Count == 0)
+                {
+                    foreach (var name in value)
+                    {
+                        if (!string.IsNullOrEmpty(name))
+                            DetailedAbilities.Add(new AbilityData(name, "No description provided."));
+                    }
+                }
+            }
+        }
+
 
         public NPCData()
         {
@@ -52,7 +99,8 @@ namespace AIROG_NPCExpansion
             EquippedUuids = new Dictionary<string, string>();
             Attributes = new Dictionary<SS.PlayerAttribute, long>();
             Skills = new Dictionary<string, PlayerSkill>();
-            Abilities = new List<string>();
+            // Note: DetailedAbilities is initialized inline. Do NOT call Abilities setter here
+            // as it would trigger migration logic on an empty list unnecessarily.
             
             // Default attributes
             Attributes[SS.PlayerAttribute.Strength] = 10;
@@ -80,6 +128,21 @@ namespace AIROG_NPCExpansion
             else if (Affinity > -50) RelationshipStatus = "Disliked";
             else if (Affinity > -80) RelationshipStatus = "Enemy";
             else RelationshipStatus = "Nemesis";
+        }
+
+        // --- Social Network System (NPC-NPC) ---
+        public Dictionary<string, int> NpcAffinities = new Dictionary<string, int>();
+
+        public int GetAffinity(string targetUuid)
+        {
+            if (NpcAffinities.TryGetValue(targetUuid, out int val)) return val;
+            return 0;
+        }
+
+        public void ChangeAffinity(string targetUuid, int delta)
+        {
+            if (!NpcAffinities.ContainsKey(targetUuid)) NpcAffinities[targetUuid] = 0;
+            NpcAffinities[targetUuid] = Mathf.Clamp(NpcAffinities[targetUuid] + delta, -100, 100);
         }
 
         public static Dictionary<string, NPCData> LoreCache = new Dictionary<string, NPCData>();

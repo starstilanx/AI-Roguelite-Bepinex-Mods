@@ -14,12 +14,20 @@ namespace AIROG_NPCExpansion
         public static NPCExamineUI Instance { get; private set; }
 
         private GameObject _window;
+        private GameObject _modalBlocker;
         private GameCharacter _currentNpc;
         private GameplayManager _manager;
 
         private Transform _scrollContent;
         private TextMeshProUGUI _titleText;
         private Sprite _customBgSprite;
+        private Sprite _regenBtnSprite;
+
+        private void Awake()
+        {
+            if (Instance == null) Instance = this;
+            LoadAssets();
+        }
 
         public static void Init()
         {
@@ -27,7 +35,6 @@ namespace AIROG_NPCExpansion
             {
                 var obj = new GameObject("NPCExamineUI");
                 Instance = obj.AddComponent<NPCExamineUI>();
-                Instance.LoadAssets();
             }
         }
 
@@ -35,8 +42,8 @@ namespace AIROG_NPCExpansion
         {
             if (Instance == null)
             {
-                var obj = new GameObject("NPCExamineUI");
-                Instance = obj.AddComponent<NPCExamineUI>();
+                 var obj = new GameObject("NPCExamineUI");
+                 Instance = obj.AddComponent<NPCExamineUI>();
             }
             Instance.Show(npc, manager);
         }
@@ -48,8 +55,14 @@ namespace AIROG_NPCExpansion
 
             if (_window == null) CreateUI();
             
+            // Show blocker and window
+            if (_modalBlocker != null) _modalBlocker.SetActive(true);
             _window.SetActive(true);
+            
+            // Ensure proper z-order: blocker behind window
+            if (_modalBlocker != null) _modalBlocker.transform.SetAsLastSibling();
             _window.transform.SetAsLastSibling();
+            
             Refresh();
         }
 
@@ -63,6 +76,20 @@ namespace AIROG_NPCExpansion
 
         private void CreateUI()
         {
+            // Create fullscreen modal blocker FIRST (blocks all background clicks)
+            _modalBlocker = new GameObject("ExamineModalBlocker", typeof(RectTransform));
+            _modalBlocker.transform.SetParent(_manager.canvasTransform, false);
+            var blockerRect = _modalBlocker.GetComponent<RectTransform>();
+            blockerRect.anchorMin = Vector2.zero;
+            blockerRect.anchorMax = Vector2.one;
+            blockerRect.sizeDelta = Vector2.zero;
+            var blockerImg = _modalBlocker.AddComponent<Image>();
+            blockerImg.color = new Color(0, 0, 0, 0.4f); // Semi-transparent dark overlay
+            // Click blocker to close modal when clicking outside
+            var blockerBtn = _modalBlocker.AddComponent<Button>();
+            blockerBtn.onClick.AddListener(() => { _window.SetActive(false); _modalBlocker.SetActive(false); });
+
+            // Main window
             _window = new GameObject("NPCExamineWindow", typeof(RectTransform));
             _window.transform.SetParent(_manager.canvasTransform, false);
             
@@ -146,7 +173,7 @@ namespace AIROG_NPCExpansion
             var closeImg = closeBtnObj.AddComponent<Image>();
             closeImg.color = new Color(0.7f, 0.2f, 0.2f, 1f);
             var closeBtn = closeBtnObj.AddComponent<Button>();
-            closeBtn.onClick.AddListener(() => _window.SetActive(false));
+            closeBtn.onClick.AddListener(() => { _window.SetActive(false); if (_modalBlocker != null) _modalBlocker.SetActive(false); });
             var closeRect = closeBtnObj.GetComponent<RectTransform>();
             closeRect.anchorMin = new Vector2(1, 1);
             closeRect.anchorMax = new Vector2(1, 1);
@@ -169,12 +196,24 @@ namespace AIROG_NPCExpansion
             sRect.offsetMax = new Vector2(-50, -110);
 
             var scrollRect = scrollObj.AddComponent<ScrollRect>();
+            scrollRect.scrollSensitivity = 30f; // Good scroll speed for mouse wheel
+            scrollRect.movementType = ScrollRect.MovementType.Clamped; // No elastic bounce
+            scrollRect.horizontal = false; // Vertical only
+            scrollRect.vertical = true;
+            
+            // Add Image so scroll view receives raycast/pointer events
+            var scrollImg = scrollObj.AddComponent<Image>();
+            scrollImg.color = new Color(0, 0, 0, 0); // Fully transparent but still catches events
             
             var viewport = new GameObject("Viewport", typeof(RectTransform));
             viewport.transform.SetParent(scrollObj.transform, false);
             var vRect = viewport.GetComponent<RectTransform>();
             vRect.anchorMin = Vector2.zero; vRect.anchorMax = Vector2.one; vRect.sizeDelta = Vector2.zero;
+            vRect.offsetMin = Vector2.zero; vRect.offsetMax = Vector2.zero;
             viewport.AddComponent<RectMask2D>();
+            // Also add Image to viewport for raycast
+            var vpImg = viewport.AddComponent<Image>();
+            vpImg.color = new Color(0, 0, 0, 0);
             scrollRect.viewport = vRect;
 
             var content = new GameObject("Content", typeof(RectTransform));
@@ -193,11 +232,17 @@ namespace AIROG_NPCExpansion
 
         private void LoadAssets()
         {
+            _customBgSprite = LoadRobustSprite("CharacterPanel.png");
+            _regenBtnSprite = LoadRobustSprite("RegenProfile.png");
+        }
+
+        private Sprite LoadRobustSprite(string fileName)
+        {
             string[] searchPaths = new string[]
             {
-                Path.Combine(UnityEngine.Application.streamingAssetsPath, "NPCExpansion", "CharacterPanel.png"),
-                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Assets", "CharacterPanel.png"),
-                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "CharacterPanel.png")
+                Path.Combine(UnityEngine.Application.streamingAssetsPath, "NPCExpansion", fileName),
+                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Assets", fileName),
+                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), fileName)
             };
 
             foreach (string filePath in searchPaths)
@@ -210,22 +255,18 @@ namespace AIROG_NPCExpansion
                         Texture2D tex = new Texture2D(2, 2);
                         if (tex.LoadImage(data))
                         {
-                            _customBgSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
-                            Debug.Log("[NPCExamineUI] Successfully loaded custom background from: " + filePath);
-                            return;
+                            Debug.Log($"[NPCExamineUI] Successfully loaded {fileName} from: {filePath}");
+                            return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
                         }
                     }
                     catch (System.Exception ex)
                     {
-                        Debug.LogWarning("[NPCExamineUI] Error loading image at " + filePath + ": " + ex.Message);
+                        Debug.LogWarning($"[NPCExamineUI] Error loading image at {filePath}: {ex.Message}");
                     }
                 }
-                else
-                {
-                    Debug.Log("[NPCExamineUI] Did not find asset at: " + filePath);
-                }
             }
-            Debug.LogWarning("[NPCExamineUI] Custom background 'CharacterPanel.png' not found in any search path.");
+            Debug.LogWarning($"[NPCExamineUI] Asset '{fileName}' not found in any search path.");
+            return null;
         }
 
         private void Refresh()
@@ -238,17 +279,37 @@ namespace AIROG_NPCExpansion
             var data = NPCData.Load(_currentNpc.uuid);
             if (data == null) data = NPCData.CreateDefault(_currentNpc.GetPrettyName());
             
+            // Generation Instructions
+            AddHeader("Generation Hint / Secret Identity");
+            AddInputField("E.g. Secretly a level 50 paladin...", data.GenerationInstructions, (val) => 
+            { 
+                data.GenerationInstructions = val; 
+                NPCData.Save(_currentNpc.uuid, data); 
+            });
+
             if (string.IsNullOrEmpty(data.Personality))
             {
-                AddActionBtn("Generate Full Profile", async (txt, btn) => {
-                    await HandleGeneration(txt, btn);
-                });
+                // Initial generation
+                if (_regenBtnSprite != null)
+                {
+                    AddImageBtn(_regenBtnSprite, async (btn) => { await HandleGeneration(null, btn); });
+                }
+                else
+                {
+                    AddActionBtn("Generate Full Profile", async (txt, btn) => { await HandleGeneration(txt, btn); });
+                }
             }
             else
             {
-                AddActionBtn("Regenerate Profile (Refreshes Stats)", async (txt, btn) => {
-                    await HandleGeneration(txt, btn);
-                });
+                // Regeneration
+                if (_regenBtnSprite != null)
+                {
+                    AddImageBtn(_regenBtnSprite, async (btn) => { await HandleGeneration(null, btn); });
+                }
+                else
+                {
+                    AddActionBtn("Regenerate Profile (Refreshes Stats)", async (txt, btn) => { await HandleGeneration(txt, btn); });
+                }
             }
 
             // 1. Basic Stats
@@ -287,6 +348,15 @@ namespace AIROG_NPCExpansion
                 AddText(string.Join(", ", data.InteractionTraits), 15, Color.black);
             }
 
+            if (data.RecentThoughts != null && data.RecentThoughts.Count > 0)
+            {
+                AddHeader("Recent Thoughts");
+                foreach (var thought in data.RecentThoughts)
+                {
+                    AddText("• " + thought, 15, new Color(0.2f, 0.2f, 0.3f, 1f));
+                }
+            }
+
             // 2. Attributes
             AddHeader("Attributes");
             foreach (var attr in data.Attributes)
@@ -307,19 +377,30 @@ namespace AIROG_NPCExpansion
 
             // 4. Abilities
             AddHeader("Abilities");
-            if (data.Abilities.Count == 0) AddText("No active abilities.", 15, Color.gray);
+            if (data.DetailedAbilities.Count == 0 && data.Abilities.Count == 0) AddText("No active abilities.", 15, Color.gray);
             else
             {
-                foreach (var abil in data.Abilities)
+                if (data.DetailedAbilities.Count > 0)
                 {
-                    AddText("• " + abil, 16, Color.black);
+                    foreach (var abil in data.DetailedAbilities)
+                    {
+                        AddText($"• <b>{abil.Name}</b>: {abil.Description}", 16, Color.black);
+                    }
+                }
+                else
+                {
+                    // Fallback for legacy data
+                    foreach (var abil in data.Abilities)
+                    {
+                        AddText("• " + abil, 16, Color.black);
+                    }
                 }
             }
         }
 
         private async Task HandleGeneration(TextMeshProUGUI txt, Button btn)
         {
-            txt.text = "Generating...";
+            if (txt != null) txt.text = "Generating...";
             string context = _manager.GetContextForQuickActions();
             bool success = await NPCGenerator.GenerateLore(_currentNpc, context);
             if (success) 
@@ -328,7 +409,7 @@ namespace AIROG_NPCExpansion
             }
             else 
             {
-                txt.text = "Generation Failed";
+                if (txt != null) txt.text = "Generation Failed";
             }
         }
 
@@ -422,6 +503,81 @@ namespace AIROG_NPCExpansion
                 await asyncAction(txt, btn);
                 if (btn != null) btn.interactable = true;
             });
+        }
+
+        private void AddInputField(string placeholder, string currentVal, System.Action<string> onEndEdit)
+        {
+            var obj = new GameObject("InputField", typeof(RectTransform));
+            obj.transform.SetParent(_scrollContent, false);
+            var rect = obj.GetComponent<RectTransform>();
+            rect.sizeDelta = new Vector2(0, 45); // Standard height
+
+            var img = obj.AddComponent<Image>();
+            img.color = new Color(0.9f, 0.9f, 0.9f, 0.8f); // Off-white background
+
+            var input = obj.AddComponent<TMP_InputField>();
+            
+            // Text Area
+            var textArea = new GameObject("TextArea", typeof(RectTransform));
+            textArea.transform.SetParent(obj.transform, false);
+            var taRect = textArea.GetComponent<RectTransform>();
+            taRect.anchorMin = Vector2.zero; taRect.anchorMax = Vector2.one;
+            taRect.offsetMin = new Vector2(10, 5); taRect.offsetMax = new Vector2(-10, -5);
+            
+            var textObj = new GameObject("Text", typeof(RectTransform));
+            textObj.transform.SetParent(textArea.transform, false);
+            var text = textObj.AddComponent<TextMeshProUGUI>();
+            text.fontSize = 18;
+            text.color = Color.black;
+            if (_titleText != null) text.font = _titleText.font;
+            var textRect = textObj.GetComponent<RectTransform>();
+            textRect.anchorMin = Vector2.zero; textRect.anchorMax = Vector2.one; textRect.sizeDelta = Vector2.zero;
+
+            var placeholderObj = new GameObject("Placeholder", typeof(RectTransform));
+            placeholderObj.transform.SetParent(textArea.transform, false);
+            var phText = placeholderObj.AddComponent<TextMeshProUGUI>();
+            phText.text = placeholder;
+            phText.fontSize = 18;
+            phText.color = new Color(0.4f, 0.4f, 0.4f, 0.8f);
+            phText.fontStyle = FontStyles.Italic;
+            if (_titleText != null) phText.font = _titleText.font;
+            var phRect = placeholderObj.GetComponent<RectTransform>();
+            phRect.anchorMin = Vector2.zero; phRect.anchorMax = Vector2.one; phRect.sizeDelta = Vector2.zero;
+
+            input.textViewport = taRect;
+            input.textComponent = text;
+            input.placeholder = phText;
+            input.text = currentVal;
+            
+            input.onEndEdit.AddListener((val) => onEndEdit(val));
+
+            var le = obj.AddComponent<LayoutElement>();
+            le.minHeight = 45;
+            le.preferredHeight = 45;
+            le.flexibleHeight = 0;
+        }
+        private void AddImageBtn(Sprite sprite, System.Func<Button, Task> asyncAction)
+        {
+            var obj = new GameObject("ImageActionBtn", typeof(RectTransform));
+            obj.transform.SetParent(_scrollContent, false);
+            var rect = obj.GetComponent<RectTransform>();
+            rect.sizeDelta = new Vector2(0, 50); // Default height
+            
+            var img = obj.AddComponent<Image>();
+            img.sprite = sprite;
+            img.type = Image.Type.Simple;
+            img.preserveAspect = true;
+            
+            var btn = obj.AddComponent<Button>();
+            btn.onClick.AddListener(async () => {
+                btn.interactable = false;
+                await asyncAction(btn);
+                if (btn != null) btn.interactable = true;
+            });
+
+            var le = obj.AddComponent<LayoutElement>();
+            le.preferredHeight = 60; 
+            le.minHeight = 40;
         }
     }
 }

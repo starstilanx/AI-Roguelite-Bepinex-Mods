@@ -85,19 +85,25 @@ namespace AIROG_HistoryTab
                 }
 
                 string contents = jo.ToString();
-                string path = Path.Combine(SS.I.presetsDir, text + ".json");
+                // FIX: SS.I.presetsDir usually points to persistentDataPath/world_presets
+                string presetsDir = Path.Combine(Application.persistentDataPath, "world_presets");
+                string path = Path.Combine(presetsDir, text + ".json");
                 if (File.Exists(path))
                 {
-                    __instance.ConfirmationModal().ShowModal(LS.I.GetLocStr("overwrite-preset-confirm"), true, true, delegate
+                    // FIX: ConfirmationModal is static
+                    // FIX: ShowModal -> ShowTextPromptModal
+                    MainMenu.ConfirmationModal().ShowTextPromptModal(LS.I.GetLocStr("overwrite-preset-confirm"), true, true, delegate
                     {
                         File.WriteAllText(path, contents);
-                        __instance.RepopulatePresets();
+                        // FIX: RepopulatePresets is private
+                        Traverse.Create(__instance).Method("RepopulatePresets").GetValue();
                     });
                 }
                 else
                 {
                     File.WriteAllText(path, contents);
-                    __instance.RepopulatePresets();
+                    // FIX: RepopulatePresets is private
+                    Traverse.Create(__instance).Method("RepopulatePresets").GetValue();
                 }
                 return false;
             }
@@ -129,7 +135,8 @@ namespace AIROG_HistoryTab
                     promptPreset.initialLocationInfo = new MainMenu.InitialLocationInfo(promptPreset.regions, null, 0f);
                 }
 
-                __instance.PopulateTextAndSurvivalBarTogglesWithPreset(promptPreset);
+                // FIX: PopulateTextAndSurvivalBarTogglesWithPreset is private
+                Traverse.Create(__instance).Method("PopulateTextAndSurvivalBarTogglesWithPreset", new object[] { promptPreset }).GetValue();
 
                 if (jo.ContainsKey("worldHistory_Mod"))
                 {

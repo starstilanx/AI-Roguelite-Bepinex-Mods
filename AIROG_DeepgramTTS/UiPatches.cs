@@ -79,16 +79,48 @@ namespace AIROG_DeepgramTTS
                 __instance.customerKeyTxtInputForAudioGenTrans.gameObject : 
                 __instance.customerKeyTxtInputForAudioGen.gameObject;
 
+            if (template == null)
+            {
+                Debug.LogError("[DeepgramTTS] Could not find template for API Key Input!");
+                return;
+            }
+
             GameObject keyGo = Object.Instantiate(template, parent);
             keyGo.name = "DeepgramTTS_ApiKey_Group";
             keyGo.transform.SetSiblingIndex(index);
             
+            // SANITIZATION: Remove any logic scripts attached to the template 
+            // that might be saving to the wrong PlayerPrefs key (e.g. Sapphire's key).
+            var scripts = keyGo.GetComponentsInChildren<MonoBehaviour>(true);
+            foreach (var script in scripts)
+            {
+                // Keep standard UI components
+                if (script is TMP_InputField || script is TextMeshProUGUI || 
+                    script is UnityEngine.UI.Image || script is UnityEngine.UI.Graphic ||
+                    script is UnityEngine.UI.Selectable || script is UnityEngine.EventSystems.UIBehaviour)
+                {
+                    continue;
+                }
+                
+                // Destroy everything else (custom logic scripts)
+                Debug.Log($"[DeepgramTTS] Destroying helper script on clone: {script.GetType().Name}");
+                Object.DestroyImmediate(script);
+            }
+
             deepgramSettingsGroup = keyGo;
             apiKeyInput = keyGo.GetComponentInChildren<TMP_InputField>();
             
             if (apiKeyInput != null)
             {
-                apiKeyInput.onValueChanged.RemoveAllListeners();
+                apiKeyInput.name = "DeepgramApiKeyInput"; // Rename to avoid finding by name "CustomerKeyInput"
+
+                // Create new events to clear ALL listeners (including persistent ones set in Editor)
+                apiKeyInput.onValueChanged = new TMP_InputField.OnChangeEvent();
+                apiKeyInput.onEndEdit = new TMP_InputField.SubmitEvent();
+                apiKeyInput.onSelect = new TMP_InputField.SelectionEvent();
+                apiKeyInput.onDeselect = new TMP_InputField.SelectionEvent();
+                apiKeyInput.onSubmit = new TMP_InputField.SubmitEvent();
+                
                 apiKeyInput.contentType = TMP_InputField.ContentType.Standard; 
                 apiKeyInput.text = DeepgramTtsPlugin.DeepgramApiKey.Value;
                 

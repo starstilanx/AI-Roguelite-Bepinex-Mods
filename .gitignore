@@ -1,9 +1,48 @@
-AI Roguelite Prompts/
-AIRL/
+# ── Build artifacts ──────────────────────────────────────────────────
 bin/
+obj/
+
+# ── Game source (decompiled / proprietary) ───────────────────────────
+AIRL/
+
+# ── Game prompt templates (large, game-owned content) ────────────────
+AI Roguelite Prompts/
+
+# ── Large / external assets ──────────────────────────────────────────
 Music/
-player.log
+Mirror-master/
+com.unity.netcode.gameobjects-*/
+
+# ── Log & temp files ─────────────────────────────────────────────────
+*.log
+*.pdb
+build_*.txt
+build_*.log
+err*.txt
 tail.log
-build_output.txt
-build_debug.txt
-build_log.txt
+msbuild.log
+full_build_log.txt
+build_error_log*.txt
+build_warnings.txt
+
+# ── Deploy helper (contains local machine paths) ─────────────────────
+deploy.ps1
+
+# ── Claude Code project memory (local session data) ──────────────────
+.claude/
+
+# ── NuGet / MSBuild generated files ──────────────────────────────────
+*.nuget.dgspec.json
+*.nuget.g.props
+*.nuget.g.targets
+project.assets.json
+project.nuget.cache
+*.AssemblyInfo.cs
+*.AssemblyInfoInputs.cache
+*.GeneratedMSBuildEditorConfig.editorconfig
+*.assets.cache
+*.csproj.AssemblyReference.cache
+*.csproj.CoreCompileInputs.cache
+*.csproj.FileListAbsolute.txt
+*.sourcelink.json
+*.Up2Date

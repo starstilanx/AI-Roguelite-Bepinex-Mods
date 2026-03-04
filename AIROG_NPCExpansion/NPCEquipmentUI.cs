@@ -22,9 +22,6 @@ namespace AIROG_NPCExpansion
         private Transform _npcInvGrid;
         private TextMeshProUGUI _titleText;
         private GameObject _divider;
-        
-        public static GameItem PendingGiftItem;
-        public static GameCharacter PendingGiftNpc;
 
         public static void Init()
         {
@@ -544,9 +541,8 @@ namespace AIROG_NPCExpansion
             }
 
             // Queue the gift movement to happen AFTER the undo snapshot is taken
-            PendingGiftItem = item;
-            PendingGiftNpc = npc;
-
+            // REFACTOR: Direct transfer to avoid lost items due to hook timing issues
+            
             var data = NPCData.Load(npc.uuid);
             if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
             data.ChangeAffinity(5, $"Given {item.GetPrettyName()} to use.");
@@ -555,8 +551,11 @@ namespace AIROG_NPCExpansion
             // Trigger Story Turn
             await manager.ProcessInteractionInfo(new InteractionInfo(new InteracterInfo(InteracterInfo.InteracterType.OFFER_ITEM, item), new InteracteeInfo(npc)));
 
-            // The actual transfer happens in the AddSavePointForUndo hook in NPCExpansionPlugin.cs
-            // to ensure it is synchronized with the game's undo/redo and save systems.
+            // Explicit Transfer
+            NPCExpansionPlugin.TransferItemToNpc(item, npc, manager);
+
+            // Force Autonomy Logic (Auto Equip)
+            await NPCAutonomy.Process(npc, manager);
         }
     }
 }

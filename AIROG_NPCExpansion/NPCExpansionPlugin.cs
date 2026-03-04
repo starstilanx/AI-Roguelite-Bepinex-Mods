@@ -10,6 +10,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System;
+using DelaunayVoronoi;
 
 namespace AIROG_NPCExpansion
 {
@@ -114,10 +115,16 @@ namespace AIROG_NPCExpansion
         public static void Prefix_TurnHappened(GameCharacter __instance, out List<GameItem> __state)
         {
             __state = null;
-            if (__instance.isMerchant && __instance.NeedsRestock())
+            // General protection for ALL NPCs: Save "INVENTORY" items (personal gear) from being wiped.
+            // This fixes issues where Companions (former merchants?) lose gear on restock timers.
+            if (__instance.items != null)
             {
-                // Save personal items (those not marked as MERCHANT stock)
-                __state = __instance.items.Where(i => i.itemState != GameItem.ItemState.MERCHANT).ToList();
+                var personalItems = __instance.items.Where(i => i.itemState == GameItem.ItemState.INVENTORY).ToList();
+                if (personalItems.Count > 0)
+                {
+                    __state = personalItems;
+                    // Debug.Log($"[AIROG_NPCExpansion] Tracking {__state.Count} personal items for {__instance.GetPrettyName()} during turn.");
+                }
             }
         }
 
@@ -127,6 +134,7 @@ namespace AIROG_NPCExpansion
         {
             if (__state != null && __state.Count > 0)
             {
+                int restored = 0;
                 foreach (var item in __state)
                 {
                     if (!__instance.items.Contains(item))
@@ -135,9 +143,42 @@ namespace AIROG_NPCExpansion
                         // Also ensure personal gear has correct state
                         if (item.itemState == GameItem.ItemState.MERCHANT) 
                             item.itemState = GameItem.ItemState.INVENTORY;
+                        
+                        restored++;
                     }
                 }
-                Debug.Log($"[AIROG_NPCExpansion] Restored {__state.Count} personal items for {__instance.GetPrettyName()} after merchant restock.");
+                
+                if (restored > 0)
+                {
+                    Debug.Log($"[AIROG_NPCExpansion] SAVED {restored} personal items for {__instance.GetPrettyName()} from potential wipe.");
+                }
+            }
+        }
+
+
+
+        // ---- Nemesis System: Trigger on player death ----
+        [HarmonyPatch(typeof(GameplayManager), "DeadLogic")]
+        [HarmonyPrefix]
+        public static void Prefix_DeadLogic(GameplayManager __instance)
+        {
+            try
+            {
+                // Check master switch — soft-dep on GenContext; default ON if unavailable
+                bool nemesisEnabled = true;
+                try { nemesisEnabled = AIROG_GenContext.ContextManager.GetGlobalSetting("NemesisSystem"); }
+                catch { /* GenContext not present, use default */ }
+                if (!nemesisEnabled) return;
+
+                // Only promote living enemy characters
+                var killer = __instance.enemyActionsHandler?.currentEnemy;
+                if (killer == null || killer.corpseState != GameCharacter.CorpseState.NONE) return;
+
+                NemesisManager.PromoteKiller(killer, __instance);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Nemesis] Promotion failed: {ex.Message}");
             }
         }
 
@@ -300,32 +341,61 @@ namespace AIROG_NPCExpansion
 
         [HarmonyPatch(typeof(EnemyActionsHandler), "HandleEnemyInjury", typeof(GameCharacter), typeof(long))]
         [HarmonyPrefix]
-        public static void Prefix_HandleEnemyInjury(GameCharacter ene, ref long damage)
+        public static bool Prefix_HandleEnemyInjury(EnemyActionsHandler __instance, GameCharacter ene, long damage, ref bool __result)
         {
-            if (ene == null) return;
+            if (ene == null) 
+            {
+                __result = false;
+                return false;
+            }
+
+            // Calculate armor reduction from NPC equipment
             var data = NPCData.Load(ene.uuid);
-            if (data == null) return;
-
-            double reduction = 0;
-            foreach (var kvp in data.EquippedUuids)
+            if (data != null && data.EquippedUuids != null && ene.items != null)
             {
-                if (kvp.Key == "WEAPON1" || kvp.Key == "WEAPON2") continue;
-                var item = ene.items.Find(i => i.uuid == kvp.Value);
-                if (item != null && item.IsArmorType())
+                double reduction = 0;
+                foreach (var kvp in data.EquippedUuids)
                 {
-                     reduction += Utils.GetDmgProtForItem(item, ene.level);
+                    if (kvp.Key == "WEAPON1" || kvp.Key == "WEAPON2") continue;
+                    var item = ene.items.Find(i => i.uuid == kvp.Value);
+                    if (item != null && item.IsArmorType())
+                    {
+                        reduction += Utils.GetDmgProtForItem(item, ene.level);
+                    }
+                }
+
+                if (reduction > 0)
+                {
+                    long oldDmg = damage;
+                    damage = (long)(damage * (1.0 - Math.Min(0.8, reduction)));
+                    if (damage < oldDmg)
+                    {
+                        Debug.Log($"[AIROG_NPCExpansion] Armor reduced damage to {ene.GetPrettyName()}: {oldDmg} -> {damage} ({reduction:P0} reduction)");
+                    }
                 }
             }
 
-            if (reduction > 0)
+            // Apply damage (replicating original HandleEnemyInjury logic)
+            bool died = ene.DeltaHealth(-damage);
+            
+            // Update health bar if this is the current enemy
+            if (__instance.currentEnemy == ene)
             {
-                long oldDmg = damage;
-                damage = (long)(damage * (1.0 - Math.Min(0.8, reduction)));
-                if (damage < oldDmg)
+                // Update health bar graphics via reflection (private method)
+                try
                 {
-                    Debug.Log($"[AIROG_NPCExpansion] Armor reduced damage to {ene.GetPrettyName()}: {oldDmg} -> {damage} ({reduction:P0} reduction)");
+                    var updateMethod = typeof(EnemyActionsHandler).GetMethod("UpdateHealthBarGraphic", 
+                        BindingFlags.NonPublic | BindingFlags.Instance);
+                    updateMethod?.Invoke(__instance, null);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[AIROG_NPCExpansion] Failed to update health bar: {ex.Message}");
                 }
             }
+
+            __result = died;
+            return false; // Skip original method since we handled it
         }
 
         [HarmonyPatch(typeof(GameplayManager), "GetPlayerBarDmg")]
@@ -375,46 +445,8 @@ namespace AIROG_NPCExpansion
             }));
         }
 
-        [HarmonyPatch(typeof(GameCharacter), "GetDetailsForPromptStr")]
-        [HarmonyPostfix]
-        public static void Postfix_GetDetailsForPromptStr(GameCharacter __instance, ref string __result)
-        {
-            var data = NPCData.Load(__instance.uuid);
-            if (data == null) return;
+        // REMOVED: Postfix_GetDetailsForPromptStr logic moved to AIROG_GenContext per architecture guidelines.
 
-            string relationshipInfo = $"\n\n[RELATIONSHIP STATUS: {data.RelationshipStatus} (Affinity: {data.Affinity}/100)]";
-            if (data.InteractionHistory.Count > 0)
-            {
-                relationshipInfo += "\nRecent Interactions:\n- " + string.Join("\n- ", data.InteractionHistory);
-            }
-            
-            if (data.EquippedUuids.Count > 0)
-            {
-                relationshipInfo += "\nEquipped Items:";
-                foreach (var kvp in data.EquippedUuids)
-                {
-                    var item = __instance.items.Find(i => i.uuid == kvp.Value);
-                    if (item != null) relationshipInfo += $"\n- {kvp.Key}: {item.GetPrettyName()}";
-                }
-            }
-
-            string statInfo = "\n\n[NPC STATS & ABILITIES]";
-            statInfo += "\nAttributes: " + string.Join(", ", data.Attributes.Select(kvp => $"{kvp.Key}: {kvp.Value}"));
-            if (data.Skills.Count > 0)
-                statInfo += "\nSkills: " + string.Join(", ", data.Skills.Select(kvp => $"{kvp.Key} (Lvl {kvp.Value.level})"));
-            if (data.Abilities.Count > 0)
-                statInfo += "\nAbilities: " + string.Join(", ", data.Abilities);
-
-            string personalityInfo = "";
-            if (!string.IsNullOrEmpty(data.Personality))
-                personalityInfo += $"\nPersonality: {data.Personality}";
-            if (!string.IsNullOrEmpty(data.Scenario))
-                personalityInfo += $"\nCurrent Situation: {data.Scenario}";
-
-            string systemInstruction = "\n\n[CHARACTER GUIDELINES: Act according to your stats and abilities. If you have high Intellect, be articulate. If you have combat abilities, use them in your descriptions. Your reactions to the player should be influenced by your Affinity and personality.]";
-
-            __result += relationshipInfo + statInfo + personalityInfo + systemInstruction;
-        }
 
         [HarmonyPatch(typeof(GameplayManager), "GetCharsForNpcConvoSelectorDropdown")]
         [HarmonyPrefix]
@@ -437,40 +469,29 @@ namespace AIROG_NPCExpansion
         }
 
 
-        [HarmonyPatch(typeof(GameplayManager), "AddSavePointForUndo")]
-        [HarmonyPostfix]
-        public static void Postfix_AddSavePointForUndo(GameplayManager __instance)
+        public static void TransferItemToNpc(GameItem item, GameCharacter npc, GameplayManager manager)
         {
-            CheckAndProcessPendingGift(__instance);
-        }
+            if (item == null || npc == null || manager == null) return;
 
-        [HarmonyPatch(typeof(GameplayManager), "AddRetryPointAfterUndoPoint")]
-        [HarmonyPostfix]
-        public static void Postfix_AddRetryPointAfterUndoPoint(GameplayManager __instance)
-        {
-            CheckAndProcessPendingGift(__instance);
-        }
+            Debug.Log($"[AIROG_NPCExpansion] Transferring {item.GetPrettyName()} to {npc.GetPrettyName()} directly.");
 
-        private static void CheckAndProcessPendingGift(GameplayManager manager)
-        {
-            if (NPCEquipmentUI.PendingGiftItem != null && NPCEquipmentUI.PendingGiftNpc != null)
-            {
-                var item = NPCEquipmentUI.PendingGiftItem;
-                var npc = NPCEquipmentUI.PendingGiftNpc;
+            // 1. Remove from Player/World Inventory context
+            // Using REMOVE_BUT_KEEP_IN_CTX ensures it's not deleted from memory, just from the list
+            manager.inventory.RemoveItemIfExists(item.uuid, SS.DelMode.REMOVE_BUT_KEEP_IN_CTX);
+            
+            // 2. Update Item Entity Data
+            item.itemState = GameItem.ItemState.INVENTORY;
+            item.parentEnt = npc; 
+            item.SetParentEnt(npc);
+            
+            // 3. Add to NPC
+            if (npc.items == null) npc.items = new List<GameItem>();
+            npc.items.Add(item);
 
-                Debug.Log($"[AIROG_NPCExpansion] Processing pending gift of {item.GetPrettyName()} to {npc.GetPrettyName()} AFTER snapshot.");
-
-                manager.inventory.RemoveItemIfExists(item.uuid, SS.DelMode.REMOVE_BUT_KEEP_IN_CTX);
-                item.itemState = GameItem.ItemState.INVENTORY;
-                item.parentEnt = npc; // Essential for serialization
-                item.SetParentEnt(npc); // Essential for entity logic
-                npc.items.Add(item);
-
-                manager.inventory.RefreshInvDisplay();
-
-                NPCEquipmentUI.PendingGiftItem = null;
-                NPCEquipmentUI.PendingGiftNpc = null;
-            }
+            // 4. Force UI Refresh
+            manager.inventory.RefreshInvDisplay();
+            
+            Debug.Log($"[AIROG_NPCExpansion] Transfer complete. NPC now has {npc.items.Count} items.");
         }
     }
 }

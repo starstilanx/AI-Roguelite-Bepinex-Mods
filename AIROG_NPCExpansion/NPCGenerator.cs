@@ -15,7 +15,11 @@ namespace AIROG_NPCExpansion
             // Truncate context to avoid hitting token limits
             if (context.Length > 2000) context = context.Substring(context.Length - 2000);
 
-            string prompt = ConstructPrompt(npc, context);
+            // Match loading logic early to get instructions
+            NPCData existingData = NPCData.Load(npc.uuid);
+            if (existingData == null) existingData = NPCData.CreateDefault(npc.GetPrettyName());
+
+            string prompt = ConstructPrompt(npc, existingData, context);
             
             try 
             {
@@ -29,7 +33,7 @@ namespace AIROG_NPCExpansion
                 Debug.Log($"[AIROG_NPCExpansion] Raw AI Response: {generatedText}");
 
                 // Match loading logic
-                NPCData existingData = NPCData.Load(npc.uuid);
+                // NPCData existingData = NPCData.Load(npc.uuid); // Already loaded above
 
                 // Parse the response, updating existing data if available
                 NPCData data = ParseAIResponse(generatedText, npc, existingData);
@@ -77,13 +81,18 @@ namespace AIROG_NPCExpansion
                 {
                     data.Scenario = updatedScenario.Trim();
                     NPCData.Save(npc.uuid, data);
-                    
+
+                    // Log situation update to game chat so players see NPC reactions without opening profiles
+                    var gameLog = npc.manager?.gameLogView;
+                    if (gameLog != null)
+                        _ = gameLog.LogText(GameLogView.AiDecision($"[{npc.GetPrettyName()}] {data.Scenario}"));
+
                     // Notify UI if open
                     if (NPCExamineUI.Instance != null)
                     {
                         NPCExamineUI.Instance.RefreshIfNpc(npc.uuid);
                     }
-                    
+
                     return true;
                 }
             }
@@ -94,11 +103,20 @@ namespace AIROG_NPCExpansion
             return false;
         }
 
-        private static string ConstructPrompt(GameCharacter npc, string context)
+        private static string ConstructPrompt(GameCharacter npc, NPCData data, string context)
         {
             string playerName = npc.manager?.playerCharacter?.pcGameEntity?.name ?? "the player";
+            
+            string extraInstructions = "";
+            if (!string.IsNullOrEmpty(data.GenerationInstructions))
+            {
+                extraInstructions = $"\nIMPORTANT USER INSTRUCTION: {data.GenerationInstructions}\n" +
+                                    $"Follow the above instruction STRICTLY when generating stats, skills, and background. It overrides conflicting implied traits from the name.";
+            }
+
             string prompt = $"You are a creative writer for a fantasy RPG. " +
                    $"Identify this NPC: '{npc.GetPrettyName()}'. Description: '{npc.description}'. " +
+                   $"{extraInstructions}" +
                    $"\n\nIMPORTANT: In the context below, 'You' refers to the player character, '{playerName}'. " +
                    $"The NPC '{npc.GetPrettyName()}' is a separate entity. Do NOT confuse the NPC with the player.\n\n" +
                    $"Context (from the perspective of {playerName}): {context}\n\n" +
@@ -115,7 +133,8 @@ namespace AIROG_NPCExpansion
                    $"- \"creator_notes\": (string) Meta notes.\n" +
                    $"- \"alternate_greetings\": (array) 2 other greetings.\n" +
                    $"- \"skills\": (object) 3-5 relevant skill names and their levels (1-10).\n" +
-                   $"- \"abilities\": (array) 2-4 unique ability names (combat or utility).";
+                   $"- \"abilities\": (array) 2-4 unique abilities. Each item should be an object with \"name\" and \"description\" (briefly explain what it does). Example: {{\"name\": \"Fireball\", \"description\": \"Hurls a ball of fire.\"}}\n" +
+                   $"- \"current_goal\": (string) A short-term goal for the NPC (e.g., 'Find food', 'Protect the village').";
             
             return prompt;
         }
@@ -123,6 +142,10 @@ namespace AIROG_NPCExpansion
         private static NPCData ParseAIResponse(string jsonResponse, GameCharacter npc, NPCData data = null)
         {
             if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
+            
+            // Preserve instructions if this was a fresh object or overwrite happened
+            string instructions = data.GenerationInstructions; 
+            
             data.Description = npc.description;
 
             // First, try full JSON parsing
@@ -171,7 +194,32 @@ namespace AIROG_NPCExpansion
 
                     if (json.ContainsKey("abilities") && json["abilities"].Type == JTokenType.Array)
                     {
-                        data.Abilities = json["abilities"].ToObject<System.Collections.Generic.List<string>>();
+                        // Handle both simple strings and objects
+                        data.DetailedAbilities.Clear();
+                        foreach (var token in json["abilities"])
+                        {
+                            if (token.Type == JTokenType.String)
+                            {
+                                data.DetailedAbilities.Add(new NPCData.AbilityData(token.ToString(), "No description provided."));
+                            }
+                            else if (token.Type == JTokenType.Object)
+                            {
+                                string name = token["name"]?.ToString() ?? "Unknown";
+                                string desc = token["description"]?.ToString() ?? "No description provided.";
+                                data.DetailedAbilities.Add(new NPCData.AbilityData(name, desc));
+                            }
+                        }
+                    }
+
+                    if (json.ContainsKey("current_goal"))
+                    {
+                        string newGoal = json["current_goal"].ToString();
+                        if (newGoal != data.CurrentGoal)
+                        {
+                            // Goal changed — clear stale thoughts so old "Thinking about goal: (starting)." entries don't persist
+                            data.RecentThoughts?.Clear();
+                        }
+                        data.CurrentGoal = newGoal;
                     }
 
                     if (json.ContainsKey("tags") && json["tags"].Type == JTokenType.Array)
@@ -205,6 +253,9 @@ namespace AIROG_NPCExpansion
             if (s_ex != null) data.MessageExamples = s_ex;
             if (s_sys != null) data.SystemPrompt = s_sys;
 
+            string s_goal = TryExtractField(jsonResponse, "current_goal");
+            if (s_goal != null) data.CurrentGoal = s_goal;
+
             // Attribute Regex Salvage
             foreach (SS.PlayerAttribute attr in Enum.GetValues(typeof(SS.PlayerAttribute)))
             {
@@ -215,8 +266,15 @@ namespace AIROG_NPCExpansion
                 }
             }
 
+            // Ability Regex Salvage (Basic)
+            // This is rudimentary and might catch simple lists. 
+            // Improving this would require robust array parsing via regex which is hard.
+            // For now, if JSON fails, we might lose detailed abilities.
+            // ...
+
             Debug.Log($"[AIROG_NPCExpansion] Regex Salvage Results - Greeting: {s_first != null}, Scenario: {s_scen != null}, Personality: {s_pers != null}");
 
+            data.GenerationInstructions = instructions;
             return data;
         }
 

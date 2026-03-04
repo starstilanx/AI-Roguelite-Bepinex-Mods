@@ -14,6 +14,10 @@ namespace AIROG_HistoryTab
         public TMP_InputField worldNameTextInput;
         public TMP_InputField worldBkgdTextInput;
 
+        public NgFactions ngFactions;
+        public NgRegions ngRegions;
+        public NgCurrency ngCurrency;
+
         public void PopulateHistory(string history)
         {
             Debug.Log($"[HistoryTab] PopulateHistory called. Input field null: {historyInput == null}, history length: {history?.Length ?? 0}");
@@ -70,6 +74,9 @@ namespace AIROG_HistoryTab
                 string history = null;
                 string hint = MainMenu.ConfirmationModal()?.textInput1?.text;
                 
+                // Build Extra Context
+                string extraContext = BuildExtraContext();
+
                 await Utils.DoTaskWLoadScrn(async delegate
                 {
                     try {
@@ -80,7 +87,8 @@ namespace AIROG_HistoryTab
                             univDescTextInput.text, 
                             worldNameTextInput.text, 
                             worldBkgdTextInput.text, 
-                            hint);
+                            hint,
+                            extraContext); // Pass extra context
                     } catch (Exception e) {
                         Debug.LogError($"[HistoryTab] Error in GenerateHistory: {e}");
                         history = "Error: " + e.Message;
@@ -95,15 +103,65 @@ namespace AIROG_HistoryTab
                 }
             });
         }
+
+        private string BuildExtraContext()
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+            // Factions
+            if (ngFactions != null)
+            {
+                var factions = ngFactions.GetNonNullablePpFactions();
+                if (factions != null && factions.Count > 0)
+                {
+                    sb.AppendLine("\n[FACTIONS]");
+                    foreach (var f in factions)
+                    {
+                        sb.AppendLine($"- {f.n}: {f.d}");
+                    }
+                }
+            }
+
+            // Regions
+            if (ngRegions != null)
+            {
+                var locInfo = ngRegions.GetPpInitLocInfo();
+                if (locInfo != null && locInfo.regions != null && locInfo.regions.Count > 0)
+                {
+                    sb.AppendLine("\n[REGIONS/LOCATIONS]");
+                    foreach (var r in locInfo.regions)
+                    {
+                        sb.AppendLine($"- {r.n}: {r.d}");
+                    }
+                    if (locInfo.startingLocationHierarchy != null && locInfo.startingLocationHierarchy.Count > 0)
+                    {
+                         sb.AppendLine("Starting Location Hierarchy: " + string.Join(" > ", locInfo.startingLocationHierarchy));
+                    }
+                }
+            }
+
+            // Currency
+            if (ngCurrency != null)
+            {
+                var curr = ngCurrency.ToCurrencyInfo();
+                if (curr != null)
+                {
+                    sb.AppendLine($"\n[CURRENCY]\nName: {curr.nme}\nDescription: {curr.desc}");
+                }
+            }
+            
+            return sb.ToString();
+        }
     }
 
     public static class HistoryGenerator
     {
-        public static async System.Threading.Tasks.Task<string> GenerateHistory(string langCode, string customLang, string universeName, string universeDesc, string worldName, string worldBkgd, string hintStr)
+        public static async System.Threading.Tasks.Task<string> GenerateHistory(string langCode, string customLang, string universeName, string universeDesc, string worldName, string worldBkgd, string hintStr, string extraContext = "")
         {
             const string FALLBACK_PROMPT = "As a world-building AI, create a compelling and immersive history for the universe of '${universe_name}'.\n\n" +
                 "Universe Description:\n${universe_desc}\n\n" +
-                "Current World Context (${world_name}):\n${world_bkgd}\n\n" +
+                "Current World Context (${world_name}):\n${world_bkgd}\n" +
+                "${extra_context}\n" +
                 "Instructions:\n" +
                 "1. Write 3-5 paragraphs of history including major past events, the rise and fall of civilizations, or significant turning points.\n" +
                 "2. Ensure the tone matches the world background.${maybe_hint_str}${maybe_i18n_str}\n\n" +
@@ -113,6 +171,15 @@ namespace AIROG_HistoryTab
             if (SS.I != null && SS.I.chatGptPromptsDict.ContainsKey("gen_history"))
             {
                 promptTemplate = SS.I.chatGptPromptsDict["gen_history"];
+                // Verify if user's custom prompt has extra_context, if not, append specific context to world_bkgd for compatibility
+                if (!promptTemplate.Contains("${extra_context}"))
+                {
+                    // If the user hasn't updated their prompt to include our new variable, just append it to world_bkgd logic
+                   // Actually, we can just replace world_bkgd with "world_bkgd + extraContext" if needed, 
+                   // but let's try to be smarter.
+                   // If the template is missing ${extra_context}, we append it to ${world_bkgd}
+                   promptTemplate = promptTemplate.Replace("${world_bkgd}", "${world_bkgd}\n${extra_context}");
+                }
             }
 
             string text = promptTemplate
@@ -120,6 +187,7 @@ namespace AIROG_HistoryTab
                 .Replace("${universe_desc}", universeDesc)
                 .Replace("${world_name}", worldName)
                 .Replace("${world_bkgd}", worldBkgd)
+                .Replace("${extra_context}", extraContext)
                 .Replace("${maybe_hint_str}", AIAsker.GetFullHintStr(hintStr));
 
             string newValue = "";

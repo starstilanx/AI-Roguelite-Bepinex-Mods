@@ -12,6 +12,8 @@ namespace AIROG_WorldExpansion
         [HarmonyPrefix]
         public static void Prefix_GenerateTxtNoTryStrStyle(ref string prompt, AIAsker.ChatGptPromptType chatGptPromptType)
         {
+            // DISABLED: Logic moved to AIROG_GenContext to optimize token usage.
+            /*
             // Only inject for story completion or general questions to avoid bloating specialized prompts
             if (chatGptPromptType != AIAsker.ChatGptPromptType.STORY_COMPLETER && 
                 chatGptPromptType != AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER)
@@ -63,6 +65,7 @@ namespace AIROG_WorldExpansion
             prompt += sb.ToString();
 
             // Debug.Log("[WorldExpansion] Injected world context into AI prompt.");
+            */
         }
     }
 }

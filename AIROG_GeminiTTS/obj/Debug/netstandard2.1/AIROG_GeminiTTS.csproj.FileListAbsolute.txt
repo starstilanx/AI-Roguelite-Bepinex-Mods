@@ -1,5 +1,0 @@
-D:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_GeminiTTS\obj\Debug\netstandard2.1\AIROG_GeminiTTS.csproj.AssemblyReference.cache
-D:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_GeminiTTS\obj\Debug\netstandard2.1\AIROG_GeminiTTS.GeneratedMSBuildEditorConfig.editorconfig
-D:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_GeminiTTS\obj\Debug\netstandard2.1\AIROG_GeminiTTS.AssemblyInfoInputs.cache
-D:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_GeminiTTS\obj\Debug\netstandard2.1\AIROG_GeminiTTS.AssemblyInfo.cs
-D:\Projects\AI Roguelite\AI Roguelite Decompilation\AIROG_GeminiTTS\obj\Debug\netstandard2.1\AIROG_GeminiTTS.csproj.CoreCompileInputs.cache

@@ -21,13 +21,16 @@ namespace AIROG_NanoBanana
         public static BepInEx.Logging.ManualLogSource Log;
         
         public const string PREF_KEY_GEMINI_API_KEY = "PREF_KEY_GEMINI_IMG_GEN_API_KEY";
+        public const string PREF_KEY_GEMINI_MODEL = "PREF_KEY_GEMINI_IMG_GEN_MODEL";
 
         // Configuration for the API Key and Model
         // Modified to check PlayerPrefs first
         public string GeminiApiKey => PlayerPrefs.HasKey(PREF_KEY_GEMINI_API_KEY) 
             ? PlayerPrefs.GetString(PREF_KEY_GEMINI_API_KEY) 
             : Config.Bind("General", "GeminiApiKey", "", "API Key for Gemini Image Generation").Value;
-        public string GeminiModel => Config.Bind("General", "GeminiModel", "gemini-2.5-flash-image", "Model ID to use for Gemini Image Generation").Value;
+        public string GeminiModel => PlayerPrefs.HasKey(PREF_KEY_GEMINI_MODEL) 
+            ? PlayerPrefs.GetString(PREF_KEY_GEMINI_MODEL) 
+            : Config.Bind("General", "GeminiModel", "gemini-2.5-flash-image", "Model ID to use for Gemini Image Generation").Value;
 
         private void Awake()
         {
@@ -52,26 +55,22 @@ namespace AIROG_NanoBanana
                     return GameEntity.ImgGenState.REGULAR_FAILED;
                 }
 
-                // Construct the URL with the API Key as a query parameter
-                string url = $"https://generativelanguage.googleapis.com/v1beta/models/{GeminiModel}:generateContent?key={apiKey}";
+                // Construct the URL (API key is passed as a header, not query param)
+                string url = $"https://generativelanguage.googleapis.com/v1beta/models/{GeminiModel}:generateContent";
 
                 // Build the request payload following official docs:
                 // https://ai.google.dev/gemini-api/docs/image-generation
                 JObject body = new JObject();
                 
                 // Add Generation Config with Image Modality
+                // Must include both TEXT and IMAGE for image generation models
                 body["generationConfig"] = new JObject
                 {
-                    ["responseModalities"] = new JArray { "IMAGE" }
+                    ["responseModalities"] = new JArray { "TEXT", "IMAGE" }
                 };
-                // Add Safety Settings to prevent unwanted refusals
-                body["safetySettings"] = new JArray
-                {
-                    new JObject { ["category"] = "HARM_CATEGORY_HARASSMENT", ["threshold"] = "BLOCK_NONE" },
-                    new JObject { ["category"] = "HARM_CATEGORY_HATE_SPEECH", ["threshold"] = "BLOCK_NONE" },
-                    new JObject { ["category"] = "HARM_CATEGORY_SEXUALLY_EXPLICIT", ["threshold"] = "BLOCK_NONE" },
-                    new JObject { ["category"] = "HARM_CATEGORY_DANGEROUS_CONTENT", ["threshold"] = "BLOCK_NONE" }
-                };
+                // Note: safetySettings with BLOCK_NONE are NOT included here because
+                // Gemini 3 Pro Image Preview rejects requests that use that threshold.
+                // The image generation models have their own default safety filtering.
 
                 JArray contents = new JArray();
                 JObject content = new JObject { ["role"] = "user" };
@@ -88,7 +87,9 @@ namespace AIROG_NanoBanana
                     byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body.ToString());
                     request.uploadHandler = new UploadHandlerRaw(bodyRaw);
                     request.downloadHandler = new DownloadHandlerBuffer();
+                    request.timeout = 120; // 120 second timeout (Gemini 3 Pro thinking can be slow)
                     request.SetRequestHeader("Content-Type", "application/json");
+                    request.SetRequestHeader("x-goog-api-key", apiKey);
 
                     // Send the request and wait for completion
                     var operation = request.SendWebRequest();
@@ -99,7 +100,9 @@ namespace AIROG_NanoBanana
 
                     if (request.result != UnityWebRequest.Result.Success)
                     {
-                        Logger.LogError($"NanoBanana: Gemini API Error: {request.error}\n{request.downloadHandler.text}");
+                        string errBody = request.downloadHandler.text;
+                        if (errBody.Length > 800) errBody = errBody.Substring(0, 800) + "...[truncated]";
+                        Logger.LogError($"NanoBanana: Gemini API Error ({request.responseCode}): {request.error}\n{errBody}");
                         return GameEntity.ImgGenState.REGULAR_FAILED;
                     }
 
@@ -113,6 +116,9 @@ namespace AIROG_NanoBanana
                         {
                             foreach (var part in candidateParts)
                             {
+                                // Skip "thought" parts from Gemini 3 Pro's thinking mode
+                                if (part["thought"]?.Value<bool>() == true) continue;
+
                                 if (part["inlineData"] != null)
                                 {
                                     string base64Data = part["inlineData"]["data"]?.ToString();
@@ -135,7 +141,10 @@ namespace AIROG_NanoBanana
                         }
                     }
 
-                    Logger.LogError($"NanoBanana: No image data found in Gemini response: {request.downloadHandler.text}");
+                    // Log only the first 800 chars of the response for diagnosis
+                    string respPreview = request.downloadHandler.text;
+                    if (respPreview.Length > 800) respPreview = respPreview.Substring(0, 800) + "...[truncated]";
+                    Logger.LogError($"NanoBanana: No image data found in Gemini response: {respPreview}");
                     return GameEntity.ImgGenState.REGULAR_FAILED;
                 }
             }
@@ -168,18 +177,16 @@ namespace AIROG_NanoBanana
                 int geminiIndex = options.FindIndex(o => o.text == "Gemini (Nano Banana)");
                 if (geminiIndex != -1)
                 {
+                    // Use SetValueWithoutNotify to set the index, then manually fire our UI update
                     __instance.imageGenerationDropdown.SetValueWithoutNotify(geminiIndex);
                 }
                 
-                // If Gemini is active, ensure fields are populated and settings are initialized
-                string geminiKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, NanoBananaPlugin.Instance.GeminiApiKey);
-                __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(geminiKey);
-                
-                // Ensure customerKeyTxtInput still has the Sapphire key
-                __instance.customerKeyTxtInput.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
-                
                 if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
             }
+
+            // Always fire the dropdown postfix logic to ensure UI is consistent with current selection
+            // This handles the case where we load Options with Gemini already selected
+            Patch_OnImageGenerationDropdownChanged.ApplyUiState(__instance);
         }
     }
 
@@ -197,6 +204,11 @@ namespace AIROG_NanoBanana
             {
                 string val = __instance.customerKeyTxtInputForImgGen.text;
                 PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, val);
+
+                int presetInd = __instance.imgGenPresetDropdown.value;
+                string model = presetInd == 1 ? "gemini-3-pro-image-preview" : "gemini-2.5-flash-image";
+                PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_MODEL, model);
+
                 PlayerPrefs.Save();
             }
         }
@@ -227,23 +239,28 @@ namespace AIROG_NanoBanana
     public static class Patch_OnImageGenerationDropdownChanged
     {
         private static string _originalKeyLabel = null;
+        // Track which elements we've hidden so we can restore them
+        private static bool _hidWomboStyle = false;
+        private static bool _hidNaiModel = false;
+        private static bool _hidStableHordeKey = false;
 
-        public static void Postfix(MainMenu __instance)
+        // Public method so Patch_MainMenu_Options can call it directly
+        public static void ApplyUiState(MainMenu __instance)
         {
             int ind = __instance.imageGenerationDropdown.value;
-            bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count && 
+            bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
                             __instance.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
 
-            // Update label for the API Key field
+            // Find label component for the imgGen key field
             var labelComponent = __instance.customerKeyTxtInputForImgGenTrans.GetComponentsInChildren<TMP_Text>(true)
-                .FirstOrDefault(t => t.name.ToLower().Contains("label") || t.text.ToLower().Contains("key") || t.text.ToLower().Contains("customer"));
+                .FirstOrDefault(t => t.name.ToLower().Contains("label") || t.text.ToLower().Contains("key") || t.text.ToLower().Contains("customer") || t.text == "Gemini API Key");
 
             if (isGemini)
             {
                 // Store original label if we haven't yet
                 if (_originalKeyLabel == null && labelComponent != null) _originalKeyLabel = labelComponent.text;
 
-                __instance.imgGenExplanation.SetText("Generates images using Google Gemini 2.5 Flash (Nano Banana). \n\n<color=#00FF00>Note:</color> Enter your Gemini API Key below.", true);
+                __instance.imgGenExplanation.SetText("Generates images using Google Gemini.\n\n<color=#00FF00>Note:</color> Enter your Gemini API Key below. Select the model from the preset dropdown.", true);
                 
                 // Repurpose the Sapphire Key field
                 __instance.customerKeyTxtInputForImgGenTrans.gameObject.SetActive(true);
@@ -253,14 +270,25 @@ namespace AIROG_NanoBanana
                 string currentKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, NanoBananaPlugin.Instance.GeminiApiKey);
                 __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(currentKey);
 
-                // Hide irrelevant elements
-                __instance.womboStyleHolder.gameObject.SetActive(false);
-                __instance.naiModelTransform.gameObject.SetActive(false);
-                __instance.stableHordeKeyTransform.gameObject.SetActive(false);
+                // Hide irrelevant elements (and track what we hid so we can restore them)
+                if (__instance.womboStyleHolder.gameObject.activeSelf) { __instance.womboStyleHolder.gameObject.SetActive(false); _hidWomboStyle = true; }
+                if (__instance.naiModelTransform.gameObject.activeSelf) { __instance.naiModelTransform.gameObject.SetActive(false); _hidNaiModel = true; }
+                if (__instance.stableHordeKeyTransform.gameObject.activeSelf) { __instance.stableHordeKeyTransform.gameObject.SetActive(false); _hidStableHordeKey = true; }
                 
                 // Show standard stuff
                 __instance.imgGenTweakHolder.gameObject.SetActive(true);
                 __instance.exportImportImgGenSettingsTrans.gameObject.SetActive(true);
+
+                if (__instance.imgGenPresetDropdown != null)
+                {
+                    __instance.imgGenPresetDropdown.gameObject.SetActive(true);
+                    if (__instance.imgGenPresetDropdown.transform.parent != null)
+                    {
+                        __instance.imgGenPresetDropdown.transform.parent.gameObject.SetActive(true);
+                    }
+                    var populateMethod = __instance.GetType().GetMethod("PopulateImageGenPresetDropdown", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    populateMethod?.Invoke(__instance, null);
+                }
                 
                 // Ensure settingsPojo is not null for this mode
                 if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
@@ -273,8 +301,14 @@ namespace AIROG_NanoBanana
                     labelComponent.text = _originalKeyLabel;
                 }
 
+                // Restore visibility of elements we previously hid
+                // The original OnImageGenerationDropdownChanged manages these but only for its own modes;
+                // since we forced them hidden, we need to explicitly undo that.
+                if (_hidWomboStyle) { __instance.womboStyleHolder.gameObject.SetActive(true); _hidWomboStyle = false; }
+                if (_hidNaiModel) { __instance.naiModelTransform.gameObject.SetActive(true); _hidNaiModel = false; }
+                if (_hidStableHordeKey) { __instance.stableHordeKeyTransform.gameObject.SetActive(true); _hidStableHordeKey = false; }
+
                 // Restore original value for shared field if switching back TO sapphire mode
-                // We use dropdown value since SS.I.imageGenerationMode might not be updated yet
                 var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 if (method != null)
                 {
@@ -285,6 +319,11 @@ namespace AIROG_NanoBanana
                     }
                 }
             }
+        }
+
+        public static void Postfix(MainMenu __instance)
+        {
+            ApplyUiState(__instance);
         }
     }
 
@@ -501,8 +540,35 @@ namespace AIROG_NanoBanana
             if (mode == (SS.ImageGenerationMode)99)
             {
                 __instance.imgGenPresetDropdown.ClearOptions();
-                __instance.imgGenPresetDropdown.AddOptions(new List<string> { "Default", "Custom" });
+                __instance.imgGenPresetDropdown.AddOptions(new List<string> { "Gemini 2.5 Flash Image", "Gemini 3 Pro Image Preview" });
+                
+                string currentModel = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_MODEL, NanoBananaPlugin.Instance.GeminiModel);
+                if (currentModel == "gemini-3-pro-image-preview")
+                    __instance.imgGenPresetDropdown.SetValueWithoutNotify(1);
+                else
+                    __instance.imgGenPresetDropdown.SetValueWithoutNotify(0);
+
                 return false;
+            }
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(MainMenu), "OnImageGenDropdownChanged")]
+    public static class Patch_OnImageGenDropdownChanged
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(MainMenu __instance)
+        {
+            var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (method == null) return true;
+
+            int dropdownVal = __instance.imageGenerationDropdown.value;
+            SS.ImageGenerationMode mode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { dropdownVal });
+
+            if (mode == (SS.ImageGenerationMode)99)
+            {
+                return false; // Skip original method to avoid exceptions/resets natively 
             }
             return true;
         }

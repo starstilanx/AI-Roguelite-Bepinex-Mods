@@ -22,7 +22,10 @@ namespace AIROG_HistoryTab
                 modal.univDescInput,
                 modal.worldNameInput,
                 modal.worldBkgdInput,
-                "NewWorldModal"
+                "NewWorldModal",
+                modal.ngFactions,
+                modal.ngRegions,
+                modal.ngCurrency
             );
         }
 
@@ -84,7 +87,10 @@ namespace AIROG_HistoryTab
                 menu.univDescTextInput,
                 menu.worldNameTextInput,
                 menu.worldBackgroundTextInput,
-                "MainMenu"
+                "MainMenu",
+                menu.ngFactions,
+                menu.ngRegions,
+                menu.ngCurrency
             );
         }
 
@@ -96,7 +102,10 @@ namespace AIROG_HistoryTab
             TMP_InputField univDescInput,
             TMP_InputField worldNameInput,
             TMP_InputField worldBkgdInput,
-            string logContext)
+            string logContext,
+            NgFactions factions = null,
+            NgRegions regions = null,
+            NgCurrency currency = null)
         {
             Debug.Log($"[HistoryTab] {logContext} InjectIntoNgUIInternal started. TM:{tabsManager!=null}, LB:{loreBtn!=null}, NL:{ngLorebook!=null}");
 
@@ -147,6 +156,11 @@ namespace AIROG_HistoryTab
             ngHistory.univDescTextInput = univDescInput;
             ngHistory.worldNameTextInput = worldNameInput;
             ngHistory.worldBkgdTextInput = worldBkgdInput;
+            
+            // Assign new components
+            ngHistory.ngFactions = factions;
+            ngHistory.ngRegions = regions;
+            ngHistory.ngCurrency = currency;
 
             // Cleanup the clone manually to ensure no mixed references
             var clonedLorebook = historyContentObj.GetComponent<NgLorebook>();
