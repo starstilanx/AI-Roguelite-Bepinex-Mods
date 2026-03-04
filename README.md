@@ -1,33 +1,49 @@
-Audio & TTS
+# AI Roguelite Mods Collection
 
-Deepgram & Gemini TTS: These plugins replace the game's default TTS with high-quality alternatives. They map in-game speaker types (Player, NPC, Monster) to specific AI voices listed by their respective APIs. (Will work on sapphire.)
+This repository contains a collection of modifications and expansions for AI Roguelite. These plugins enhance various aspects of the game, from improving AI integration to adding entirely new gameplay mechanics.
 
-Music Expansion: A simple plugin that allows users to place .mp3 or .wav files in specific folders to have them automatically shuffled into the game's ambient and combat playlists. (Will work on sapphire)
+---
 
-Visuals & UI
+## 🎙️ Audio & TTS
 
-Font Plugins: These handle the complex task of replacing fonts in Unity's TextMeshPro system. It allows real-time switching via an in-game dropdown. (Will work on sapphire)
+*   **Deepgram TTS** (`AIROG_DeepgramTTS`): Replaces the default TTS with high-quality Deepgram voices. Maps in-game speaker types (Player, NPC, Monster) to specific AI voices. Compatible with Sapphire.
+*   **Gemini TTS** (`AIROG_GeminiTTS`): Replaces the default TTS with Google Gemini voices. Maps in-game speaker types to specific AI voices. Compatible with Sapphire.
+*   **SAPI5 TTS** (`AIROG_Sapi5`): Allows the game to utilize local Windows SAPI5 text-to-speech voices for offline or customized voice generation.
+*   **Music Expansion** (`AIROG_MusicExpansion`): Allows users to place `.mp3` or `.wav` files into specific folders to automatically shuffle them into the game's ambient and combat playlists. Compatible with Sapphire.
 
-Nano Banana: The image generation plugin. It bypasses the game's default image generation to use Google's Gemini Imagen models, which offer specific features like automatic background removal for characters. (Will work in conjunction with sapphire)
+---
 
-Gameplay Mechanics
+## 🎨 Visuals & UI
 
-NPC Expansion: Probably the most complex plugin. It makes NPCs "real" by giving them their own agendas, inventories, and equipment. They can now take turns simultaneously with the player, behaving more like party members or living world inhabitants. (It takes a lot of tokens to run, so it's probably not currently viable on Sapphire)
+*   **Font Modifiers** (`AIROG_FontModifierMain`, `AIROG_FontSelection`): Handles the complex task of replacing fonts in Unity's TextMeshPro system. Allows real-time font switching via an in-game dropdown. Compatible with Sapphire.
+*   **Nano Banana** (`AIROG_NanoBanana`): Bypasses default image generation to use Google's Gemini Imagen models. Offers specific features like automatic background removal for characters. Compatible with Sapphire.
+*   **OpenAI Image** (`AIROG_OpenAIImage`): A plugin for inputting OpenAI-compatible API keys to use OpenAI's image generation models within the game.
+*   **Stable Horde Detector** (`AIROG_StableHordeDetector`): Integrates with or detects Stable Horde deployments for community-driven distributed image generation.
 
-Skill Web: Adds a new layer of progression. It creates a massive, procedurally generated tree of upgrades that players can navigate as they level up, offering both combat stats and narrative flair. (Almost certain that it will work on Sapphire)
+---
 
-Settlement: Transforms the game from a personal adventure into a management sim. Players can found towns, build structures, and manage resources, all with AI-supported descriptions and events. (Will work on Sapphire)
+## ⚔️ Gameplay Mechanics
 
-World & Lore
+*   **NPC Expansion** (`AIROG_NPCExpansion`): A highly complex plugin that makes NPCs "real." They gain their own agendas, inventories, equipment, and take simultaneous turns with the player. *Note: Extremely token-heavy; may not be viable on Sapphire.*
+*   **Skill Web** (`AIROG_SkillWeb`): Adds a procedural, massive tree of upgrades that players navigate upon leveling up. Offers combat stats and narrative flair. Compatible with Sapphire.
+*   **Settlement** (`AIROG_Settlement`): Transforms the game into a management sim. Players can found towns, build structures, and manage resources with AI-supported events. Compatible with Sapphire.
+*   **Multiplayer** (`AIROG_Multiplayer`): Introduces multiplayer functionality, allowing clients to connect and share the AI Roguelite experience with synchronized story turns and entities.
 
-World Expansion: Introduces a "background tick" system. Even if the player is just standing still, the world's economy fluctuates, and events (wars, natural disasters, etc.) happen and are logged in a special tab within the journal. (Relatively lightweight at the start; might need trimming as world events continue to occur. Context might be lost, but the latest events will still be recorded. Will work on Sapphire)
+---
 
-History Tab: Solves the "AI amnesia" problem by creating a concise, persistent history of world events that is automatically squeezed into every AI prompt, ensuring the AI "remembers" the journey. (Extremely heavy on token counts and needs revision)
+## 🌍 World & Lore
 
-Utilities & Fixes
+*   **World Expansion** (`AIROG_WorldExpansion`): Introduces a background tick system. The world's economy fluctuates, and events (wars, disasters) happen and are logged in the journal even if the player stands still. Compatible with Sapphire.
+*   **History Tab** (`AIROG_HistoryTab`): Solves "AI amnesia" by compiling a persistent history of world events injected into prompts, ensuring the AI remembers the journey. *Note: Heavy on token counts; needs revision.*
+*   **Preset Exporter** (`AIROG_PresetExporter`): A streamlined utility for scenario creators to share their "world rules" with others. Works across all modes.
 
-Loop Be Gone: A vital utility for long-form play. It uses mathematical similarity checks (N-grams and Levenshtein distance) to catch when the AI starts repeating itself, preserving immersion.
+---
 
-Token Modifiers: Allow advanced users to control "how much" the AI talks. Higher token limits mean longer, more detailed descriptions but also higher API costs. (Definitely doesn't work on sapphire)
+## ⚙️ Utilities & Fixes
 
-Preset Exporter: A streamlined way for scenario creators to share their "world rules" with others. (Works regardless of any mode)
+*   **Loop Be Gone** (`AIROG_LoopBeGone`): A vital utility for long-form play that uses N-grams and Levenshtein distance to detect and prevent AI repetition, preserving immersion.
+*   **Token Modifiers** (`AIROG_TokenModifierPlugin`): Allows advanced control over how much the AI talks by modifying token limits. Higher limits yield detailed descriptions but increase API costs. *Incompatible with Sapphire.*
+*   **Token Count** (`AIROG_TokenCount`): An underlying utility associated with token management and calculation.
+*   **Gen Context** (`AIROG_GenContext`): Allows users to disable context truncation, meaning they can bypass standard context limits for massive, unrestricted prompt generation.
+*   **OpenAI5** (`AIROG_OpenAI5`): Provides compatibility layers or enhancements for the OpenAI API integration.
+*   **Random.org** (`AIROG_RandomOrg`): Replaces standard procedural randomness with true randomness generated via the Random.org API for genuinely unpredictable results.
