@@ -72,6 +72,12 @@ Enhance immersion by giving different characters unique voices.
 3. Copy the compiled `.dll` (and any associated `StreamingAssets`) into `BepInEx/plugins/`.
 4. Launch the game and enjoy the expanded universe!
 
+## ☕ Support the Project
+
+If you enjoy these mods and want to support their continued development, consider buying me a coffee!
+
+[![Support me on Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/verinax)
+
 ---
 
 *Built with ❤️ for the AI Roguelite community.*
