@@ -45,6 +45,23 @@ namespace AIROG_NPCExpansion
         public bool AllowEconomicActivity = false;
         public bool AllowWorldInteraction = true;
         public bool IsNemesis = false;
+
+        // Reputation System — behavior-driven tags
+        public List<string> ReputationTags = new List<string>();
+
+        // Rumor / Knowledge Network
+        public List<string> KnownFacts = new List<string>();
+
+        // Bark System
+        public int LastBarkTurn = -99;
+
+        // Memory Synthesis
+        public int MemorySynthesisTurn = 0;
+
+        // Death Tracking
+        public bool IsDeceased = false;
+        public string DeathInfo = "";
+        public string Epitaph = "";
         
         // Stats & Skills
         public Dictionary<SS.PlayerAttribute, long> Attributes = new Dictionary<SS.PlayerAttribute, long>();

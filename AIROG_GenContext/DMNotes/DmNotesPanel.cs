@@ -80,23 +80,23 @@ namespace AIROG_GenContext.DMNotes
             aRect.anchorMax = new Vector2(1f, 0.93f);
             aRect.offsetMin = aRect.offsetMax = Vector2.zero;
 
-            var aHeader = MakeText("AHeader", analysisSection.transform, "▸ Analysis", 11,
+            var aHeader = MakeText("AHeader", analysisSection.transform, "▸ Analysis", 13,
                 FontStyles.Bold, new Color(0.7f, 0.9f, 0.7f), TextAlignmentOptions.Left);
             var ahRect = aHeader.GetComponent<RectTransform>();
             ahRect.anchorMin = new Vector2(0.03f, 0.82f);
             ahRect.anchorMax = new Vector2(1f, 1f);
             ahRect.offsetMin = ahRect.offsetMax = Vector2.zero;
 
-            _stateLabel = MakeText("StateLabel", analysisSection.transform, "Engagement: —", 10,
+            _stateLabel = MakeText("StateLabel", analysisSection.transform, "Engagement: —", 12,
                 FontStyles.Normal, Color.white, TextAlignmentOptions.TopLeft).GetComponent<TextMeshProUGUI>();
             SetAnchors(_stateLabel.GetComponent<RectTransform>(), 0.03f, 0.57f, 1f, 0.82f);
             _stateLabel.enableWordWrapping = true;
 
-            _pacingLabel = MakeText("PacingLabel", analysisSection.transform, "Pacing: —", 10,
+            _pacingLabel = MakeText("PacingLabel", analysisSection.transform, "Pacing: —", 12,
                 FontStyles.Normal, Color.white, TextAlignmentOptions.TopLeft).GetComponent<TextMeshProUGUI>();
             SetAnchors(_pacingLabel.GetComponent<RectTransform>(), 0.03f, 0.32f, 1f, 0.57f);
 
-            _engagementLabel = MakeText("EngageLabel", analysisSection.transform, "", 9,
+            _engagementLabel = MakeText("EngageLabel", analysisSection.transform, "", 11,
                 FontStyles.Normal, new Color(0.75f, 0.75f, 0.75f), TextAlignmentOptions.TopLeft).GetComponent<TextMeshProUGUI>();
             SetAnchors(_engagementLabel.GetComponent<RectTransform>(), 0.03f, 0f, 1f, 0.32f);
             _engagementLabel.enableWordWrapping = true;
@@ -108,7 +108,7 @@ namespace AIROG_GenContext.DMNotes
             pRect.anchorMax = new Vector2(1f, 0.63f);
             pRect.offsetMin = pRect.offsetMax = Vector2.zero;
 
-            var pHeader = MakeText("PHeader", plotSection.transform, "▸ Plot Threads", 11,
+            var pHeader = MakeText("PHeader", plotSection.transform, "▸ Plot Threads", 13,
                 FontStyles.Bold, new Color(0.7f, 0.85f, 1f), TextAlignmentOptions.Left);
             SetAnchors(pHeader.GetComponent<RectTransform>(), 0.03f, 0.88f, 1f, 1f);
 
@@ -122,7 +122,7 @@ namespace AIROG_GenContext.DMNotes
             prRect.anchorMax = new Vector2(1f, 0.31f);
             prRect.offsetMin = prRect.offsetMax = Vector2.zero;
 
-            var prHeader = MakeText("PrHeader", prefSection.transform, "▸ Player Profile", 11,
+            var prHeader = MakeText("PrHeader", prefSection.transform, "▸ Player Profile", 13,
                 FontStyles.Bold, new Color(1f, 0.85f, 0.6f), TextAlignmentOptions.Left);
             SetAnchors(prHeader.GetComponent<RectTransform>(), 0.03f, 0.88f, 1f, 1f);
 
@@ -205,7 +205,7 @@ namespace AIROG_GenContext.DMNotes
 
             if (items.Count == 0)
             {
-                MakeText("Empty", content, "(none)", 9, FontStyles.Italic,
+                MakeText("Empty", content, "(none)", 11, FontStyles.Italic,
                     new Color(0.5f, 0.5f, 0.5f), TextAlignmentOptions.Left);
                 return;
             }
@@ -216,7 +216,7 @@ namespace AIROG_GenContext.DMNotes
                 GameObject row = MakeRect($"Row_{i}", content, typeof(LayoutElement));
                 row.GetComponent<LayoutElement>().minHeight = 18f;
 
-                var rowTxt = MakeText("T", row.transform, items[i], 9, FontStyles.Normal,
+                var rowTxt = MakeText("T", row.transform, items[i], 11, FontStyles.Normal,
                     Color.white, TextAlignmentOptions.TopLeft);
                 rowTxt.GetComponent<TextMeshProUGUI>().enableWordWrapping = true;
                 var rTxtRect = rowTxt.GetComponent<RectTransform>();
@@ -231,7 +231,7 @@ namespace AIROG_GenContext.DMNotes
                 delRect.anchorMin = new Vector2(0.84f, 0.1f);
                 delRect.anchorMax = new Vector2(1f, 0.9f);
                 delRect.offsetMin = delRect.offsetMax = Vector2.zero;
-                var delTxt = MakeText("X", delBtn.transform, "×", 9, FontStyles.Bold,
+                var delTxt = MakeText("X", delBtn.transform, "×", 11, FontStyles.Bold,
                     Color.white, TextAlignmentOptions.Center);
                 StretchFull(delTxt.GetComponent<RectTransform>());
 

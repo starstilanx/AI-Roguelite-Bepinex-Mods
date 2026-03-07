@@ -119,6 +119,13 @@ namespace AIROG_GenContext.DMNotes
             }
         }
 
+        public static void ResetState()
+        {
+            CurrentState = new DmNotesState();
+            _uiDirty = true;
+            Debug.Log("[GenContext] DM Notes state reset for new game.");
+        }
+
         public static bool ConsumeUiDirty()
         {
             bool v = _uiDirty;

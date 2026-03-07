@@ -57,7 +57,7 @@ namespace AIROG_NPCExpansion
                 NPCData.Save(killer.uuid, data);
 
                 if (manager?.gameLogView != null)
-                    _ = manager.gameLogView.LogText(GameLogView.AiDecision(
+                    _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(
                         $"[NEMESIS] {oldName} has defeated you again and grows ever stronger!"));
                 return;
             }
@@ -115,7 +115,7 @@ namespace AIROG_NPCExpansion
             // 7. Dramatic notification
             Debug.Log($"[Nemesis] {oldName} is now known as {newName}.");
             if (manager?.gameLogView != null)
-                _ = manager.gameLogView.LogText(GameLogView.AiDecision(
+                _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(
                     $"[NEMESIS BORN] {oldName} has slain you and risen as {newName}! " +
                     $"They will remember this victory."));
         }
@@ -151,7 +151,7 @@ namespace AIROG_NPCExpansion
             }
 
             if (manager?.gameLogView != null)
-                _ = manager.gameLogView.LogText(GameLogView.AiDecision(
+                _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(
                     $"[NEMESIS] {killer.GetPrettyName()} takes your {item.GetPrettyName()} as a trophy!"));
         }
 

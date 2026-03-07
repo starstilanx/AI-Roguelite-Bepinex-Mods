@@ -24,7 +24,7 @@ namespace AIROG_NPCExpansion
             try 
             {
                 // Call the game's AI engine
-                string generatedText = await AIAsker.GenerateTxtNoTryStrStyle(
+                string generatedText = await GameCompat.GenerateTxt(
                     AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER, 
                     prompt, 
                     AIAsker.ChatGptPostprocessingType.NONE
@@ -69,7 +69,7 @@ namespace AIROG_NPCExpansion
                                 $"If the NPC is nearby the player, they might be observing or reacting to the player's actions. " +
                                 $"Keep it concise (1-3 sentences). Respond ONLY with the updated scenario text.";
 
-                string updatedScenario = await AIAsker.GenerateTxtNoTryStrStyle(
+                string updatedScenario = await GameCompat.GenerateTxt(
                     AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER,
                     prompt,
                     AIAsker.ChatGptPostprocessingType.NONE
@@ -82,10 +82,14 @@ namespace AIROG_NPCExpansion
                     data.Scenario = updatedScenario.Trim();
                     NPCData.Save(npc.uuid, data);
 
+                    // Seed scenario snippet into the rumor network so other NPCs can learn it
+                    string factSnippet = $"{npc.GetPrettyName()}: {data.Scenario}";
+                    RumorNetwork.AddFact(npc.uuid, factSnippet);
+
                     // Log situation update to game chat so players see NPC reactions without opening profiles
                     var gameLog = npc.manager?.gameLogView;
                     if (gameLog != null)
-                        _ = gameLog.LogText(GameLogView.AiDecision($"[{npc.GetPrettyName()}] {data.Scenario}"));
+                        _ = gameLog.LogTextCompat(GameLogView.AiDecision($"[{npc.GetPrettyName()}] {data.Scenario}"));
 
                     // Notify UI if open
                     if (NPCExamineUI.Instance != null)

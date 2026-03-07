@@ -23,7 +23,7 @@ namespace AIROG_GenContext.ContextProviders
             public string Description;
             public string Personality;
             public string Scenario;
-            
+
             // Character Card Fields (for context if needed)
             public string FirstMessage;
             public string MessageExamples; // Kept for JSON round-trip fidelity; not injected into prompt
@@ -34,32 +34,32 @@ namespace AIROG_GenContext.ContextProviders
             public List<string> Tags;
             public List<string> InteractionTraits;
             public string GenerationInstructions;
-            
+
             // Long-Term Memory & Narrative Goals
             public List<string> LongTermMemories;
             public string CurrentGoal;
             public string GoalProgress;
             public List<string> RecentThoughts;
-            
+
             // Relationship System
             public int Affinity;
             public string RelationshipStatus;
             public List<string> InteractionHistory;
-            
+
             // Equipment System
             public Dictionary<string, string> EquippedUuids;
-            
+
             // Autonomy Settings (for reference, not injected)
             public bool AllowAutoEquip;
             public bool AllowSelfPreservation;
             public bool AllowEconomicActivity;
             public bool AllowWorldInteraction;
             public bool IsNemesis;
-            
+
             // Stats & Skills
             public Dictionary<SS.PlayerAttribute, long> Attributes;
             public Dictionary<string, PlayerSkillStub> Skills;
-            
+
             // Matches NPCData.AbilityData struct
             public class AbilityDataStub
             {
@@ -71,11 +71,25 @@ namespace AIROG_GenContext.ContextProviders
 
             // Social Network (NPC-NPC)
             public Dictionary<string, int> NpcAffinities;
+
+            // New Systems (v2.0)
+            public List<string> ReputationTags;
+            public List<string> KnownFacts;
+            public bool IsDeceased;
         }
 
         private class PlayerSkillStub
         {
             public int level;
+        }
+
+        // Minimal quest stub for cross-assembly JSON reading (no hard dep on NPCExpansion)
+        private class QuestStub
+        {
+            public string GiverId;
+            public string ObjectiveText;
+            public string CompletionCondition;
+            public string Status; // "Active", "Completed", "Failed"
         }
 
         private Dictionary<string, NPCDataStub> _npcCache = new Dictionary<string, NPCDataStub>();
@@ -119,7 +133,13 @@ namespace AIROG_GenContext.ContextProviders
                 {
                     context += "Behavioral Traits: " + string.Join("; ", data.InteractionTraits.Take(4)) + "\n";
                 }
-                
+
+                // Reputation Tags (emergent from NPC behavior)
+                if (data.ReputationTags != null && data.ReputationTags.Count > 0)
+                {
+                    context += "Reputation: " + string.Join(", ", data.ReputationTags) + "\n";
+                }
+
                 // 2. Character Card Guidance (AI Roleplay Instructions)
                 if (!string.IsNullOrEmpty(data.CreatorNotes))
                 {
@@ -285,6 +305,39 @@ namespace AIROG_GenContext.ContextProviders
                         }
                     }
                 }
+
+                // Known facts (from rumor network) — only when token budget permits
+                if (data.KnownFacts != null && data.KnownFacts.Count > 0 && maxTokens > 100)
+                {
+                    var facts = data.KnownFacts.Skip(Math.Max(0, data.KnownFacts.Count - 2)).ToList();
+                    context += "Known: " + string.Join("; ", facts) + "\n";
+                }
+
+                // Active quest from this NPC — if player has accepted one
+                try
+                {
+                    // Dynamically load quest data without hard assembly dependency
+                    string questSaveDir = SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg)
+                        ? System.IO.Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "npcexpansion_quests.json")
+                        : null;
+
+                    if (questSaveDir != null && System.IO.File.Exists(questSaveDir))
+                    {
+                        string questJson = System.IO.File.ReadAllText(questSaveDir);
+                        var quests = Newtonsoft.Json.JsonConvert.DeserializeObject<List<QuestStub>>(questJson);
+                        var activeQuest = quests?.FirstOrDefault(q =>
+                            q.GiverId == npc.uuid && q.Status == "Active");
+
+                        if (activeQuest != null)
+                        {
+                            context += $"[Active Quest given to player]: {activeQuest.ObjectiveText}";
+                            if (!string.IsNullOrEmpty(activeQuest.CompletionCondition))
+                                context += $" | Completion: {activeQuest.CompletionCondition}";
+                            context += "\n";
+                        }
+                    }
+                }
+                catch { /* Non-critical; quest file may not exist yet */ }
 
                 context += "[INSTRUCTION: Roleplay this NPC based on their Personality, Traits, Goals, Memories, and Relationships. Use their Capabilities in combat. Consider the current Scene context.]";
 

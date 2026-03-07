@@ -440,10 +440,12 @@ namespace AIROG_NPCExpansion
             lObj.color = new Color(0.05f, 0.05f, 0.05f, 0.9f);
             if (_titleText != null) lObj.font = _titleText.font;
             lObj.rectTransform.anchorMin = Vector2.zero;
-            lObj.rectTransform.anchorMax = new Vector2(0.4f, 1);
+            lObj.rectTransform.anchorMax = new Vector2(0.55f, 1);
             lObj.rectTransform.offsetMin = Vector2.zero;
             lObj.rectTransform.offsetMax = Vector2.zero;
             lObj.alignment = TextAlignmentOptions.Left;
+            lObj.enableWordWrapping = false;
+            lObj.overflowMode = TextOverflowModes.Ellipsis;
 
             var vObj = new GameObject("Value").AddComponent<TextMeshProUGUI>();
             vObj.transform.SetParent(obj.transform, false);
@@ -452,7 +454,7 @@ namespace AIROG_NPCExpansion
             vObj.color = new Color(0f, 0f, 0f, 1f);
             if (_titleText != null) vObj.font = _titleText.font;
             vObj.fontStyle = FontStyles.Bold;
-            vObj.rectTransform.anchorMin = new Vector2(0.4f, 0);
+            vObj.rectTransform.anchorMin = new Vector2(0.55f, 0);
             vObj.rectTransform.anchorMax = Vector2.one;
             vObj.rectTransform.offsetMin = Vector2.zero;
             vObj.rectTransform.offsetMax = Vector2.zero;

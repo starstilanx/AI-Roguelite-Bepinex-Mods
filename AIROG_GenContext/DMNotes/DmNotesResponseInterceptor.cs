@@ -12,7 +12,8 @@ namespace AIROG_GenContext.DMNotes
             [HarmonyPostfix]
             public static void Postfix(ref Task<string> __result, AIAsker.ChatGptPromptType chatGptPromptType)
             {
-                if (chatGptPromptType == AIAsker.ChatGptPromptType.STORY_COMPLETER
+                if ((chatGptPromptType == AIAsker.ChatGptPromptType.STORY_COMPLETER
+                     || chatGptPromptType == AIAsker.ChatGptPromptType.UNIFIED)
                     && ContextManager.GetGlobalSetting("DMNotes"))
                 {
                     __result = ExtractAndStrip(__result);
@@ -29,6 +30,10 @@ namespace AIROG_GenContext.DMNotes
                     if (start >= 0 && end > start)
                     {
                         string block = text.Substring(start + 10, end - start - 10).Trim();
+                        // In UNIFIED mode the response is raw JSON; newlines inside string values
+                        // are encoded as the two-char sequence \n rather than real newlines.
+                        // Unescape so ParseBlock can split on real newline characters.
+                        block = block.Replace("\\n", "\n").Replace("\\r", "");
                         DmNotesManager.ProcessNotes(block);
                         string after = text.Substring(end + 11).TrimStart('\n', '\r', ' ');
                         text = text.Substring(0, start) + after;
@@ -46,6 +51,12 @@ namespace AIROG_GenContext.DMNotes
         public static class Patch_ReadSaveFile
         {
             public static void Postfix(string saveSubDir) => DmNotesManager.LoadState(saveSubDir);
+        }
+
+        [HarmonyPatch(typeof(GameplayManager), nameof(GameplayManager.doNewGame))]
+        public static class Patch_DoNewGame
+        {
+            public static void Prefix() => DmNotesManager.ResetState();
         }
 
         [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]

@@ -47,22 +47,34 @@ namespace AIROG_Sapi5
                 harmony.PatchAll();
 
                 Logger.LogInfo("[SAPI5] Harmony patches applied. Testing SAPI5 availability...");
-                
-                // Defer SAPI5 voice listing to avoid blocking plugin load
-                try 
+
+                // SpeechSynthesizer is COM-based and requires an STA thread.
+                // Run voice listing on a dedicated STA thread to avoid NullReferenceException.
+                var voiceListThread = new System.Threading.Thread(() =>
                 {
-                    using (var synth = new System.Speech.Synthesis.SpeechSynthesizer())
+                    try
                     {
-                        foreach (var voice in synth.GetInstalledVoices())
+                        using (var synth = new System.Speech.Synthesis.SpeechSynthesizer())
                         {
-                            Logger.LogInfo($"[SAPI5] Available Voice: {voice.VoiceInfo.Name}");
+                            var voices = synth.GetInstalledVoices();
+                            if (voices.Count == 0)
+                            {
+                                Logger.LogWarning("[SAPI5] No SAPI5 voices found on this system.");
+                            }
+                            foreach (var voice in voices)
+                            {
+                                Logger.LogInfo($"[SAPI5] Available Voice: {voice.VoiceInfo.Name}");
+                            }
                         }
                     }
-                } 
-                catch (Exception e) 
-                {
-                    Logger.LogWarning($"[SAPI5] Could not list SAPI5 voices (non-fatal): {e.Message}");
-                }
+                    catch (Exception e)
+                    {
+                        Logger.LogWarning($"[SAPI5] Could not list SAPI5 voices (non-fatal): {e.Message}");
+                    }
+                });
+                voiceListThread.SetApartmentState(System.Threading.ApartmentState.STA);
+                voiceListThread.IsBackground = true;
+                voiceListThread.Start();
 
                 Logger.LogInfo("[SAPI5] SAPI5 TTS Plugin Loaded Successfully!");
             }

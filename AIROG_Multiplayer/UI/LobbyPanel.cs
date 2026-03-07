@@ -22,6 +22,7 @@ namespace AIROG_Multiplayer
         private TMP_InputField _charClassInput;
         private TMP_InputField _charBgInput;
         private TMP_InputField _charPersonalityInput;
+        private TMP_InputField _charAppearanceInput;
         private TMP_InputField _charHpInput;
         private TMP_InputField _charMaxHpInput;
         private TMP_InputField _charLevelInput;
@@ -171,6 +172,15 @@ namespace AIROG_Multiplayer
                 new Vector2(10f, y - 24f), new Vector2(450, 54));
             y -= (54f + 18f);
 
+            // --- Physical Appearance (multi-line) ---
+            string savedAppearance = PlayerPrefs.GetString("MP_CharAppearance", "");
+            CreateLabel(dlg, "AppearanceLabel", "Physical Appearance:", 13,
+                new Vector2(-90f, y), new Vector2(160, 24), FontStyles.Normal, labelColor);
+            y -= 28f;
+            _charAppearanceInput = CreateMultilineInputField(dlg, "AppearanceInput", savedAppearance,
+                new Vector2(10f, y - 24f), new Vector2(450, 54));
+            y -= (54f + 18f);
+
             // --- Status text ---
             _statusText = CreateLabel(dlg, "Status", "Ready.", 12,
                 new Vector2(0, y), new Vector2(460, 24), FontStyles.Normal, new Color(0.6f, 0.9f, 0.6f));
@@ -263,6 +273,7 @@ namespace AIROG_Multiplayer
             PlayerPrefs.SetString("MP_CharClass", _charClassInput.text.Trim());
             PlayerPrefs.SetString("MP_CharBg", _charBgInput.text.Trim());
             PlayerPrefs.SetString("MP_CharPersonality", _charPersonalityInput.text.Trim());
+            PlayerPrefs.SetString("MP_CharAppearance", _charAppearanceInput.text.Trim());
             PlayerPrefs.SetString("MP_CharHp", _charHpInput.text.Trim());
             PlayerPrefs.SetString("MP_CharMaxHp", _charMaxHpInput.text.Trim());
             PlayerPrefs.SetString("MP_CharLevel", _charLevelInput.text.Trim());
@@ -284,6 +295,7 @@ namespace AIROG_Multiplayer
                 CharacterClass = _charClassInput.text.Trim(),
                 CharacterBackground = _charBgInput.text.Trim(),
                 Personality = _charPersonalityInput.text.Trim(),
+                CharacterAppearance = _charAppearanceInput.text.Trim(),
                 Health = hp,
                 MaxHealth = maxHp,
                 Level = level
@@ -359,16 +371,27 @@ namespace AIROG_Multiplayer
 
             var inputField = go.AddComponent<TMP_InputField>();
 
+            // Viewport clips text to the field's visible area (prevents overflow into adjacent UI)
+            var viewportGo = new GameObject("Viewport");
+            viewportGo.transform.SetParent(go.transform, false);
+            viewportGo.AddComponent<RectMask2D>();
+            var viewportRT = viewportGo.GetComponent<RectTransform>();
+            viewportRT.anchorMin = Vector2.zero;
+            viewportRT.anchorMax = Vector2.one;
+            viewportRT.offsetMin = new Vector2(5, 2);
+            viewportRT.offsetMax = new Vector2(-5, -2);
+            inputField.textViewport = viewportRT;
+
             var textGo = new GameObject("Text");
-            textGo.transform.SetParent(go.transform, false);
+            textGo.transform.SetParent(viewportGo.transform, false);
             var textComp = textGo.AddComponent<TextMeshProUGUI>();
             textComp.fontSize = 13;
             textComp.color = Color.white;
             var textRT = textGo.GetComponent<RectTransform>();
             textRT.anchorMin = Vector2.zero;
             textRT.anchorMax = Vector2.one;
-            textRT.offsetMin = new Vector2(5, 2);
-            textRT.offsetMax = new Vector2(-5, -2);
+            textRT.offsetMin = Vector2.zero;
+            textRT.offsetMax = Vector2.zero;
 
             inputField.textComponent = textComp;
             inputField.text = defaultValue;

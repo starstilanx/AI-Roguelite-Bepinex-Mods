@@ -14,14 +14,31 @@ namespace AIROG_NPCExpansion
             var data = NPCData.Load(npc.uuid);
             if (data == null) return;
 
-            if (data.AllowAutoEquip) 
+            if (data.AllowAutoEquip)
+            {
+                bool hadGear = data.EquippedUuids.Count > 0;
                 AutoEquip(npc, data, manager);
-            
+                // Reputation: if just started equipping combat gear, earn a rep tag
+                if (!hadGear && data.EquippedUuids.ContainsKey("WEAPON1"))
+                    _ = NPCReputationSystem.AddReputationFromAction(npc, data, "equipped combat gear for the first time");
+            }
+
             if (data.AllowSelfPreservation)
+            {
+                bool wasLowHealth = npc.health < npc.GetMaxHealth() * 0.5f;
                 SelfPreservation(npc, data, manager);
+                if (wasLowHealth && npc.health >= npc.GetMaxHealth() * 0.5f)
+                    _ = NPCReputationSystem.AddReputationFromAction(npc, data, "healed themselves when nearly dead");
+            }
 
             if (data.AllowEconomicActivity)
+            {
+                int itemsBefore = npc.items?.Count ?? 0;
                 EconomicActivity(npc, data, manager);
+                int itemsAfter = npc.items?.Count ?? 0;
+                if (itemsAfter < itemsBefore)
+                    _ = NPCReputationSystem.AddReputationFromAction(npc, data, "sold surplus goods to make a profit");
+            }
 
             // Auto-migrate: Use Scenario as Goal if Goal is missing (for existing saves)
             if (string.IsNullOrEmpty(data.CurrentGoal) && !string.IsNullOrEmpty(data.Scenario))
@@ -260,7 +277,7 @@ namespace AIROG_NPCExpansion
                     npc.health = Math.Min(npc.maxHealth, npc.health + healAmount);
                     npc.items.Remove(healingItem);
                     
-                    _ = manager.gameLogView.LogText(GameLogView.AiDecision($"{npc.GetPrettyName()} uses {healingItem.GetPrettyName()} to heal wounds."));
+                    _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision($"{npc.GetPrettyName()} uses {healingItem.GetPrettyName()} to heal wounds."));
                 }
             }
         }
@@ -417,7 +434,7 @@ namespace AIROG_NPCExpansion
                     itemToPick.SetParentEnt(npc); // For entity logic
 
                     string logMsg = $"{npc.GetPrettyName()} picks up {itemToPick.GetPrettyName()} from {winner.source.GetPrettyName()}.";
-                    _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
+                    _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(logMsg));
                     Debug.Log($"[NPCAutonomy] {logMsg}");
                     return; // Interaction spent
                 }
@@ -450,7 +467,7 @@ namespace AIROG_NPCExpansion
                 var best = intCandidates[0];
                 string verb = best.Plaus.verb;
                 string logMsg = $"{npc.GetPrettyName()} {verb} {best.Thing.GetPrettyName()}.";
-                _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
+                _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(logMsg));
                 Debug.Log($"[NPCAutonomy] {logMsg}");
             }
         }
@@ -465,7 +482,7 @@ namespace AIROG_NPCExpansion
             else if (data.InteractionTraits.Any(t => t.ToLower().Contains("aggressive"))) msg = "clenches their fist.";
 
             string logMsg = $"{npc.GetPrettyName()} {msg}";
-            _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
+            _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(logMsg));
         }
 
         private struct PlausResult
@@ -637,7 +654,7 @@ namespace AIROG_NPCExpansion
             var abil = data.DetailedAbilities[UnityEngine.Random.Range(0, data.DetailedAbilities.Count)];
 
             string logMsg = $"{npc.GetPrettyName()} uses {abil.Name}! ({abil.Description})";
-            _ = manager.gameLogView.LogText(GameLogView.AiDecision(logMsg));
+            _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(logMsg));
             Debug.Log($"[NPCAutonomy] {logMsg}");
         }
 

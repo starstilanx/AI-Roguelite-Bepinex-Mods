@@ -219,6 +219,16 @@ namespace AIROG_GenContext
                     argList.Add(Activator.CreateInstance(toggleType, new object[] { "DM Notes (AI Director Layer)", isEnabled, onToggle }));
                 }
 
+                // RR Compat Mode
+                {
+                    bool isEnabled = ContextManager.GetGlobalSetting("RRCompat");
+                    Action<bool> onToggle = (val) => {
+                        ContextManager.SetGlobalSetting("RRCompat", val);
+                        Debug.Log($"[GenContext] Toggled RR Compat Mode to {val}");
+                    };
+                    argList.Add(Activator.CreateInstance(toggleType, new object[] { "RR Compat Mode (Reactive Realms + UNIFIED)", isEnabled, onToggle }));
+                }
+
                 // Find PresentSelf by name (handles any number of parameters)
                 MethodInfo presentMethod = null;
                 foreach (var m in modalType.GetMethods())

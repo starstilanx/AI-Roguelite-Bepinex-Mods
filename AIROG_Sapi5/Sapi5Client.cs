@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Speech.Synthesis;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using System.Linq;
@@ -13,13 +14,22 @@ namespace AIROG_Sapi5
         private static Sapi5Client _instance;
         public static Sapi5Client Instance => _instance ??= new Sapi5Client();
 
-        public async Task<string> GenerateTts(string text, string voiceName)
+        // SpeechSynthesizer is a COM component that requires an STA thread.
+        // Task.Run() uses MTA thread pool threads, which causes NullReferenceException
+        // inside SAPI5. We spin up a dedicated STA thread for each synthesis call.
+        public Task<string> GenerateTts(string text, string voiceName)
         {
-            return await Task.Run(() =>
+            var tcs = new TaskCompletionSource<string>();
+
+            var thread = new Thread(() =>
             {
                 try
                 {
-                    if (!Sapi5Plugin.UseSapi5.Value) return null;
+                    if (!Sapi5Plugin.UseSapi5.Value)
+                    {
+                        tcs.SetResult(null);
+                        return;
+                    }
 
                     Debug.Log($"[SAPI5] GenerateTts called for voice: {voiceName}, text length: {text?.Length ?? 0}");
 
@@ -28,9 +38,6 @@ namespace AIROG_Sapi5
 
                     using (SpeechSynthesizer synth = new SpeechSynthesizer())
                     {
-                        // Select Voice
-                        // If exact match fails, try partial match
-                        // Use SelectVoice (exact) or SelectVoiceByHints
                         bool voiceFound = false;
                         foreach (var v in synth.GetInstalledVoices())
                         {
@@ -42,20 +49,19 @@ namespace AIROG_Sapi5
                                 break;
                             }
                         }
-                        
+
                         if (!voiceFound && !string.IsNullOrEmpty(voiceName))
                         {
-                             // Try contains
-                             foreach (var v in synth.GetInstalledVoices())
-                             {
-                                 if (v.VoiceInfo.Name.IndexOf(voiceName, StringComparison.OrdinalIgnoreCase) >= 0)
-                                 {
-                                     synth.SelectVoice(v.VoiceInfo.Name);
-                                     voiceFound = true;
-                                     Debug.Log($"[SAPI5] Voice matched partially: {v.VoiceInfo.Name}");
-                                     break;
-                                 }
-                             }
+                            foreach (var v in synth.GetInstalledVoices())
+                            {
+                                if (v.VoiceInfo.Name.IndexOf(voiceName, StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    synth.SelectVoice(v.VoiceInfo.Name);
+                                    voiceFound = true;
+                                    Debug.Log($"[SAPI5] Voice matched partially: {v.VoiceInfo.Name}");
+                                    break;
+                                }
+                            }
                         }
 
                         if (!voiceFound)
@@ -63,23 +69,27 @@ namespace AIROG_Sapi5
                             Debug.LogWarning($"[SAPI5] Voice '{voiceName}' not found, using default voice");
                         }
 
-                        // Configure Audio
                         synth.SetOutputToWaveFile(wavPath);
                         synth.Rate = Sapi5Plugin.Rate.Value;
                         synth.Volume = Sapi5Plugin.Volume.Value;
-
                         synth.Speak(text);
                     }
 
                     Debug.Log($"[SAPI5] Generated TTS file: {wavPath}");
-                    return uuid;
+                    tcs.SetResult(uuid);
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"SAPI5 Client Exception: {ex.Message}");
-                    return null;
+                    Debug.LogError($"[SAPI5] Client Exception: {ex}");
+                    tcs.SetResult(null);
                 }
             });
+
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.IsBackground = true;
+            thread.Start();
+
+            return tcs.Task;
         }
 
         public async Task<string> ConcatenateAudioFiles(List<string> uuids)

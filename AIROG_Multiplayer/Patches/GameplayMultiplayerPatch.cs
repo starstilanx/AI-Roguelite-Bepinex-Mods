@@ -109,6 +109,8 @@ namespace AIROG_Multiplayer.Patches
                         sb.AppendLine($"  Background: {info.CharacterBackground}");
                     if (!string.IsNullOrEmpty(info.Personality))
                         sb.AppendLine($"  Personality/Goals: {info.Personality}");
+                    if (!string.IsNullOrEmpty(info.CharacterAppearance))
+                        sb.AppendLine($"  Appearance: {info.CharacterAppearance}");
                 }
 
                 // NOTE: Client actions are injected via the text field in ConvoSubmissionPatch.Prefix,
@@ -372,29 +374,63 @@ namespace AIROG_Multiplayer.Patches
                 MultiplayerPlugin.Instance?.Log.LogError($"[Multiplayer] DoConvoTextFieldSubmission prefix error: {ex.Message}");
             }
 
-            // Append pending client actions to the text field.
+            // Append party member context + pending client actions to the text field.
             // ProcessConvoMessage() reads npcConvoTextInput.text synchronously into a local
-            // variable at line 2957 — before any async work — so modifying it here (Prefix
-            // fires synchronously) is the reliable injection point.
+            // variable — before any async work — so modifying it here (Prefix fires
+            // synchronously) is the reliable injection point.
+            // We always inject character descriptions here (not only via BuildPromptString)
+            // because BuildPromptString is not called for every open-ended action type.
             try
             {
                 var pendingActions = GameplayMultiplayerPatch.GetAndClearPendingActions();
-                if (pendingActions.Count > 0 && __instance.npcConvoTextInput != null)
+                var clients = MultiplayerPlugin.Server?.GetClients();
+                bool hasClients = clients != null && clients.Count > 0;
+                bool hasActions = pendingActions.Count > 0;
+
+                if ((hasActions || hasClients) && __instance.npcConvoTextInput != null)
                 {
-                    UnityEngine.Debug.Log($"[MP-DIAG] ConvoSubmissionPatch.Prefix: appending {pendingActions.Count} client action(s) to text field");
+                    UnityEngine.Debug.Log($"[MP-DIAG] ConvoSubmissionPatch.Prefix: injecting {pendingActions.Count} action(s) + {(clients?.Count ?? 0)} party member description(s)");
                     var originalText = __instance.npcConvoTextInput.text ?? "";
                     var sb = new StringBuilder();
                     if (originalText.Length > 0) sb.AppendLine(originalText);
-                    sb.AppendLine("[CO-OP PARTY MEMBER ACTIONS]");
-                    sb.AppendLine("The following party members have declared their actions for this turn:");
-                    foreach (var a in pendingActions)
-                        sb.AppendLine($"- {a}");
-                    sb.AppendLine("Please incorporate their actions naturally into your narrative response.");
+
+                    // Always inject party member role cards so the AI knows who is who,
+                    // even if BuildPromptString was skipped for this prompt type.
+                    if (hasClients)
+                    {
+                        sb.AppendLine("[CO-OP PARTY MEMBERS]");
+                        sb.AppendLine("This is a co-op session. The following characters are adventuring alongside the player:");
+                        foreach (var c in clients)
+                        {
+                            var info = c.CharacterInfo;
+                            if (info == null) continue;
+                            sb.Append($"- {info.CharacterName}");
+                            if (!string.IsNullOrEmpty(info.CharacterClass))
+                                sb.Append($", {info.CharacterClass}");
+                            sb.AppendLine($" (HP: {info.Health}/{info.MaxHealth})");
+                            if (!string.IsNullOrEmpty(info.CharacterBackground))
+                                sb.AppendLine($"  Background: {info.CharacterBackground}");
+                            if (!string.IsNullOrEmpty(info.Personality))
+                                sb.AppendLine($"  Personality/Goals: {info.Personality}");
+                            if (!string.IsNullOrEmpty(info.CharacterAppearance))
+                                sb.AppendLine($"  Appearance: {info.CharacterAppearance}");
+                        }
+                    }
+
+                    if (hasActions)
+                    {
+                        sb.AppendLine("[CO-OP PARTY MEMBER ACTIONS]");
+                        sb.AppendLine("The following party members have declared their actions for this turn:");
+                        foreach (var a in pendingActions)
+                            sb.AppendLine($"- {a}");
+                        sb.AppendLine("Please incorporate their actions naturally into your narrative response.");
+                    }
+
                     __instance.npcConvoTextInput.text = sb.ToString();
                 }
                 else
                 {
-                    UnityEngine.Debug.Log("[MP-DIAG] ConvoSubmissionPatch.Prefix: no pending client actions");
+                    UnityEngine.Debug.Log("[MP-DIAG] ConvoSubmissionPatch.Prefix: no party members or pending actions");
                 }
             }
             catch (Exception ex)

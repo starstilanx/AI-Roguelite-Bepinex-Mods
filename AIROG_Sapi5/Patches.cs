@@ -26,20 +26,28 @@ namespace AIROG_Sapi5
 
         private static async Task<List<string>> GenerateMultipleTtsForTmpAsync(string strForTts)
         {
-            Debug.Log("[SAPI5] GenerateMultipleTtsForTmpAsync called");
-            List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
-            List<Task<string>> tasks = new List<Task<string>>();
-            
-            foreach (var annotatedStr in list)
+            try
             {
-                // Map speaker type to SAPI5 voice from config instead of using TikTok voiceName
-                string sapi5Voice = GetSapi5VoiceForSpeakerType(annotatedStr.speakerType, SS.Gender.UNKNOWN);
-                Debug.Log($"[SAPI5] Speaking as {annotatedStr.speakerType} with voice: {sapi5Voice}");
-                tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), sapi5Voice));
-            }
+                Debug.Log("[SAPI5] GenerateMultipleTtsForTmpAsync called");
+                List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
+                Debug.Log($"[SAPI5] Extracted {list.Count} annotated strings for tmp.");
+                List<Task<string>> tasks = new List<Task<string>>();
 
-            string[] uuids = await Task.WhenAll(tasks);
-            return uuids.Where(u => !string.IsNullOrEmpty(u)).ToList();
+                foreach (var annotatedStr in list)
+                {
+                    string sapi5Voice = GetSapi5VoiceForSpeakerType(annotatedStr.speakerType, SS.Gender.UNKNOWN);
+                    Debug.Log($"[SAPI5] Speaking as {annotatedStr.speakerType} with voice: {sapi5Voice}");
+                    tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), sapi5Voice));
+                }
+
+                string[] uuids = await Task.WhenAll(tasks);
+                return uuids.Where(u => !string.IsNullOrEmpty(u)).ToList();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[SAPI5] GenerateMultipleTtsForTmpAsync FAILED: {ex}");
+                return new List<string>();
+            }
         }
 
         private static string GetSapi5VoiceForSpeakerType(AnnotatedStrForTts.SpeakerType speakerType, SS.Gender playerGender)
@@ -67,42 +75,64 @@ namespace AIROG_Sapi5
 
         private static async Task GenerateMultipleTtsAndUpdateQueueAsync(GameplayManager manager, string strForTts, SS.VoiceType npcVoiceType, bool dialogueOnly, bool clearQueue)
         {
-             List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
-             if (dialogueOnly)
-             {
-                 list = list.Where((AnnotatedStrForTts an) => an.speakerType != AnnotatedStrForTts.SpeakerType.NARRATOR && an.speakerType != AnnotatedStrForTts.SpeakerType.UNKNOWN).ToList();
-             }
+            try
+            {
+                Debug.Log($"[SAPI5] GenerateMultipleTtsAndUpdateQueueAsync called. strForTts length: {strForTts?.Length ?? -1}, dialogueOnly: {dialogueOnly}");
 
-             List<Task<string>> tasks = new List<Task<string>>();
-             foreach (var annotatedStr in list)
-             {
-                 string voiceName = GetVoiceName(annotatedStr, npcVoiceType, manager.playerCharacter.GetGender());
-                 tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), voiceName));
-             }
+                List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
+                Debug.Log($"[SAPI5] Extracted {list.Count} annotated strings.");
 
-             string[] uuids = await Task.WhenAll(tasks);
-             List<string> validUuids = uuids.Where(u => !string.IsNullOrEmpty(u)).ToList();
+                if (dialogueOnly)
+                {
+                    list = list.Where((AnnotatedStrForTts an) => an.speakerType != AnnotatedStrForTts.SpeakerType.NARRATOR && an.speakerType != AnnotatedStrForTts.SpeakerType.UNKNOWN).ToList();
+                    Debug.Log($"[SAPI5] After dialogueOnly filter: {list.Count} strings.");
+                }
 
-             if (validUuids.Count == 0) return;
+                if (list.Count == 0)
+                {
+                    Debug.LogWarning("[SAPI5] No annotated strings to synthesize — skipping.");
+                    return;
+                }
 
-             string finalUuid = await Sapi5Client.Instance.ConcatenateAudioFiles(validUuids);
+                List<Task<string>> tasks = new List<Task<string>>();
+                foreach (var annotatedStr in list)
+                {
+                    string voiceName = GetVoiceName(annotatedStr, npcVoiceType, manager.playerCharacter.GetGender());
+                    Debug.Log($"[SAPI5] Speaking as {annotatedStr.speakerType} with voice: {voiceName}");
+                    tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), voiceName));
+                }
 
-             if (string.IsNullOrEmpty(finalUuid)) return;
+                string[] uuids = await Task.WhenAll(tasks);
+                List<string> validUuids = uuids.Where(u => !string.IsNullOrEmpty(u)).ToList();
+                Debug.Log($"[SAPI5] {validUuids.Count}/{tasks.Count} TTS tasks produced valid audio.");
 
-             lock (manager.gameSpeechManager.currentSoundUuidQueue)
-             {
-                 if (clearQueue)
-                 {
-                     manager.gameSpeechManager.currentSoundUuidQueue.Clear();
-                 }
-                 
-                 manager.gameSpeechManager.currentSoundUuidQueue.Enqueue(finalUuid);
-                 
-                 if (clearQueue)
-                 {
-                     manager.gameSpeechManager.soundQueueDirtyBit = true;
-                 }
-             }
+                if (validUuids.Count == 0) return;
+
+                string finalUuid = await Sapi5Client.Instance.ConcatenateAudioFiles(validUuids);
+
+                if (string.IsNullOrEmpty(finalUuid)) return;
+
+                lock (manager.gameSpeechManager.currentSoundUuidQueue)
+                {
+                    if (clearQueue)
+                    {
+                        manager.gameSpeechManager.currentSoundUuidQueue.Clear();
+                    }
+
+                    manager.gameSpeechManager.currentSoundUuidQueue.Enqueue(finalUuid);
+
+                    if (clearQueue)
+                    {
+                        manager.gameSpeechManager.soundQueueDirtyBit = true;
+                    }
+                }
+
+                Debug.Log($"[SAPI5] Successfully queued audio UUID: {finalUuid}");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[SAPI5] GenerateMultipleTtsAndUpdateQueueAsync FAILED: {ex}");
+            }
         }
 
         private static string GetVoiceName(AnnotatedStrForTts annotatedStr, SS.VoiceType npcVoiceType, SS.Gender playerGender)

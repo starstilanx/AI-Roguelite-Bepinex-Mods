@@ -629,7 +629,7 @@ namespace AIROG_Multiplayer
 
             Server.BroadcastStoryTurn(new StoryEntry
             {
-                Text = action.ActionText,
+                Text = $"{charName}: {action.ActionText}",
                 AuthorName = charName,
                 IsPlayerAction = true,
                 Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
@@ -637,6 +637,9 @@ namespace AIROG_Multiplayer
 
             var manager = FindObjectOfType<GameplayManager>();
             manager?.toast?.ShowToast($"⚔ {charName}: {TruncateForToast(action.ActionText)}");
+
+            // Log to the host's story view so they can read and respond before taking their turn
+            manager?.gameLogView?.LogText($"{charName}: {action.ActionText}");
         }
 
         private static void OnChatReceived_Host(ConnectedClient client, ChatPayload chat)

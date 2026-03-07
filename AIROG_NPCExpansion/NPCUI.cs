@@ -4,7 +4,9 @@ using System.Collections.Generic;
 using Newtonsoft.Json;
 using TMPro;
 using System;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 
 namespace AIROG_NPCExpansion
 {
@@ -226,6 +228,32 @@ namespace AIROG_NPCExpansion
         // Bottom Bar Injection
         private static GameObject _bottomGenerateBtnObj;
         private static GameplayManager _gameplayManager;
+        private static Sprite _loreButtonSprite;
+
+        private static Sprite LoadLoreButtonSprite()
+        {
+            string fileName = "LoreButton.png";
+            string[] searchPaths = new string[]
+            {
+                Path.Combine(Application.streamingAssetsPath, "NPCExpansion", fileName),
+                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Assets", fileName),
+                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), fileName)
+            };
+            foreach (string path in searchPaths)
+            {
+                if (!File.Exists(path)) continue;
+                try
+                {
+                    byte[] data = File.ReadAllBytes(path);
+                    Texture2D tex = new Texture2D(2, 2);
+                    if (tex.LoadImage(data))
+                        return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+                }
+                catch (Exception ex) { Debug.LogWarning($"[NPCUI] LoreButton.png load error: {ex.Message}"); }
+            }
+            Debug.LogWarning("[NPCUI] LoreButton.png not found.");
+            return null;
+        }
 
         public static void TryInjectBottomBar(GameplayManager manager)
         {
@@ -249,57 +277,52 @@ namespace AIROG_NPCExpansion
             _gameplayManager = manager;
             if (manager.npcConvoSelectorDropdown == null) return;
 
+            // Load sprite asset once
+            if (_loreButtonSprite == null)
+                _loreButtonSprite = LoadLoreButtonSprite();
+
             // Create FRESH button to avoid inheriting existing scripts/events
             _bottomGenerateBtnObj = new GameObject("GenerateLoreButtonBottom", typeof(RectTransform));
             _bottomGenerateBtnObj.transform.SetParent(manager.npcConvoSelectorDropdown.transform, false);
-            
-            // Visuals
+
+            // Visuals — sprite image (no text; "Lore" is baked into the asset)
             var img = _bottomGenerateBtnObj.AddComponent<Image>();
-            img.color = new Color(1f, 0.5f, 0f); // Orange
-            
+            if (_loreButtonSprite != null)
+            {
+                img.sprite = _loreButtonSprite;
+                img.type = Image.Type.Simple;
+                img.preserveAspect = true;
+                img.color = Color.white;
+            }
+            else
+            {
+                // Fallback: plain orange square if asset missing
+                img.color = new Color(1f, 0.5f, 0f);
+            }
+
             // Interaction
             var btn = _bottomGenerateBtnObj.AddComponent<Button>();
             btn.targetGraphic = img;
             btn.onClick.AddListener(() => OnBottomGenerateClicked(manager));
-            
+
             // Disable Navigation to prevent 'Enter' from triggering Submit on Focus Change
             var nav = new Navigation();
             nav.mode = Navigation.Mode.None;
             btn.navigation = nav;
-            
-            // Layout Handling - Floating tag
+
+            // Layout Handling - Floating, ignores layout groups
             var le = _bottomGenerateBtnObj.AddComponent<LayoutElement>();
-            le.ignoreLayout = true; 
-            
-            // Text
-            var textObj = new GameObject("Text", typeof(RectTransform));
-            textObj.transform.SetParent(_bottomGenerateBtnObj.transform, false);
-            
-            var txt = textObj.AddComponent<TextMeshProUGUI>();
-            txt.text = "Lore";
-            if (manager.convoPlaceholderText != null) 
-                 txt.font = manager.convoPlaceholderText.font;
-            
-            txt.alignment = TextAlignmentOptions.Center;
-            txt.color = Color.white;
-            txt.fontSize = 10;
-            txt.enableAutoSizing = true;
-            txt.rectTransform.anchorMin = Vector2.zero;
-            txt.rectTransform.anchorMax = Vector2.one;
-            txt.rectTransform.offsetMin = new Vector2(2, 2);
-            txt.rectTransform.offsetMax = new Vector2(-2, -2);
-            
-            // Position: Top-Right corner of Dropdown?
+            le.ignoreLayout = true;
+
+            // Position: bottom-left of the dropdown, so it sits next to the NPC name — unobtrusive
             var rect = _bottomGenerateBtnObj.GetComponent<RectTransform>();
             if (rect != null)
             {
-                rect.anchorMin = new Vector2(1f, 1f);
-                rect.anchorMax = new Vector2(1f, 1f);
-                rect.pivot = new Vector2(1f, 0f); // Bottom-Right pivot
-                
-                rect.anchoredPosition = new Vector2(-5, 2); // Slightly offset from top-right corner
-                rect.sizeDelta = new Vector2(40, 20); // Small
-                
+                rect.anchorMin = new Vector2(0f, 0f);
+                rect.anchorMax = new Vector2(0f, 0f);
+                rect.pivot = new Vector2(0f, 1f); // Top-left pivot
+                rect.anchoredPosition = new Vector2(2f, -2f); // 2px inset from bottom-left corner of dropdown
+                rect.sizeDelta = new Vector2(52, 19); // Compact; matches stone-tablet aspect ratio
                 rect.localRotation = Quaternion.identity;
                 rect.localScale = Vector3.one;
             }
@@ -323,7 +346,7 @@ namespace AIROG_NPCExpansion
         {
              if (manager == null || manager.npcConvoSelectorDropdown == null || manager.currentPlace == null) return null;
              var chars = manager.GetCharsForNpcConvoSelectorDropdown();
-             int idx = manager.npcConvoSelectorDropdown.value;
+             int idx = manager.npcConvoSelectorDropdown.value - 1; // dropdown is 1-based: 0=[OPEN-ENDED], 1=first NPC
              if (chars == null || idx < 0 || idx >= chars.Count) return null;
              return chars[idx];
         }
@@ -345,11 +368,11 @@ namespace AIROG_NPCExpansion
                     if (_lastLoggedNpcUuid != npc.uuid)
                     {
                         string relColor = GetRelationshipColor(data.Affinity);
-                        _ = manager.gameLogView.LogText($"<color=yellow>[AI Lore]</color> Relationship with {npc.GetPrettyName()}: <color={relColor}>{data.RelationshipStatus} ({data.Affinity})</color>");
+                        _ = manager.gameLogView.LogTextCompat($"<color=yellow>[AI Lore]</color> Relationship with {npc.GetPrettyName()}: <color={relColor}>{data.RelationshipStatus} ({data.Affinity})</color>");
                         
                         if (!string.IsNullOrEmpty(data.FirstMessage))
                         {
-                            _ = manager.gameLogView.LogText($"<color=white>\"{data.FirstMessage}\"</color>");
+                            _ = manager.gameLogView.LogTextCompat($"<color=white>\"{data.FirstMessage}\"</color>");
                         }
                         _lastLoggedNpcUuid = npc.uuid;
                     }
@@ -372,13 +395,10 @@ namespace AIROG_NPCExpansion
         {
             if (_bottomGenerateBtnObj == null) return;
 
-            // Fallback to static if null, but prefer passed manager
             var mgr = manager ?? _gameplayManager;
-
             var data = NPCData.Load(npc.uuid);
             bool hasLore = (data != null);
-            
-            var txt = _bottomGenerateBtnObj.GetComponentInChildren<TextMeshProUGUI>();
+
             var img = _bottomGenerateBtnObj.GetComponent<Image>();
             var btn = _bottomGenerateBtnObj.GetComponent<Button>();
 
@@ -387,16 +407,14 @@ namespace AIROG_NPCExpansion
                 btn.onClick.RemoveAllListeners();
                 if (hasLore)
                 {
-                    // EDIT MODE
-                    if (txt != null) txt.text = "Edit";
-                    if (img != null) img.color = new Color(0f, 0.7f, 1f); // Cyan/Blue
+                    // EDIT MODE — cyan tint to signal "has lore, click to edit"
+                    if (img != null) img.color = new Color(0.55f, 0.9f, 1f);
                     btn.onClick.AddListener(() => ShowLoreEditor(npc, mgr));
                 }
                 else
                 {
-                    // GENERATE MODE
-                    if (txt != null) txt.text = "Lore";
-                    if (img != null) img.color = new Color(1f, 0.5f, 0f); // Orange
+                    // GENERATE MODE — neutral white tint (asset's own colors show through)
+                    if (img != null) img.color = Color.white;
                     btn.onClick.AddListener(() => OnBottomGenerateClicked(mgr));
                 }
             }
@@ -563,20 +581,18 @@ namespace AIROG_NPCExpansion
             if (manager == null) return;
             var npc = GetSelectedNPC(manager);
             if (npc == null) return;
-            
-            var btnText = _bottomGenerateBtnObj.GetComponentInChildren<TextMeshProUGUI>();
-            if (btnText != null) btnText.text = "...";
 
-            var context = manager.GetContextForQuickActions(); 
-            
+            // Pulse the button dim-yellow to signal "working"
+            var img = _bottomGenerateBtnObj?.GetComponent<Image>();
+            if (img != null) img.color = new Color(1f, 0.85f, 0.3f);
+
+            var context = manager.GetContextForQuickActions();
             bool success = await NPCGenerator.GenerateLore(npc, context);
-            
-            if (btnText != null) btnText.text = success ? "Edit" : "Err"; 
 
             if (success)
-            {
-                TryUpdateTextForBottomBar(manager);
-            }
+                TryUpdateTextForBottomBar(manager); // Will call UpdateBottomButtonState → cyan tint
+            else if (img != null)
+                img.color = new Color(1f, 0.35f, 0.35f); // Red tint on failure; next NPC switch resets it
         }
     }
 }

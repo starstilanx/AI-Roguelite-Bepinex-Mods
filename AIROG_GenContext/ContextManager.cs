@@ -37,6 +37,7 @@ namespace AIROG_GenContext
             if (!_globalSettings.ContainsKey("NemesisLooting")) _globalSettings["NemesisLooting"] = true;
             if (!_globalSettings.ContainsKey("DisableTruncation")) _globalSettings["DisableTruncation"] = false;
             if (!_globalSettings.ContainsKey("DMNotes")) _globalSettings["DMNotes"] = true;
+            if (!_globalSettings.ContainsKey("RRCompat")) _globalSettings["RRCompat"] = false;
         }
 
         public static List<IContextProvider> GetProviders() => _providers;
@@ -117,8 +118,6 @@ namespace AIROG_GenContext
         }
 
         // Main Injection Logic
-        [HarmonyPatch(typeof(GameplayManager), "BuildPromptString", new Type[] { typeof(string), typeof(bool), typeof(bool), typeof(InteractionInfo), typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld), typeof(List<Faction>), typeof(List<string>), typeof(bool) }, new ArgumentType[] { ArgumentType.Out, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal })]
-        [HarmonyPostfix]
         public static void Postfix_BuildPromptString(GameplayManager __instance, ref string __result, GameCharacter currentChar)
         {
             if (string.IsNullOrEmpty(__result)) return;

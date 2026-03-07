@@ -20,7 +20,7 @@ namespace AIROG_NPCExpansion
     {
         public const string PLUGIN_GUID = "com.airog.npcexpansion";
         public const string PLUGIN_NAME = "NPC Expansion";
-        public const string PLUGIN_VERSION = "1.0.1";
+        public const string PLUGIN_VERSION = "2.0.0";
 
         public static NPCExpansionPlugin Instance { get; private set; }
         public static string NPCDataPath => Path.Combine(Paths.PluginPath, "AIROG_NPCExpansion", "NPCData");
@@ -36,16 +36,35 @@ namespace AIROG_NPCExpansion
             }
 
             Harmony.CreateAndPatchAll(typeof(NPCExpansionPlugin));
-            
+
             // Initialize UI logic
             NPCUI.Init();
             NPCEquipmentUI.Init();
             NPCExamineUI.Init();
+            QuestUI.Init();
+            HallOfFallenUI.Init();
         }
 
         private void Update()
         {
             NPCUI.Update();
+        }
+
+        // ─── Faction-Sentiment Bridge ──────────────────────────────────────────────
+        /// <summary>
+        /// Synchronises NPCData.Affinity into GameCharacter.sentimentV2 so that our
+        /// relationship system has real in-game mechanical weight.
+        /// Called after every affinity change + save.
+        /// </summary>
+        public static void SyncAffinityToGame(string uuid, NPCData data)
+        {
+            try
+            {
+                if (SS.I?.uuidToGameEntityMap == null || data == null) return;
+                if (SS.I.uuidToGameEntityMap.TryGetValue(uuid, out var ent) && ent is GameCharacter gc)
+                    gc.sentimentV2 = (data.Affinity / 100f) * 15f; // -100→-15, 0→0, 100→+15
+            }
+            catch { /* Non-critical; GameCharacter may not be loaded yet */ }
         }
 
         public static void RunAutonomyTest(GameplayManager manager)
@@ -190,6 +209,8 @@ namespace AIROG_NPCExpansion
             {
                 string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
                 NPCData.SaveSessionLore(saveDir);
+                QuestManager.SaveQuests();
+                NPCDeathTracker.SaveMemorial();
             }
         }
 
@@ -201,7 +222,12 @@ namespace AIROG_NPCExpansion
             {
                 string saveDir = Path.Combine(SS.I.saveTopLvlDir, saveSubDir);
                 NPCData.LoadSessionLore(saveDir);
+                QuestManager.LoadQuests(saveDir);
                 NPCUI.RefreshAll();
+
+                // Sync all loaded affinities into game sentiment values
+                foreach (var kvp in NPCData.LoreCache)
+                    SyncAffinityToGame(kvp.Key, kvp.Value);
             }
         }
 
@@ -217,6 +243,7 @@ namespace AIROG_NPCExpansion
 
                 data.ChangeAffinity(3, $"Sold {item.GetPrettyName()} to them.");
                 NPCData.Save(npc.uuid, data);
+                SyncAffinityToGame(npc.uuid, data);
             }
         }
 
@@ -232,22 +259,49 @@ namespace AIROG_NPCExpansion
                 if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
 
                 var interType = interactionInfo.interacterInfo.interacterType;
-                
+                int affinityDelta = 0;
+
                 if (interType == InteracterInfo.InteracterType.OFFER_ITEM)
                 {
                     var item = interactionInfo.interacterInfo.item;
-                    data.ChangeAffinity(10, $"Received {item?.GetPrettyName() ?? "an item"} as a gift.");
+                    affinityDelta = 10;
+                    data.ChangeAffinity(affinityDelta, $"Received {item?.GetPrettyName() ?? "an item"} as a gift.");
                 }
                 else if (interType == InteracterInfo.InteracterType.TXT_INPUT || interType == InteracterInfo.InteracterType.INTERACT)
                 {
-                    data.ChangeAffinity(1, "Spent time talking to them.");
+                    affinityDelta = 1;
+                    data.ChangeAffinity(affinityDelta, "Spent time talking to them.");
                 }
                 else if (interType == InteracterInfo.InteracterType.ATTACK_WITH_ITEM || interType == InteracterInfo.InteracterType.ABILITY)
                 {
-                    data.ChangeAffinity(-10, $"Was attacked by the player with {interactionInfo.interacterInfo.item?.GetPrettyName() ?? "something"}.");
+                    affinityDelta = -10;
+                    data.ChangeAffinity(affinityDelta, $"Was attacked by the player with {interactionInfo.interacterInfo.item?.GetPrettyName() ?? "something"}.");
                 }
 
                 NPCData.Save(npc.uuid, data);
+                SyncAffinityToGame(npc.uuid, data);
+
+                // Social Ripple: cascade the affinity change to bystanders who care about this NPC
+                if (affinityDelta != 0)
+                {
+                    var manager = GameObject.FindObjectOfType<GameplayManager>();
+                    if (manager != null)
+                        SocialRippleSystem.Process(npc.uuid, npc.GetPrettyName(), affinityDelta, manager);
+                }
+
+                // Death Detection: if the NPC just died (corpseState changed to non-NONE)
+                if (npc.corpseState != GameCharacter.CorpseState.NONE && !data.IsDeceased)
+                {
+                    var manager = GameObject.FindObjectOfType<GameplayManager>();
+                    if (manager != null)
+                    {
+                        string killerName = interType == InteracterInfo.InteracterType.ATTACK_WITH_ITEM ||
+                                            interType == InteracterInfo.InteracterType.ABILITY
+                            ? "the player"
+                            : "unknown causes";
+                        NPCDeathTracker.OnNpcDied(npc, killerName, ScenarioUpdater.GlobalTurn, manager, data);
+                    }
+                }
             }
         }
 
@@ -443,9 +497,67 @@ namespace AIROG_NPCExpansion
                 NPCExamineUI.OpenFor(npc, __instance);
                 return Task.CompletedTask;
             }));
+
+            // Quest action — only show if NPC has lore generated
+            var npcData = NPCData.Load(npc.uuid);
+            if (npcData != null && !string.IsNullOrEmpty(npcData.Personality))
+            {
+                __result.Add(new StrToAction("<color=#ffd700>Accept Quest</color>", async () =>
+                {
+                    await QuestManager.GenerateQuest(npc, npcData, __instance);
+                }));
+            }
+
+            // Quest log shortcut
+            __result.Add(new StrToAction("<color=#aaaaff>Quest Log</color>", () =>
+            {
+                QuestUI.Open(__instance);
+                return Task.CompletedTask;
+            }));
+
+            // Hall of the Fallen shortcut (if any NPC has died)
+            if (NPCData.LoreCache.Values.Any(d => d != null && d.IsDeceased))
+            {
+                __result.Add(new StrToAction("<color=#ff8888>Hall of Fallen</color>", () =>
+                {
+                    HallOfFallenUI.Open(__instance);
+                    return Task.CompletedTask;
+                }));
+            }
         }
 
         // REMOVED: Postfix_GetDetailsForPromptStr logic moved to AIROG_GenContext per architecture guidelines.
+
+        // ─── Quest Completion Observer ─────────────────────────────────────────────
+        // Observes story results (STORY_COMPLETER / UNIFIED) to auto-detect quest completion.
+        // Does NOT modify the result — read-only observation.
+        [HarmonyPatch(typeof(AIAsker), nameof(AIAsker.GenerateTxtNoTryStrStyle))]
+        [HarmonyPostfix]
+        public static void Postfix_StoryCompletionObserver(
+            System.Threading.Tasks.Task<string> __result,
+            AIAsker.ChatGptPromptType chatGptPromptType)
+        {
+            if (chatGptPromptType != AIAsker.ChatGptPromptType.STORY_COMPLETER &&
+                chatGptPromptType != AIAsker.ChatGptPromptType.UNIFIED) return;
+            if (!QuestManager.HasActiveQuests) return;
+            _ = ObserveStoryForQuests(__result);
+        }
+
+        private static async System.Threading.Tasks.Task ObserveStoryForQuests(
+            System.Threading.Tasks.Task<string> resultTask)
+        {
+            try
+            {
+                string text = await resultTask;
+                if (string.IsNullOrEmpty(text)) return;
+                var manager = GameObject.FindObjectOfType<GameplayManager>();
+                if (manager != null) _ = QuestManager.CheckCompletion(text, manager);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[NPCExpansion] Quest observer error: {ex.Message}");
+            }
+        }
 
 
         [HarmonyPatch(typeof(GameplayManager), "GetCharsForNpcConvoSelectorDropdown")]

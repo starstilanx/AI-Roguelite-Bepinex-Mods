@@ -54,6 +54,7 @@ namespace AIROG_Multiplayer.Network
         public string CharacterClass { get; set; }  // Class description
         public string CharacterBackground { get; set; } // Background/description
         public string Personality { get; set; }     // Personality traits, motivations, goals
+        public string CharacterAppearance { get; set; } // Physical appearance / description
         public long Health { get; set; }
         public long MaxHealth { get; set; }
         public int Level { get; set; }
