@@ -7,6 +7,7 @@ AIRL/
 
 # ── Game prompt templates (large, game-owned content) ────────────────
 AI Roguelite Prompts/
+ai-roguelite-config/
 
 # ── Large / external assets ──────────────────────────────────────────
 Music/
@@ -46,3 +47,5 @@ project.nuget.cache
 *.csproj.FileListAbsolute.txt
 *.sourcelink.json
 *.Up2Date
+
+dirs
