@@ -200,17 +200,43 @@ namespace AIROG_HistoryTab
 
             Debug.Log("[HistoryTab] Generating history with prompt: " + (text.Length > 100 ? text.Substring(0, 100) + "..." : text));
 
-            string result = await AIAsker.GenerateTxtNoTryStrStyle(
-                AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER, 
-                text, 
-                AIAsker.ChatGptPostprocessingType.NONE, 
-                forceOfficialChatgpt: false, 
-                forceNsfwFriendlyIfAvail: false, 
-                null, 
-                background: false, 
-                forceEventCheckModel: true, 
-                AIAsker.ModelOverrideMode.GOOD_FOR_CORRECTNESS, 
-                isForLorebuilding: false); // Set to false to avoid Lorebook interference
+            string result = "Error: Failed to generate";
+            try
+            {
+                var method = typeof(AIAsker).GetMethod("GenerateTxtNoTryStrStyle", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (method != null)
+                {
+                    var parameters = method.GetParameters();
+                    object[] args = new object[parameters.Length];
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        args[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : Type.Missing;
+                    }
+                    
+                    args[0] = AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER;
+                    if (args.Length > 1) args[1] = text;
+                    if (args.Length > 2) args[2] = AIAsker.ChatGptPostprocessingType.NONE;
+                    if (args.Length > 3) args[3] = false; // forceOfficialChatgpt
+                    if (args.Length > 4) args[4] = false; // forceNsfwFriendlyIfAvail
+                    if (args.Length > 5) args[5] = null;  // extraDisallowedTokens
+                    if (args.Length > 6) args[6] = false; // background
+                    if (args.Length > 7) args[7] = true;  // forceEventCheckModel
+                    if (args.Length > 8) args[8] = AIAsker.ModelOverrideMode.GOOD_FOR_CORRECTNESS;
+                    if (args.Length > 9) args[9] = false; // isForLorebuilding
+
+                    var task = (System.Threading.Tasks.Task<string>)method.Invoke(null, args);
+                    result = await task;
+                }
+                else
+                {
+                    Debug.LogError("[HistoryTab] GenerateTxtNoTryStrStyle method not found via reflection!");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[HistoryTab] Reflection call failed: {ex}");
+                result = "Error: " + ex.Message;
+            }
 
             Debug.Log("[HistoryTab] Generation result: " + (string.IsNullOrEmpty(result) ? "NULL/EMPTY" : (result.Length > 50 ? result.Substring(0, 50) + "..." : result)));
             return result;

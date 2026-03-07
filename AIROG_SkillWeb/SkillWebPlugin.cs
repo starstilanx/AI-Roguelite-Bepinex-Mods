@@ -2,7 +2,9 @@ using BepInEx;
 using HarmonyLib;
 using UnityEngine;
 using System;
+using System.Linq;
 using System.IO;
+using AIROG_GenContext;
 
 namespace AIROG_SkillWeb
 {
@@ -174,6 +176,69 @@ namespace AIROG_SkillWeb
                     SkillWebPlugin.Instance.LoadSaveData();
                 SkillWebUI.Open(ep.manager, SkillWebPlugin.Instance.Data);
             });
+        }
+
+        // ── Action Affix Injection ──────────────────────────────────────────────
+
+        [HarmonyPatch(typeof(AIAsker), "GetGameEventResultForStoryInteraction")]
+        [HarmonyPrefix]
+        public static void GetGameEventResultForStoryInteraction_Prefix(InteractionInfo interactionInfo, ref string thisTryStr)
+        {
+            var data = SkillWebPlugin.Instance.Data;
+            if (data == null || data.activeAffixes == null || data.activeAffixes.Count == 0) return;
+
+            // Do not inject traits if the action is purely conversational.
+            if (interactionInfo?.interacterInfo != null)
+            {
+                var type = interactionInfo.interacterInfo.interacterType;
+                if (type == InteracterInfo.InteracterType.CONVERSATION ||
+                    type == InteracterInfo.InteracterType.STARTING_PLOT_HOOK ||
+                    type == InteracterInfo.InteracterType.NEXT_PLOT_HOOK ||
+                    type == InteracterInfo.InteracterType.NON_QUEST_PLOT_HOOK ||
+                    type == InteracterInfo.InteracterType.Q5_NUDGE)
+                {
+                    return; // Skip injection for dialogue/plot hooks
+                }
+            }
+
+            // Check config from GenContext
+            bool useStatusEffectMethod = ContextManager.GetGlobalSetting("AffixAsStatusEffect");
+
+            if (!useStatusEffectMethod && !string.IsNullOrWhiteSpace(thisTryStr))
+            {
+                string traits = string.Join(", ", data.activeAffixes);
+                thisTryStr += $" [Channeling skill traits: {traits}]";
+            }
+        }
+
+        [HarmonyPatch(typeof(PcGameEntity), "GetPlayerStatusStrToAppendNoSpace")]
+        [HarmonyPostfix]
+        public static void PcGameEntity_GetPlayerStatusStrToAppendNoSpace_Postfix(ref string __result)
+        {
+            var data = SkillWebPlugin.Instance.Data;
+            if (data == null || data.activeAffixes == null || data.activeAffixes.Count == 0) return;
+
+            // Only inject here if configured to do so
+            bool useStatusEffectMethod = ContextManager.GetGlobalSetting("AffixAsStatusEffect");
+            if (!useStatusEffectMethod) return;
+
+            string traits = string.Join(", ", data.activeAffixes);
+            string affixStatus = $"Skill Web Stance: {traits}";
+
+            if (string.IsNullOrWhiteSpace(__result))
+            {
+                __result = $" Active conditions affecting you: {affixStatus}.";
+            }
+            else
+            {
+                // Result looks like: " Active conditions affecting you: Bleeding - 5m - [emj]; Exhausted - 5m - [emj]."
+                // Trim trailing period if it exists
+                if (__result.EndsWith("."))
+                {
+                    __result = __result.Substring(0, __result.Length - 1);
+                }
+                __result += $"; {affixStatus}.";
+            }
         }
     }
 }

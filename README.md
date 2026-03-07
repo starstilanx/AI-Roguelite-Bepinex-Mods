@@ -1,49 +1,77 @@
-# AI Roguelite Mods Collection
+# 💠 AI Roguelite: Ultra Expansion Collection
 
-This repository contains a collection of modifications and expansions for AI Roguelite. These plugins enhance various aspects of the game, from improving AI integration to adding entirely new gameplay mechanics.
+Welcome to the definitive collection of modifications for **AI Roguelite**. This repository houses a suite of advanced plugins designed to push the boundaries of AI-driven gaming—from seamless multiplayer co-op to deep, persistent world simulations.
 
----
-
-## 🎙️ Audio & TTS
-
-*   **Deepgram TTS** (`AIROG_DeepgramTTS`): Replaces the default TTS with high-quality Deepgram voices. Maps in-game speaker types (Player, NPC, Monster) to specific AI voices. Compatible with Sapphire.
-*   **Gemini TTS** (`AIROG_GeminiTTS`): Replaces the default TTS with Google Gemini voices. Maps in-game speaker types to specific AI voices. Compatible with Sapphire.
-*   **SAPI5 TTS** (`AIROG_Sapi5`): Allows the game to utilize local Windows SAPI5 text-to-speech voices for offline or customized voice generation.
-*   **Music Expansion** (`AIROG_MusicExpansion`): Allows users to place `.mp3` or `.wav` files into specific folders to automatically shuffle them into the game's ambient and combat playlists. Compatible with Sapphire.
+> [!IMPORTANT]
+> **Developer Guide:** If you are an AI assistant or developer looking to contribute or modify these plugins, please refer to [MODDING_LLM.md](file:///d:/Projects/AI%20Roguelite/AI%20Roguelite%20Decompilation/MODDING_LLM.md) for architectural overviews and coding patterns.
 
 ---
 
-## 🎨 Visuals & UI
+## 🏆 Flagship Expansions
 
-*   **Font Modifiers** (`AIROG_FontModifierMain`, `AIROG_FontSelection`): Handles the complex task of replacing fonts in Unity's TextMeshPro system. Allows real-time font switching via an in-game dropdown. Compatible with Sapphire.
-*   **Nano Banana** (`AIROG_NanoBanana`): Bypasses default image generation to use Google's Gemini Imagen models. Offers specific features like automatic background removal for characters. Compatible with Sapphire.
-*   **OpenAI Image** (`AIROG_OpenAIImage`): A plugin for inputting OpenAI-compatible API keys to use OpenAI's image generation models within the game.
-*   **Stable Horde Detector** (`AIROG_StableHordeDetector`): Integrates with or detects Stable Horde deployments for community-driven distributed image generation.
+The following mods represent the most significant transformations to the AI Roguelite experience.
 
----
+### ⚔️ Co-op Multiplayer (`AIROG_Multiplayer`)
+**The ultimate way to play.** Turns AI Roguelite into a shared tabletop-style RPG. One player hosts, and others join from the main menu.
+- **Unified Narrative:** The AI responds to *all* players simultaneously, weaving their actions into a single story response.
+- **Real-time Sync:** Shared story logs, party health tracking, and instant world updates.
+- **Zero Configuration:** Clients only need the plugin—no save data required to join.
 
-## ⚔️ Gameplay Mechanics
+### 🎭 NPC Expansion: Living World (`AIROG_NPCExpansion`)
+**They were never just set dressing.** This mod overhauls every NPC in the game with deep autonomy and memory.
+- **Social Ripple Effects:** NPCs remember your actions, form gossip networks, and react to how you treat their friends or enemies.
+- **Nemesis System:** Characters who defeat you are promoted, gaining unique titles and scaling stats for persistent threats.
+- **Memory Synthesis:** NPCs distill story turns into concrete memories, affecting their future dialogue and behavior.
+- **Quest Engine:** Fully AI-generated quests derived from an NPC's unique personality and local world context.
 
-*   **NPC Expansion** (`AIROG_NPCExpansion`): A highly complex plugin that makes NPCs "real." They gain their own agendas, inventories, equipment, and take simultaneous turns with the player. *Note: Extremely token-heavy; may not be viable on Sapphire.*
-*   **Skill Web** (`AIROG_SkillWeb`): Adds a procedural, massive tree of upgrades that players navigate upon leveling up. Offers combat stats and narrative flair. Compatible with Sapphire.
-*   **Settlement** (`AIROG_Settlement`): Transforms the game into a management sim. Players can found towns, build structures, and manage resources with AI-supported events. Compatible with Sapphire.
-*   **Multiplayer** (`AIROG_Multiplayer`): Introduces multiplayer functionality, allowing clients to connect and share the AI Roguelite experience with synchronized story turns and entities.
-
----
-
-## 🌍 World & Lore
-
-*   **World Expansion** (`AIROG_WorldExpansion`): Introduces a background tick system. The world's economy fluctuates, and events (wars, disasters) happen and are logged in the journal even if the player stands still. Compatible with Sapphire.
-*   **History Tab** (`AIROG_HistoryTab`): Solves "AI amnesia" by compiling a persistent history of world events injected into prompts, ensuring the AI remembers the journey. *Note: Heavy on token counts; needs revision.*
-*   **Preset Exporter** (`AIROG_PresetExporter`): A streamlined utility for scenario creators to share their "world rules" with others. Works across all modes.
+### 🕸️ Skill Web (`AIROG_SkillWeb`)
+**Infinite growth, procedurally generated.** Replaces static stats with a massive, AI-generated upgrade tree.
+- **Narrative Traits:** Unlock "Action Affixes" like *Armor Piercing* or *Stun Chance* that the AI incorporates into combat descriptions.
+- **Node Generation:** Every node has AI-generated lore and icons that fit your specific character's journey.
 
 ---
 
-## ⚙️ Utilities & Fixes
+## 🌎 World & Simulation
 
-*   **Loop Be Gone** (`AIROG_LoopBeGone`): A vital utility for long-form play that uses N-grams and Levenshtein distance to detect and prevent AI repetition, preserving immersion.
-*   **Token Modifiers** (`AIROG_TokenModifierPlugin`): Allows advanced control over how much the AI talks by modifying token limits. Higher limits yield detailed descriptions but increase API costs. *Incompatible with Sapphire.*
-*   **Token Count** (`AIROG_TokenCount`): An underlying utility associated with token management and calculation.
-*   **Gen Context** (`AIROG_GenContext`): Allows users to disable context truncation, meaning they can bypass standard context limits for massive, unrestricted prompt generation.
-*   **OpenAI5** (`AIROG_OpenAI5`): Provides compatibility layers or enhancements for the OpenAI API integration.
-*   **Random.org** (`AIROG_RandomOrg`): Replaces standard procedural randomness with true randomness generated via the Random.org API for genuinely unpredictable results.
+| Mod | Description | Sapphire Ready? |
+| :--- | :--- | :---: |
+| **World Expansion** | Adds a background tick system. Wars, disasters, and economic shifts happen even while you're idle. | ✅ |
+| **Settlement** | Transform the game into a town-builder. Found settlements, manage structures, and navigate faction politics. | ✅ |
+| **History Tab** | Solve "AI amnesia" with a persistent repository of past events injected into current prompts. | ⚠️ (High Tokens) |
+| **Preset Exporter** | A utility for world-builders to export their custom rules and scenarios as shareable presets. | ✅ |
+
+---
+
+## 🎙️ Sensory & UI Enhancements
+
+### 🔊 Text-To-Speech (TTS)
+Enhance immersion by giving different characters unique voices.
+- **Deepgram / Gemini TTS:** High-fidelity cloud-based voices using the latest AI models.
+- **SAPI5 TTS:** Utilizes your local Windows voices for a latency-free, offline experience.
+
+### 🎨 Visual & Interface
+- **Nano Banana:** Bypasses default image loops to use **Google Gemini Imagen**. Features automatic background removal for characters.
+- **Font Selection:** A complete overhaul of the UI font system, allowing for custom typography across all game menus.
+- **Music Expansion:** Dynamic ambient and combat playlists that shuffle based on world metadata.
+
+---
+
+## 🛠️ Utilities & Core Logic
+
+- **Loop Be Gone:** Uses N-grams and Levenshtein distance to detect and break AI "dialogue loops," preserving immersion during long sessions.
+- **Gen Context:** A powerful tool for power users to toggle context truncation and manage how much history the AI "sees."
+- **Token Manager:** Real-time tracking and fine-tuning of API token usage to balance narrative depth with cost.
+- **Random.org:** Replaces pseudorandom hardware generators with **true randomness** sourced from atmospheric noise.
+
+---
+
+## 🚀 Installation
+
+1. Ensure [BepInEx 5.x](https://github.com/BepInEx/BepInEx) is installed in your AI Roguelite directory.
+2. Download any mod folder (e.g., `AIROG_SkillWeb`).
+3. Copy the compiled `.dll` (and any associated `StreamingAssets`) into `BepInEx/plugins/`.
+4. Launch the game and enjoy the expanded universe!
+
+---
+
+*Built with ❤️ for the AI Roguelite community.*

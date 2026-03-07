@@ -34,6 +34,7 @@ namespace AIROG_SkillWeb
         private GameObject      _actionPanel;
         private TextMeshProUGUI _actionTitle;
         private TextMeshProUGUI _actionDesc;
+        private RectTransform   _traitsContainer;
         private Button          _unlockBtn;
         private TextMeshProUGUI _unlockBtnLabel;
         private Button          _upgradeBtn;
@@ -43,6 +44,11 @@ namespace AIROG_SkillWeb
         private GameObject          _disciplinePanel;
         private TMP_InputField      _disciplineNameInput;
         private TMP_InputField      _disciplineThemeInput;
+
+        // Left stat panel
+        private GameObject      _statPanel;
+        private TextMeshProUGUI _statTitle;
+        private TextMeshProUGUI _statDesc;
 
         // Tooltip
         private GameObject      _tooltip;
@@ -118,7 +124,7 @@ namespace AIROG_SkillWeb
             vp.transform.SetParent(_window.transform, false);
             vp.GetComponent<Image>().color = new Color(0, 0, 0, 0.01f);
             var vpRect = vp.GetComponent<RectTransform>();
-            vpRect.anchorMin = new Vector2(0f,    0.06f);
+            vpRect.anchorMin = new Vector2(0.23f,    0.06f);
             vpRect.anchorMax = new Vector2(0.77f, 0.92f);
             vpRect.offsetMin = vpRect.offsetMax = Vector2.zero;
 
@@ -153,6 +159,9 @@ namespace AIROG_SkillWeb
 
             // Right side panel (77% – 100%) -------------------------------------
             BuildActionPanel();
+
+            // Left stat panel (0% – 23%) ----------------------------------------
+            BuildStatPanel();
 
             // Tooltip canvas (always on top) ------------------------------------
             BuildTooltipCanvas();
@@ -252,7 +261,13 @@ namespace AIROG_SkillWeb
             _actionDesc = NewText("Desc", _actionPanel.transform, "", 13, TextAlignmentOptions.TopLeft);
             _actionDesc.color = new Color(0.85f, 0.85f, 0.85f);
             _actionDesc.enableWordWrapping = true;
-            AnchorText(_actionDesc.rectTransform, new Vector2(0, 0.30f), new Vector2(1, 0.78f), new Vector2(8, 0), new Vector2(-8, 0));
+            AnchorText(_actionDesc.rectTransform, new Vector2(0, 0.55f), new Vector2(1, 0.78f), new Vector2(8, 0), new Vector2(-8, 0));
+
+            // Traits Container
+            var traitsObj = new GameObject("TraitsContainer", typeof(RectTransform));
+            traitsObj.transform.SetParent(_actionPanel.transform, false);
+            _traitsContainer = traitsObj.GetComponent<RectTransform>();
+            AnchorText(_traitsContainer, new Vector2(0, 0.30f), new Vector2(1, 0.55f), new Vector2(8, 0), new Vector2(-8, 0));
 
             // Unlock button
             _unlockBtn = BuildPanelButton("Unlock", _actionPanel.transform,
@@ -269,6 +284,50 @@ namespace AIROG_SkillWeb
             _upgradeBtn.onClick.AddListener(TryUpgradeSelected);
 
             _actionPanel.SetActive(false);
+        }
+
+        void BuildStatPanel()
+        {
+            _statPanel = NewImg("StatPanel", _window.transform, new Color(0.06f, 0.03f, 0.01f, 0.97f)).gameObject;
+            var spRect = _statPanel.GetComponent<RectTransform>();
+            spRect.anchorMin = new Vector2(0f,    0.06f);
+            spRect.anchorMax = new Vector2(0.23f, 0.92f);
+            spRect.offsetMin = spRect.offsetMax = Vector2.zero;
+
+            // Panel title
+            _statTitle = NewText("Title", _statPanel.transform, "Player Stats", 17, TextAlignmentOptions.Center);
+            _statTitle.color = new Color(1f, 0.85f, 0.4f);
+            AnchorText(_statTitle.rectTransform, new Vector2(0, 0.9f), new Vector2(1, 1), new Vector2(6, 0), new Vector2(-6, 0));
+
+            // Separator
+            var sep = NewImg("Sep", _statPanel.transform, new Color(1f, 0.85f, 0.4f, 0.3f));
+            var sRect = sep.GetComponent<RectTransform>();
+            sRect.anchorMin = new Vector2(0.05f, 0.88f);
+            sRect.anchorMax = new Vector2(0.95f, 0.885f);
+            sRect.offsetMin = sRect.offsetMax = Vector2.zero;
+
+            // Stats content
+            _statDesc = NewText("Desc", _statPanel.transform, "", 14, TextAlignmentOptions.TopLeft);
+            _statDesc.color = new Color(0.85f, 0.85f, 0.85f);
+            _statDesc.enableWordWrapping = true;
+            AnchorText(_statDesc.rectTransform, new Vector2(0, 0f), new Vector2(1, 0.86f), new Vector2(12, 0), new Vector2(-12, 0));
+        }
+
+        void RefreshStatPanel()
+        {
+            if (_statDesc == null || _data == null || _data.CachedStats == null) return;
+            string text = "";
+            foreach (var kvp in _data.CachedStats)
+            {
+                if (kvp.Value != 0)
+                {
+                    text += $"<color=#88FF88>{kvp.Key}: +{kvp.Value:F0}</color>\n";
+                }
+            }
+            if (string.IsNullOrEmpty(text))
+                text = "<color=#888888>No stats acquired yet.</color>";
+            
+            _statDesc.text = text;
         }
 
         void BuildTooltipCanvas()
@@ -386,10 +445,51 @@ namespace AIROG_SkillWeb
             float mult = node.isUnlocked ? node.tier : 1f;
             foreach (var kvp in node.statModifiers)
                 stats += "\n<color=#88FF88>+" + (kvp.Value * mult).ToString("F0") + " " + kvp.Key + "</color>";
-            string traits = "";
+            _actionDesc.text = node.description + stats;
+
+            // Traits toggles
+            foreach (Transform child in _traitsContainer)
+                Destroy(child.gameObject);
+
+            float traitY = 0f;
             foreach (var t in node.narrativeTraits)
-                traits += "\n<color=#FFAA44>✧ " + t + "</color>";
-            _actionDesc.text = node.description + stats + traits;
+            {
+                var traitBtnObj = NewButton("TraitBtn", _traitsContainer, new Color(0, 0, 0, 0));
+                var tr = traitBtnObj.GetComponent<RectTransform>();
+                tr.anchorMin = new Vector2(0, 1);
+                tr.anchorMax = new Vector2(1, 1);
+                tr.offsetMin = new Vector2(0, traitY - 24);
+                tr.offsetMax = new Vector2(0, traitY);
+                
+                var tmp = traitBtnObj.GetComponentInChildren<TextMeshProUGUI>();
+                tmp.alignment = TextAlignmentOptions.Left;
+                tmp.fontSize = 13;
+                bool isActive = _data.activeAffixes != null && _data.activeAffixes.Contains(t);
+                string box = isActive ? "[X]" : "[ ]";
+                tmp.text = $"<color=#FFAA44>{box} {t}</color>";
+
+                var btn = traitBtnObj.GetComponent<Button>();
+                string capturedTrait = t;
+                btn.onClick.AddListener(() =>
+                {
+                    if (node.isUnlocked)
+                    {
+                        if (_data.activeAffixes == null) _data.activeAffixes = new HashSet<string>();
+                        if (_data.activeAffixes.Contains(capturedTrait))
+                            _data.activeAffixes.Remove(capturedTrait);
+                        else
+                            _data.activeAffixes.Add(capturedTrait);
+                        SkillWebPlugin.Instance.SaveData();
+                        RefreshActionPanel();
+                    }
+                    else
+                    {
+                        SetStatus("Unlock this discipline to channel its traits.");
+                    }
+                });
+                
+                traitY -= 26f;
+            }
 
             // Unlock button
             bool canUnlock  = _data.CanUnlock(node);
@@ -475,6 +575,8 @@ namespace AIROG_SkillWeb
             if (_levelText  != null && _manager?.playerCharacter != null)
                 _levelText.text = "Level " + _manager.playerCharacter.playerLevel +
                                   "  |  Nodes: " + _data.totalNodesUnlocked;
+
+            RefreshStatPanel();
 
             // Clear graph
             foreach (Transform c in _nodeContainer) Destroy(c.gameObject);

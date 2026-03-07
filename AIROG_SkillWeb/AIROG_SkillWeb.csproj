@@ -63,6 +63,10 @@
       <Private>False</Private>
     </Reference>
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="AIROG_GenContext">
+      <HintPath>..\AIROG_GenContext\bin\Debug\net472\AIROG_GenContext.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

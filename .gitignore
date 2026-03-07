@@ -7,14 +7,15 @@ AIRL/
 
 # ── Game prompt templates (large, game-owned content) ────────────────
 AI Roguelite Prompts/
-ai-roguelite-config/
 
 # ── Large / external assets ──────────────────────────────────────────
 Music/
 Mirror-master/
 com.unity.netcode.gameobjects-*/
+ai-roguelite-config/
 
-# ── Log & temp files ─────────────────────────────────────────────────
+# ── Log / internal artifacts ─────────────────────────────────────────
+dirs
 *.log
 *.pdb
 build_*.txt
@@ -48,4 +49,3 @@ project.nuget.cache
 *.sourcelink.json
 *.Up2Date
 
-dirs

@@ -73,6 +73,9 @@ namespace AIROG_SkillWeb
         public int   totalNodesUnlocked = 0;
         public int   lastKnownLevel = 1;
 
+        /// <summary>Active narrative traits toggled on by the player.</summary>
+        public HashSet<string> activeAffixes = new HashSet<string>();
+
         /// <summary>Accumulated stat bonuses from all unlocked nodes. Not serialized — rebuilt on load.</summary>
         [JsonIgnore]
         public Dictionary<SS.PlayerAttribute, float> CachedStats = new Dictionary<SS.PlayerAttribute, float>();

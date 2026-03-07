@@ -26,6 +26,7 @@ namespace AIROG_GenContext
             _providers.Add(new ContextProviders.HistoryProvider());
             _providers.Add(new ContextProviders.WorldContextProvider());
             _providers.Add(new ContextProviders.SettlementProvider());
+            _providers.Add(new ContextProviders.SkillWebProvider());
             
             // Sort by priority (Higher first)
             _providers.Sort((a, b) => b.Priority.CompareTo(a.Priority));
@@ -38,6 +39,7 @@ namespace AIROG_GenContext
             if (!_globalSettings.ContainsKey("DisableTruncation")) _globalSettings["DisableTruncation"] = false;
             if (!_globalSettings.ContainsKey("DMNotes")) _globalSettings["DMNotes"] = true;
             if (!_globalSettings.ContainsKey("RRCompat")) _globalSettings["RRCompat"] = false;
+            if (!_globalSettings.ContainsKey("AffixAsStatusEffect")) _globalSettings["AffixAsStatusEffect"] = false;
         }
 
         public static List<IContextProvider> GetProviders() => _providers;

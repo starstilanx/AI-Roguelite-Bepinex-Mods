@@ -229,6 +229,16 @@ namespace AIROG_GenContext
                     argList.Add(Activator.CreateInstance(toggleType, new object[] { "RR Compat Mode (Reactive Realms + UNIFIED)", isEnabled, onToggle }));
                 }
 
+                // Skill Web
+                {
+                    bool isEnabled = ContextManager.GetGlobalSetting("AffixAsStatusEffect");
+                    Action<bool> onToggle = (val) => {
+                        ContextManager.SetGlobalSetting("AffixAsStatusEffect", val);
+                        Debug.Log($"[GenContext] Toggled AffixAsStatusEffect to {val}");
+                    };
+                    argList.Add(Activator.CreateInstance(toggleType, new object[] { "Skill Web: Affixes as Status Effects", isEnabled, onToggle }));
+                }
+
                 // Find PresentSelf by name (handles any number of parameters)
                 MethodInfo presentMethod = null;
                 foreach (var m in modalType.GetMethods())
