@@ -97,23 +97,18 @@ namespace AIROG_NPCExpansion
         {
             if (__instance != null)
             {
-                NPCUI.TryInjectBottomBar(__instance);
-
                 // Scenario Update Hook
                 GameplayManager.TurnHappenedEvent -= ScenarioUpdater.OnTurnHappened;
                 GameplayManager.TurnHappenedEvent += ScenarioUpdater.OnTurnHappened;
             }
         }
-        
-        // Also ensure we inject if dropdown functionality is used/updated
+
         [HarmonyPatch(typeof(GameplayManager), "UpdateNpcConvoSelectorDropdown")]
         [HarmonyPostfix]
         public static void Postfix_UpdateNpcConvoSelectorDropdown(GameplayManager __instance)
         {
-             if (__instance != null)
-             {
-                 NPCUI.TryInjectBottomBar(__instance);
-             }
+            if (__instance != null)
+                NPCUI.TryUpdateTextForBottomBar(__instance);
         }
 
         // Hook into dropdown change to maybe update text if needed
@@ -486,14 +481,27 @@ namespace AIROG_NPCExpansion
         {
             if (npc == null || npc.corpseState != GameCharacter.CorpseState.NONE) return;
 
-            // Examine is available for all characters, including enemies
+            var npcData = NPCData.Load(npc.uuid);
+            bool hasLore = npcData != null && !string.IsNullOrEmpty(npcData.Personality);
+
+            // Examine — available for all characters including enemies
             __result.Add(new StrToAction("<color=#ffff00>Examine</color>", () =>
             {
                 NPCExamineUI.OpenFor(npc, __instance);
                 return Task.CompletedTask;
             }));
 
-            // Gear, quests, and hall only apply to friendly NPCs
+            // Generate / Edit Profile — available for all characters including enemies
+            string profileLabel = hasLore ? "<color=#ff9900>Edit Profile</color>" : "<color=#ff9900>Generate Profile</color>";
+            __result.Add(new StrToAction(profileLabel, async () =>
+            {
+                if (hasLore)
+                    NPCUI.ShowLoreEditor(npc, __instance);
+                else
+                    await NPCGenerator.GenerateLore(npc, __instance.GetContextForQuickActions());
+            }));
+
+            // Everything below is friendly-NPC-only
             if (npc.IsEnemyType()) return;
 
             __result.Add(new StrToAction("<color=#00ccff>Inventory & Gear</color>", () =>
@@ -502,8 +510,6 @@ namespace AIROG_NPCExpansion
                 return Task.CompletedTask;
             }));
 
-            // Quest action — only show if NPC has lore generated
-            var npcData = NPCData.Load(npc.uuid);
             if (npcData != null && !string.IsNullOrEmpty(npcData.Personality))
             {
                 __result.Add(new StrToAction("<color=#ffd700>Accept Quest</color>", async () =>
@@ -512,14 +518,12 @@ namespace AIROG_NPCExpansion
                 }));
             }
 
-            // Quest log shortcut
             __result.Add(new StrToAction("<color=#aaaaff>Quest Log</color>", () =>
             {
                 QuestUI.Open(__instance);
                 return Task.CompletedTask;
             }));
 
-            // Hall of the Fallen shortcut (if any NPC has died)
             if (NPCData.LoreCache.Values.Any(d => d != null && d.IsDeceased))
             {
                 __result.Add(new StrToAction("<color=#ff8888>Hall of Fallen</color>", () =>
