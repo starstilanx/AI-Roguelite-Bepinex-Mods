@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
+using AIROG_Multiplayer.Inventory;
 using AIROG_Multiplayer.Network;
 using TMPro;
 using UnityEngine;
@@ -29,6 +30,7 @@ namespace AIROG_Multiplayer
         private TMP_InputField _chatInput;
         private TMP_Text _toastText;
         private float _toastHideTime;
+        private MPInventoryUI _inventoryUI;
 
         private readonly List<string> _chatLines = new List<string>();
         private const int MAX_CHAT_LINES = 40;
@@ -192,9 +194,10 @@ namespace AIROG_Multiplayer
             // Divider
             AddDivider(panel.transform);
 
-            // Chat toggle button + send chat button row
+            // Chat toggle button + inventory button + disconnect button row
             var chatBtnRow = MakeHRow(panel.transform, "ChatRow", 26f);
             MakeButton(chatBtnRow.transform, "ChatToggle", "💬 Chat", new Color(0.2f, 0.45f, 0.75f), () => ToggleChat());
+            MakeButton(chatBtnRow.transform, "InvToggle", "🎒 Inv", new Color(0.2f, 0.5f, 0.22f), () => ToggleInventory());
             MakeButton(chatBtnRow.transform, "Disconnect", "Disconnect", new Color(0.45f, 0.12f, 0.12f), () =>
             {
                 MultiplayerPlugin.StopClient();
@@ -278,6 +281,13 @@ namespace AIROG_Multiplayer
         {
             if (_chatPanel != null)
                 _chatPanel.SetActive(!_chatPanel.activeSelf);
+        }
+
+        private void ToggleInventory()
+        {
+            if (_inventoryUI == null)
+                _inventoryUI = MPInventoryUI.GetOrCreate(gameObject);
+            _inventoryUI.Toggle();
         }
 
         private void OnSendChat()

@@ -62,6 +62,9 @@ namespace AIROG_Multiplayer
         public event Action<WaitingForPartyPayload> OnWaitingForParty;
         public event Action<StoryImagePayload> OnStoryImageReceived;
 
+        // Inventory
+        public event Action<InventorySyncPayload> OnInventoryReceived;
+
         /// <summary>
         /// Attempts to connect to the host. Fires OnConnected or OnDisconnected on the main thread.
         /// </summary>
@@ -259,6 +262,11 @@ namespace AIROG_Multiplayer
                 case PacketType.ActionQueued:
                     MainThreadQueue.Enqueue(() =>
                         CoopStatusOverlay.Instance?.ShowActionQueued("✓ Action queued — waiting for host turn..."));
+                    break;
+
+                case PacketType.InventorySync:
+                    var invPayload = pkt.GetPayload<InventorySyncPayload>();
+                    MainThreadQueue.Enqueue(() => OnInventoryReceived?.Invoke(invPayload));
                     break;
 
                 case PacketType.Ping:

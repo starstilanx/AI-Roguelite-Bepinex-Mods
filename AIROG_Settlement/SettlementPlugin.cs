@@ -150,6 +150,7 @@ namespace AIROG_Settlement
                 TabContentObjects[i].SetActive(i == index);
 
             if (index == 1) RefreshBuildingsTab();
+            if (index == 3) RefreshTradeTab();
         }
 
         public bool IsSettlement(Place p)
@@ -364,6 +365,114 @@ namespace AIROG_Settlement
         //   Frame outer: x=305, y=124, w=405, h=323
         //   Frame inner: x=315, y=133, w=387, h=306
         // Right sidebar slots (RightSidebarItem helper): x=826, y=106+(i*45), w=164, h=42
+        public void RefreshTradeTab()
+        {
+            if (TabContentObjects.Count < 4 || TabContentObjects[3] == null) return;
+            Transform content = TabContentObjects[3].transform;
+
+            for (int i = content.childCount - 1; i >= 0; i--)
+                Destroy(content.GetChild(i).gameObject);
+
+            SettlementUIHelper.CreateUIElement("TradeBg", content, 305, 124, 405, 323, null,
+                new Color(0.06f, 0.06f, 0.10f, 0.88f));
+
+            GameObject headerObj = new GameObject("Header", typeof(RectTransform), typeof(TextMeshProUGUI));
+            headerObj.transform.SetParent(content, false);
+            var hTxt = headerObj.GetComponent<TextMeshProUGUI>();
+            hTxt.text = "Trade & Logistics";
+            hTxt.fontSize = 18;
+            hTxt.fontStyle = FontStyles.Bold;
+            hTxt.alignment = TextAlignmentOptions.Center;
+            hTxt.color = new Color(0.95f, 0.85f, 0.5f);
+            hTxt.outlineWidth = 0.15f;
+            hTxt.outlineColor = Color.black;
+            SettlementUIHelper.SetRect(headerObj.GetComponent<RectTransform>(), 305, 127, 405, 22);
+
+            var actions = new List<(string name, string desc, Func<bool> canAfford, Action execute)>
+            {
+                ("Deposit Gold", "Give 50 personal gold", new Func<bool>(() => SS.I.hackyManager.playerCharacter.pcGameEntity.numGold >= 50), new Action(() => {
+                    SS.I.hackyManager.playerCharacter.IncrGold(-50);
+                    CurrentSettlement.AddResource("Gold", 50);
+                })),
+                ("Withdraw Gold", "Take 50 gold", new Func<bool>(() => CurrentSettlement.Resources.TryGetValue("Gold", out int g) && g >= 50), new Action(() => {
+                    CurrentSettlement.Resources["Gold"] -= 50;
+                    SS.I.hackyManager.playerCharacter.IncrGold(50);
+                })),
+                ("Import Wood", "Buy 10 Wood for 20 Gold", new Func<bool>(() => CurrentSettlement.Resources.TryGetValue("Gold", out int g) && g >= 20), new Action(() => {
+                    CurrentSettlement.Resources["Gold"] -= 20;
+                    CurrentSettlement.AddResource("Wood", 10);
+                })),
+                ("Export Wood", "Sell 10 Wood for 10 Gold", new Func<bool>(() => CurrentSettlement.Resources.TryGetValue("Wood", out int w) && w >= 10), new Action(() => {
+                    CurrentSettlement.Resources["Wood"] -= 10;
+                    CurrentSettlement.AddResource("Gold", 10);
+                })),
+                ("Import Stone", "Buy 10 Stone for 30 Gold", new Func<bool>(() => CurrentSettlement.Resources.TryGetValue("Gold", out int g) && g >= 30), new Action(() => {
+                    CurrentSettlement.Resources["Gold"] -= 30;
+                    CurrentSettlement.AddResource("Stone", 10);
+                })),
+                ("Export Stone", "Sell 10 Stone for 15 Gold", new Func<bool>(() => CurrentSettlement.Resources.TryGetValue("Stone", out int s) && s >= 10), new Action(() => {
+                    CurrentSettlement.Resources["Stone"] -= 10;
+                    CurrentSettlement.AddResource("Gold", 15);
+                }))
+            };
+
+            for (int i = 0; i < actions.Count; i++)
+            {
+                var act = actions[i];
+                float rowY = 152f + i * 48f;
+                bool canAfford = act.canAfford();
+
+                Color bgColor = new Color(0.08f, 0.08f, 0.14f, 0.75f);
+                SettlementUIHelper.CreateUIElement($"Row_{i}", content, 309, rowY, 397, 44, null, bgColor);
+
+                GameObject nameObj = new GameObject($"Name_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
+                nameObj.transform.SetParent(content, false);
+                var nameTxt = nameObj.GetComponent<TextMeshProUGUI>();
+                nameTxt.text = act.name;
+                nameTxt.fontSize = 14;
+                nameTxt.fontStyle = FontStyles.Bold;
+                nameTxt.alignment = TextAlignmentOptions.Left;
+                nameTxt.color = Color.white;
+                SettlementUIHelper.SetRect(nameObj.GetComponent<RectTransform>(), 314, rowY + 4, 188, 20);
+
+                GameObject descObj = new GameObject($"Desc_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
+                descObj.transform.SetParent(content, false);
+                var descTxt = descObj.GetComponent<TextMeshProUGUI>();
+                descTxt.text = act.desc;
+                descTxt.fontSize = 11;
+                descTxt.alignment = TextAlignmentOptions.Left;
+                descTxt.color = new Color(0.72f, 0.72f, 0.72f);
+                SettlementUIHelper.SetRect(descObj.GetComponent<RectTransform>(), 314, rowY + 26, 188, 16);
+
+                Color btnColor = canAfford
+                    ? new Color(0.12f, 0.38f, 0.12f, 0.95f)
+                    : new Color(0.22f, 0.22f, 0.22f, 0.80f);
+                GameObject btnObj = SettlementUIHelper.CreateUIElement($"Btn_{i}", content,
+                    617, rowY + 8, 84, 28, null, btnColor);
+                var btn = btnObj.AddComponent<Button>();
+                btn.interactable = canAfford;
+
+                GameObject btnTxt = new GameObject("T", typeof(RectTransform), typeof(TextMeshProUGUI));
+                btnTxt.transform.SetParent(btnObj.transform, false);
+                var bTxt = btnTxt.GetComponent<TextMeshProUGUI>();
+                bTxt.text = act.name.Split(' ')[0]; // Deposit, Withdraw, Import...
+                bTxt.fontSize = 11;
+                bTxt.alignment = TextAlignmentOptions.Center;
+                bTxt.color = canAfford ? Color.white : new Color(0.55f, 0.55f, 0.55f);
+                var btr = btnTxt.GetComponent<RectTransform>();
+                btr.anchorMin = Vector2.zero; btr.anchorMax = Vector2.one;
+                btr.offsetMin = btr.offsetMax = Vector2.zero;
+
+                btn.onClick.AddListener(() =>
+                {
+                    act.execute();
+                    SaveSettlementData();
+                    RefreshTradeTab();
+                    UpdateOverviewUI();
+                });
+            }
+        }
+
         // -----------------------------------------------------------------------
 
         /// <summary>
@@ -508,23 +617,6 @@ namespace AIROG_Settlement
         }
     }
 
-    // FIX: 10 parameters — matches the actual BuildPromptString overload (isForUnifiedReq is param 10)
-    [HarmonyPatch(typeof(GameplayManager), "BuildPromptString", new Type[] {
-        typeof(bool), typeof(bool), typeof(InteractionInfo),
-        typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld),
-        typeof(List<Faction>), typeof(List<string>), typeof(bool)
-    })]
-    public static class Patch_GameplayManager_BuildPromptString
-    {
-        public static void Postfix(GameplayManager __instance, ref string __result, Place destinationPlace)
-        {
-            try {
-                Place target = destinationPlace ?? __instance.currentPlace;
-                if (target != null && SettlementPlugin.Instance != null && SettlementPlugin.Instance.IsSettlement(target))
-                    __result += SettlementPlugin.Instance.GetSettlementPromptContext(target);
-            } catch (Exception ex) { SettlementPlugin.Log.LogError("Error in BuildPromptString Postfix: " + ex); }
-        }
-    }
 
     [HarmonyPatch(typeof(MapLocation), "UpdateGraphicalInfo")]
     public static class Patch_MapLocation_UpdateGraphicalInfo

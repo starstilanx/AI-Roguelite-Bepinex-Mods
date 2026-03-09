@@ -7,6 +7,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+using AIROG_Multiplayer.Inventory;
 using AIROG_Multiplayer.Network;
 using AIROG_Multiplayer.Patches;
 using UnityEngine;
@@ -392,6 +393,9 @@ namespace AIROG_Multiplayer
             IsClientMode = false;
             SaveTopLvlDir = SS.I?.saveTopLvlDir ?? "";
 
+            // Initialize inventory database in the host's save directory
+            MPInventoryManager.Initialize(SaveTopLvlDir, SS.I?.saveSubDirAsArg ?? "save");
+
             try
             {
                 Server = new AIROGServer();
@@ -442,6 +446,9 @@ namespace AIROG_Multiplayer
                 ?? Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     "AppData", "LocalLow", "MaxLoh", "AI Roguelite", "save");
+
+            // Initialize inventory database in the client's save directory
+            MPInventoryManager.Initialize(SaveTopLvlDir, "mp_client");
 
             Client = new AIROGClient();
 
@@ -532,6 +539,21 @@ namespace AIROG_Multiplayer
             // Location updates are visible in the game UI — no overlay action needed
             Client.OnLocationUpdated += (_) => { };
 
+            // Inventory sync: update the local DB and refresh the UI panel
+            Client.OnInventoryReceived += (inv) =>
+            {
+                try
+                {
+                    MPInventoryManager.LoadFromJson(inv?.InventoryJson);
+                    MPInventoryManager.Save();
+                    MPInventoryUI.Instance?.Refresh();
+                }
+                catch (Exception ex)
+                {
+                    Instance?.Log.LogError($"[Client] OnInventoryReceived error: {ex.Message}");
+                }
+            };
+
             // Relay story turns into the game's own log view when in-game,
             // or into the chat panel when still on the main menu.
             Client.OnStoryTurnReceived += (entry) =>
@@ -588,6 +610,10 @@ namespace AIROG_Multiplayer
 
             // Send compressed save snapshot for the client to load
             SendSaveSnapshot(client, manager);
+
+            // Ensure this client has an inventory entry, then send the current database
+            MPInventoryManager.GetOrCreate(client.PlayerId, charName);
+            Server.SendInventoryTo(client, MPInventoryManager.SerializeToJson());
 
             Server.BroadcastChat("Server", $"{charName} has joined the session!", isSystem: true);
             SendPartyUpdate(manager);
@@ -664,6 +690,25 @@ namespace AIROG_Multiplayer
                 Level = 0,
                 CurrentLocation = manager?.currentPlace?.name ?? ""
             };
+        }
+
+        /// <summary>
+        /// Serializes the full MPInventoryDatabase and broadcasts it to all connected clients.
+        /// Safe to call from the main thread (e.g. from WriteSaveFilePatch.Postfix).
+        /// </summary>
+        public static void BroadcastInventory()
+        {
+            if (!IsHost || Server == null) return;
+            try
+            {
+                string json = MPInventoryManager.SerializeToJson();
+                Server.BroadcastInventory(json);
+                Instance?.Log.LogInfo($"[Host] BroadcastInventory: {json.Length} chars.");
+            }
+            catch (Exception ex)
+            {
+                Instance?.Log.LogError($"[Host] BroadcastInventory error: {ex.Message}");
+            }
         }
 
         public static void BroadcastLocation(string locationName, string locationDescription = "")

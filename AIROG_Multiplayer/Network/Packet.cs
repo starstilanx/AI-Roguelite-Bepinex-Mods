@@ -39,7 +39,10 @@ namespace AIROG_Multiplayer.Network
         Chat,       // Bidirectional: out-of-character chat message
         Ping,       // Keepalive ping
         Pong,       // Keepalive response
-        Disconnect  // Graceful disconnect notification
+        Disconnect,  // Graceful disconnect notification
+
+        // Inventory
+        InventorySync   // Host -> All Clients: full MPInventoryDatabase JSON
     }
 
     /// <summary>
@@ -250,6 +253,17 @@ namespace AIROG_Multiplayer.Network
     {
         public int ReadyCount { get; set; }
         public int TotalCount { get; set; }
+    }
+
+    /// <summary>
+    /// Carries the full MPInventoryDatabase as compact JSON.
+    /// Sent from host to all clients (or targeted on join) whenever inventory changes.
+    /// </summary>
+    [Serializable]
+    public class InventorySyncPayload
+    {
+        /// <summary>Compact JSON of MPInventoryDatabase.</summary>
+        public string InventoryJson { get; set; }
     }
 
     /// <summary>

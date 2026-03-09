@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using HarmonyLib;
+using AIROG_Multiplayer.Inventory;
 using AIROG_Multiplayer.Network;
 using UnityEngine;
 
@@ -509,6 +510,21 @@ namespace AIROG_Multiplayer.Patches
             catch (Exception ex)
             {
                 MultiplayerPlugin.Instance?.Log.LogError($"[Multiplayer] WriteSaveFilePatch.Postfix error: {ex.Message}");
+            }
+
+            // Sync host inventory from the game, persist, and broadcast to clients
+            try
+            {
+                if (!MultiplayerPlugin.IsHost) return;
+                var manager = SS.I?.hackyManager;
+                if (manager == null) return;
+                MPInventoryManager.SyncHostFromGame(manager);
+                MPInventoryManager.Save();
+                MultiplayerPlugin.BroadcastInventory();
+            }
+            catch (Exception ex)
+            {
+                MultiplayerPlugin.Instance?.Log.LogError($"[Multiplayer] WriteSaveFilePatch inventory sync error: {ex.Message}");
             }
         }
     }

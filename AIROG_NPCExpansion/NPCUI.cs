@@ -321,8 +321,8 @@ namespace AIROG_NPCExpansion
                 rect.anchorMin = new Vector2(0f, 0f);
                 rect.anchorMax = new Vector2(0f, 0f);
                 rect.pivot = new Vector2(0f, 1f); // Top-left pivot
-                rect.anchoredPosition = new Vector2(2f, -2f); // 2px inset from bottom-left corner of dropdown
-                rect.sizeDelta = new Vector2(52, 19); // Compact; matches stone-tablet aspect ratio
+                rect.anchoredPosition = new Vector2(2f, -1f); // 2px inset from bottom-left corner of dropdown
+                rect.sizeDelta = new Vector2(80, 30); // Larger; preserves stone-tablet aspect ratio
                 rect.localRotation = Quaternion.identity;
                 rect.localScale = Vector3.one;
             }

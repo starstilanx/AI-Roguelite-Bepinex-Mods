@@ -484,17 +484,21 @@ namespace AIROG_NPCExpansion
         [HarmonyPostfix]
         public static void Postfix_GetActions(GameCharacter npc, ref List<StrToAction> __result, GameplayManager __instance)
         {
-            if (npc == null || npc.IsEnemyType() || npc.corpseState != GameCharacter.CorpseState.NONE) return;
+            if (npc == null || npc.corpseState != GameCharacter.CorpseState.NONE) return;
+
+            // Examine is available for all characters, including enemies
+            __result.Add(new StrToAction("<color=#ffff00>Examine</color>", () =>
+            {
+                NPCExamineUI.OpenFor(npc, __instance);
+                return Task.CompletedTask;
+            }));
+
+            // Gear, quests, and hall only apply to friendly NPCs
+            if (npc.IsEnemyType()) return;
 
             __result.Add(new StrToAction("<color=#00ccff>Inventory & Gear</color>", () =>
             {
                 NPCEquipmentUI.OpenFor(npc, __instance);
-                return Task.CompletedTask;
-            }));
-
-            __result.Add(new StrToAction("<color=#ffff00>Examine</color>", () =>
-            {
-                NPCExamineUI.OpenFor(npc, __instance);
                 return Task.CompletedTask;
             }));
 

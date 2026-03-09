@@ -42,8 +42,8 @@ namespace AIROG_NPCExpansion
         {
             if (Instance == null)
             {
-                 var obj = new GameObject("NPCExamineUI");
-                 Instance = obj.AddComponent<NPCExamineUI>();
+                var obj = new GameObject("NPCExamineUI");
+                Instance = obj.AddComponent<NPCExamineUI>();
             }
             Instance.Show(npc, manager);
         }
@@ -54,29 +54,25 @@ namespace AIROG_NPCExpansion
             _manager = manager;
 
             if (_window == null) CreateUI();
-            
-            // Show blocker and window
+
             if (_modalBlocker != null) _modalBlocker.SetActive(true);
             _window.SetActive(true);
-            
-            // Ensure proper z-order: blocker behind window
+
             if (_modalBlocker != null) _modalBlocker.transform.SetAsLastSibling();
             _window.transform.SetAsLastSibling();
-            
+
             Refresh();
         }
 
         public void RefreshIfNpc(string uuid)
         {
             if (_window != null && _window.activeSelf && _currentNpc != null && _currentNpc.uuid == uuid)
-            {
                 Refresh();
-            }
         }
 
         private void CreateUI()
         {
-            // Create fullscreen modal blocker FIRST (blocks all background clicks)
+            // Fullscreen modal blocker
             _modalBlocker = new GameObject("ExamineModalBlocker", typeof(RectTransform));
             _modalBlocker.transform.SetParent(_manager.canvasTransform, false);
             var blockerRect = _modalBlocker.GetComponent<RectTransform>();
@@ -84,27 +80,33 @@ namespace AIROG_NPCExpansion
             blockerRect.anchorMax = Vector2.one;
             blockerRect.sizeDelta = Vector2.zero;
             var blockerImg = _modalBlocker.AddComponent<Image>();
-            blockerImg.color = new Color(0, 0, 0, 0.4f); // Semi-transparent dark overlay
-            // Click blocker to close modal when clicking outside
+            blockerImg.color = new Color(0, 0, 0, 0.45f);
             var blockerBtn = _modalBlocker.AddComponent<Button>();
             blockerBtn.onClick.AddListener(() => { _window.SetActive(false); _modalBlocker.SetActive(false); });
+            // Nested canvas ensures blocker sorts above all game UI
+            var blockerCanvas = _modalBlocker.AddComponent<Canvas>();
+            blockerCanvas.overrideSorting = true;
+            blockerCanvas.sortingOrder = 99;
+            _modalBlocker.AddComponent<GraphicRaycaster>();
 
             // Main window
             _window = new GameObject("NPCExamineWindow", typeof(RectTransform));
             _window.transform.SetParent(_manager.canvasTransform, false);
-            
             var rect = _window.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(500, 700); 
+            rect.sizeDelta = new Vector2(500, 700);
             rect.anchoredPosition = Vector2.zero;
+            // Window canvas sits above the blocker; also prevents click-through to game panels
+            var windowCanvas = _window.AddComponent<Canvas>();
+            windowCanvas.overrideSorting = true;
+            windowCanvas.sortingOrder = 100;
+            _window.AddComponent<GraphicRaycaster>();
 
-            // 1. Background (Custom Panel)
+            // Background
             var bgObj = new GameObject("Background", typeof(RectTransform));
             bgObj.transform.SetParent(_window.transform, false);
             var bgRect = bgObj.GetComponent<RectTransform>();
-            bgRect.anchorMin = Vector2.zero;
-            bgRect.anchorMax = Vector2.one;
-            bgRect.sizeDelta = Vector2.zero;
-            
+            bgRect.anchorMin = Vector2.zero; bgRect.anchorMax = Vector2.one; bgRect.sizeDelta = Vector2.zero;
+
             if (_customBgSprite != null)
             {
                 var bgImg = bgObj.AddComponent<Image>();
@@ -120,29 +122,26 @@ namespace AIROG_NPCExpansion
                     var playerBg = _manager.textureStuff.playerStatsBkgd.GetComponent<RawImage>();
                     if (playerBg != null) { baseBg.texture = playerBg.texture; baseBg.color = playerBg.color; }
                 }
-                else { baseBg.color = new Color(0.85f, 0.8f, 0.7f, 1f); }
+                else baseBg.color = new Color(0.85f, 0.8f, 0.7f, 1f);
             }
 
-            // 1b. Clarity Overlay (White wash to make text pop)
+            // Clarity overlay
             var overlayObj = new GameObject("ClarityOverlay", typeof(RectTransform));
             overlayObj.transform.SetParent(_window.transform, false);
             var ovRect = overlayObj.GetComponent<RectTransform>();
-            ovRect.anchorMin = new Vector2(0.1f, 0.1f); 
-            ovRect.anchorMax = new Vector2(0.9f, 0.9f); 
+            ovRect.anchorMin = new Vector2(0.08f, 0.08f);
+            ovRect.anchorMax = new Vector2(0.92f, 0.92f);
             ovRect.sizeDelta = Vector2.zero;
             var ovImg = overlayObj.AddComponent<Image>();
-            ovImg.color = new Color(1f, 1f, 1f, 0.2f); // Subtle wash
+            ovImg.color = new Color(1f, 1f, 1f, 0.18f);
 
-            // 2. Window Frame (Metallic) 
+            // Frame
             if (_customBgSprite == null && _manager.textureStuff != null)
             {
                 var frameObj = new GameObject("Frame", typeof(RectTransform));
                 frameObj.transform.SetParent(_window.transform, false);
                 var frameRect = frameObj.GetComponent<RectTransform>();
-                frameRect.anchorMin = Vector2.zero;
-                frameRect.anchorMax = Vector2.one;
-                frameRect.sizeDelta = Vector2.zero;
-                
+                frameRect.anchorMin = Vector2.zero; frameRect.anchorMax = Vector2.one; frameRect.sizeDelta = Vector2.zero;
                 var playerFrameImg = _manager.textureStuff.invFrame?.GetComponent<Image>();
                 if (playerFrameImg != null)
                 {
@@ -158,60 +157,60 @@ namespace AIROG_NPCExpansion
             titleObj.transform.SetParent(_window.transform, false);
             _titleText = titleObj.AddComponent<TextMeshProUGUI>();
             _titleText.fontSize = 28;
+            _titleText.fontStyle = FontStyles.Bold;
             _titleText.alignment = TextAlignmentOptions.Center;
             _titleText.color = new Color(0.15f, 0.1f, 0.05f, 1f);
             if (_manager.currentPlaceText != null) _titleText.font = _manager.currentPlaceText.font;
             var titleRect = titleObj.GetComponent<RectTransform>();
-            titleRect.anchorMin = new Vector2(0, 1);
-            titleRect.anchorMax = new Vector2(1, 1);
-            titleRect.anchoredPosition = new Vector2(0, -45);
-            titleRect.sizeDelta = new Vector2(0, 50);
+            titleRect.anchorMin = new Vector2(0, 1); titleRect.anchorMax = new Vector2(1, 1);
+            titleRect.anchoredPosition = new Vector2(0, -52);
+            titleRect.sizeDelta = new Vector2(-90, 46);
 
-            // Close Button
+            // Close button
             var closeBtnObj = new GameObject("CloseBtn", typeof(RectTransform));
             closeBtnObj.transform.SetParent(_window.transform, false);
             var closeImg = closeBtnObj.AddComponent<Image>();
-            closeImg.color = new Color(0.7f, 0.2f, 0.2f, 1f);
+            closeImg.color = new Color(0.65f, 0.18f, 0.18f, 1f);
             var closeBtn = closeBtnObj.AddComponent<Button>();
             closeBtn.onClick.AddListener(() => { _window.SetActive(false); if (_modalBlocker != null) _modalBlocker.SetActive(false); });
             var closeRect = closeBtnObj.GetComponent<RectTransform>();
-            closeRect.anchorMin = new Vector2(1, 1);
-            closeRect.anchorMax = new Vector2(1, 1);
-            closeRect.anchoredPosition = new Vector2(-30, -30);
+            closeRect.anchorMin = new Vector2(1, 1); closeRect.anchorMax = new Vector2(1, 1);
+            closeRect.anchoredPosition = new Vector2(-34, -34);
             closeRect.sizeDelta = new Vector2(30, 30);
             var closeTxt = new GameObject("X").AddComponent<TextMeshProUGUI>();
             closeTxt.transform.SetParent(closeBtnObj.transform, false);
-            closeTxt.text = "X";
-            closeTxt.fontSize = 18;
+            closeTxt.text = "✕";
+            closeTxt.fontSize = 16;
+            closeTxt.fontStyle = FontStyles.Bold;
             closeTxt.alignment = TextAlignmentOptions.Center;
-            closeTxt.rectTransform.sizeDelta = new Vector2(30, 30);
+            closeTxt.color = Color.white;
+            closeTxt.rectTransform.anchorMin = Vector2.zero;
+            closeTxt.rectTransform.anchorMax = Vector2.one;
+            closeTxt.rectTransform.offsetMin = Vector2.zero;
+            closeTxt.rectTransform.offsetMax = Vector2.zero;
 
-            // Scroll View
+            // Scroll view
             var scrollObj = new GameObject("ScrollView", typeof(RectTransform));
             scrollObj.transform.SetParent(_window.transform, false);
             var sRect = scrollObj.GetComponent<RectTransform>();
-            sRect.anchorMin = Vector2.zero;
-            sRect.anchorMax = Vector2.one;
-            sRect.offsetMin = new Vector2(50, 80);
-            sRect.offsetMax = new Vector2(-50, -110);
+            sRect.anchorMin = Vector2.zero; sRect.anchorMax = Vector2.one;
+            sRect.offsetMin = new Vector2(55, 80);
+            sRect.offsetMax = new Vector2(-55, -108);
 
             var scrollRect = scrollObj.AddComponent<ScrollRect>();
-            scrollRect.scrollSensitivity = 30f; // Good scroll speed for mouse wheel
-            scrollRect.movementType = ScrollRect.MovementType.Clamped; // No elastic bounce
-            scrollRect.horizontal = false; // Vertical only
+            scrollRect.scrollSensitivity = 35f;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.horizontal = false;
             scrollRect.vertical = true;
-            
-            // Add Image so scroll view receives raycast/pointer events
             var scrollImg = scrollObj.AddComponent<Image>();
-            scrollImg.color = new Color(0, 0, 0, 0); // Fully transparent but still catches events
-            
+            scrollImg.color = new Color(0, 0, 0, 0);
+
             var viewport = new GameObject("Viewport", typeof(RectTransform));
             viewport.transform.SetParent(scrollObj.transform, false);
             var vRect = viewport.GetComponent<RectTransform>();
-            vRect.anchorMin = Vector2.zero; vRect.anchorMax = Vector2.one; vRect.sizeDelta = Vector2.zero;
-            vRect.offsetMin = Vector2.zero; vRect.offsetMax = Vector2.zero;
+            vRect.anchorMin = Vector2.zero; vRect.anchorMax = Vector2.one;
+            vRect.sizeDelta = Vector2.zero; vRect.offsetMin = Vector2.zero; vRect.offsetMax = Vector2.zero;
             viewport.AddComponent<RectMask2D>();
-            // Also add Image to viewport for raycast
             var vpImg = viewport.AddComponent<Image>();
             vpImg.color = new Color(0, 0, 0, 0);
             scrollRect.viewport = vRect;
@@ -225,9 +224,10 @@ namespace AIROG_NPCExpansion
             var vlg = content.AddComponent<VerticalLayoutGroup>();
             vlg.childControlHeight = true; vlg.childForceExpandHeight = false;
             vlg.childControlWidth = true; vlg.childForceExpandWidth = true;
-            vlg.spacing = 15; vlg.padding = new RectOffset(20, 20, 20, 20);
-            content.AddComponent<UnityEngine.UI.ContentSizeFitter>().verticalFit = UnityEngine.UI.ContentSizeFitter.FitMode.PreferredSize;
-            scrollRect.content = (RectTransform)cRect;
+            vlg.spacing = 8;
+            vlg.padding = new RectOffset(16, 16, 14, 14);
+            content.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            scrollRect.content = cRect;
         }
 
         private void LoadAssets()
@@ -238,163 +238,156 @@ namespace AIROG_NPCExpansion
 
         private Sprite LoadRobustSprite(string fileName)
         {
-            string[] searchPaths = new string[]
-            {
-                Path.Combine(UnityEngine.Application.streamingAssetsPath, "NPCExpansion", fileName),
+            string[] searchPaths = {
+                Path.Combine(Application.streamingAssetsPath, "NPCExpansion", fileName),
                 Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Assets", fileName),
                 Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), fileName)
             };
-
             foreach (string filePath in searchPaths)
             {
-                if (File.Exists(filePath))
+                if (!File.Exists(filePath)) continue;
+                try
                 {
-                    try
-                    {
-                        byte[] data = File.ReadAllBytes(filePath);
-                        Texture2D tex = new Texture2D(2, 2);
-                        if (tex.LoadImage(data))
-                        {
-                            Debug.Log($"[NPCExamineUI] Successfully loaded {fileName} from: {filePath}");
-                            return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
-                        }
-                    }
-                    catch (System.Exception ex)
-                    {
-                        Debug.LogWarning($"[NPCExamineUI] Error loading image at {filePath}: {ex.Message}");
-                    }
+                    byte[] data = File.ReadAllBytes(filePath);
+                    Texture2D tex = new Texture2D(2, 2);
+                    if (tex.LoadImage(data))
+                        return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+                }
+                catch (System.Exception ex)
+                {
+                    Debug.LogWarning($"[NPCExamineUI] Error loading {fileName}: {ex.Message}");
                 }
             }
-            Debug.LogWarning($"[NPCExamineUI] Asset '{fileName}' not found in any search path.");
             return null;
         }
+
+        // ─── Layout ───────────────────────────────────────────────────────────────
 
         private void Refresh()
         {
             if (_currentNpc == null) return;
-            _titleText.text = "Examining: " + _currentNpc.GetPrettyName();
+            _titleText.text = _currentNpc.GetPrettyName();
 
             foreach (Transform child in _scrollContent) Destroy(child.gameObject);
 
             var data = NPCData.Load(_currentNpc.uuid);
             if (data == null) data = NPCData.CreateDefault(_currentNpc.GetPrettyName());
-            
-            // Generation Instructions
-            AddHeader("Generation Hint / Secret Identity");
-            AddInputField("E.g. Secretly a level 50 paladin...", data.GenerationInstructions, (val) => 
-            { 
-                data.GenerationInstructions = val; 
-                NPCData.Save(_currentNpc.uuid, data); 
+
+            // ── GENERATION ────────────────────────────────────────────────────
+            AddHeader("Generation Hint");
+            AddInputField("E.g. secretly a retired assassin...", data.GenerationInstructions, (val) =>
+            {
+                data.GenerationInstructions = val;
+                NPCData.Save(_currentNpc.uuid, data);
             });
 
-            if (string.IsNullOrEmpty(data.Personality))
-            {
-                // Initial generation
-                if (_regenBtnSprite != null)
-                {
-                    AddImageBtn(_regenBtnSprite, async (btn) => { await HandleGeneration(null, btn); });
-                }
-                else
-                {
-                    AddActionBtn("Generate Full Profile", async (txt, btn) => { await HandleGeneration(txt, btn); });
-                }
-            }
+            bool hasProfile = !string.IsNullOrEmpty(data.Personality);
+            if (_regenBtnSprite != null)
+                AddImageBtn(_regenBtnSprite, async (btn) => { await HandleGeneration(null, btn); });
             else
-            {
-                // Regeneration
-                if (_regenBtnSprite != null)
-                {
-                    AddImageBtn(_regenBtnSprite, async (btn) => { await HandleGeneration(null, btn); });
-                }
-                else
-                {
-                    AddActionBtn("Regenerate Profile (Refreshes Stats)", async (txt, btn) => { await HandleGeneration(txt, btn); });
-                }
-            }
+                AddActionBtn(hasProfile ? "Regenerate Profile" : "Generate Profile",
+                    async (txt, btn) => { await HandleGeneration(txt, btn); });
 
-            // 1. Basic Stats
-            AddHeader("Core Status");
-            AddStatRow("Level", _currentNpc.level.ToString());
-            AddStatRow("Health", $"{_currentNpc.health} / {_currentNpc.maxHealth}");
-            AddStatRow("Damage", _currentNpc.damage.ToString());
-            AddStatRow("Gold", _currentNpc.numGold.ToString());
-            
-            string affinityColor = "black";
-            if (data.Affinity >= 50) affinityColor = "#008800";
-            else if (data.Affinity <= -50) affinityColor = "#880000";
-            AddStatRow("Affinity", $"<color={affinityColor}>{data.Affinity} ({data.RelationshipStatus})</color>");
-            
-            if (!string.IsNullOrEmpty(data.Scenario))
-            {
-                AddHeader("Current Situation");
-                AddText(data.Scenario, 16, Color.black);
-            }
+            AddDivider();
 
-            if (!string.IsNullOrEmpty(data.Personality))
-            {
-                AddHeader("Personality");
-                AddText(data.Personality, 15, new Color(0.1f, 0.1f, 0.2f, 0.9f));
-            }
+            // ── STATUS ────────────────────────────────────────────────────────
+            AddHeader("Status");
+            AddInlineStats("Level", _currentNpc.level.ToString(),
+                           "Health", $"{_currentNpc.health} / {_currentNpc.maxHealth}");
+            AddInlineStats("Damage", _currentNpc.damage.ToString(),
+                           "Gold", _currentNpc.numGold.ToString());
+
+            string affinityHex = data.Affinity >= 50 ? "#005500"
+                                : data.Affinity <= -50 ? "#880000"
+                                : "#222222";
+            AddStatRow("Affinity", $"<color={affinityHex}>{data.Affinity}  —  {data.RelationshipStatus}</color>");
 
             if (data.Tags != null && data.Tags.Count > 0)
-            {
-                AddHeader("Nature");
-                AddText(string.Join(", ", data.Tags), 15, Color.black);
-            }
-
+                AddStatRow("Nature", string.Join(", ", data.Tags));
             if (data.InteractionTraits != null && data.InteractionTraits.Count > 0)
-            {
-                AddHeader("Disposition");
-                AddText(string.Join(", ", data.InteractionTraits), 15, Color.black);
-            }
+                AddStatRow("Disposition", string.Join(", ", data.InteractionTraits));
 
-            if (data.RecentThoughts != null && data.RecentThoughts.Count > 0)
+            // ── PROFILE ───────────────────────────────────────────────────────
+            bool anyProfile = !string.IsNullOrEmpty(data.Personality)
+                           || !string.IsNullOrEmpty(data.Scenario)
+                           || !string.IsNullOrEmpty(data.FirstMessage);
+            if (anyProfile)
             {
-                AddHeader("Recent Thoughts");
-                foreach (var thought in data.RecentThoughts)
+                AddDivider();
+
+                if (!string.IsNullOrEmpty(data.Personality))
                 {
-                    AddText("• " + thought, 15, new Color(0.2f, 0.2f, 0.3f, 1f));
+                    AddHeader("Personality");
+                    AddText(data.Personality, 15, new Color(0.1f, 0.1f, 0.2f));
+                }
+
+                if (!string.IsNullOrEmpty(data.Scenario))
+                {
+                    AddHeader("Current Situation");
+                    AddText(data.Scenario, 15, new Color(0.08f, 0.08f, 0.08f));
+                }
+
+                if (!string.IsNullOrEmpty(data.FirstMessage))
+                {
+                    AddHeader("First Words");
+                    AddText($"\"{data.FirstMessage}\"", 15, new Color(0.18f, 0.1f, 0.32f), italic: true);
                 }
             }
 
-            // 2. Attributes
-            AddHeader("Attributes");
-            foreach (var attr in data.Attributes)
+            // ── GOALS & THOUGHTS ──────────────────────────────────────────────
+            bool anyGoals = !string.IsNullOrEmpty(data.CurrentGoal)
+                         || (data.RecentThoughts != null && data.RecentThoughts.Count > 0);
+            if (anyGoals)
             {
-                AddStatRow(attr.Key.ToString(), attr.Value.ToString());
+                AddDivider();
+
+                if (!string.IsNullOrEmpty(data.CurrentGoal))
+                {
+                    AddHeader("Current Goal");
+                    AddText(data.CurrentGoal, 15, new Color(0.2f, 0.1f, 0.35f));
+                }
+
+                if (data.RecentThoughts != null && data.RecentThoughts.Count > 0)
+                {
+                    AddHeader("Recent Thoughts");
+                    foreach (var thought in data.RecentThoughts)
+                        AddText("• " + thought, 14, new Color(0.2f, 0.2f, 0.3f));
+                }
             }
 
-            // 3. Skills
-            AddHeader("Skills");
-            if (data.Skills.Count == 0) AddText("No specialized skills.", 15, Color.gray);
-            else
+            // ── COMBAT STATS ──────────────────────────────────────────────────
+            AddDivider();
+
+            if (data.Attributes != null && data.Attributes.Count > 0)
             {
+                AddHeader("Attributes");
+                var attrs = data.Attributes.ToList();
+                for (int i = 0; i < attrs.Count; i += 2)
+                {
+                    if (i + 1 < attrs.Count)
+                        AddInlineStats(attrs[i].Key.ToString(), attrs[i].Value.ToString(),
+                                       attrs[i + 1].Key.ToString(), attrs[i + 1].Value.ToString());
+                    else
+                        AddStatRow(attrs[i].Key.ToString(), attrs[i].Value.ToString());
+                }
+            }
+
+            if (data.Skills != null && data.Skills.Count > 0)
+            {
+                AddHeader("Skills");
                 foreach (var sk in data.Skills.Values)
-                {
-                    AddStatRow(sk.GetReadableSkillName(), "Lvl " + sk.level);
-                }
+                    AddStatRow(sk.GetReadableSkillName(), "Lv " + sk.level);
             }
 
-            // 4. Abilities
-            AddHeader("Abilities");
-            if (data.DetailedAbilities.Count == 0 && data.Abilities.Count == 0) AddText("No active abilities.", 15, Color.gray);
-            else
+            if (data.DetailedAbilities.Count > 0 || data.Abilities.Count > 0)
             {
+                AddHeader("Abilities");
                 if (data.DetailedAbilities.Count > 0)
-                {
-                    foreach (var abil in data.DetailedAbilities)
-                    {
-                        AddText($"• <b>{abil.Name}</b>: {abil.Description}", 16, Color.black);
-                    }
-                }
+                    foreach (var a in data.DetailedAbilities)
+                        AddText($"• <b>{a.Name}</b>: {a.Description}", 15, new Color(0.05f, 0.05f, 0.05f));
                 else
-                {
-                    // Fallback for legacy data
-                    foreach (var abil in data.Abilities)
-                    {
-                        AddText("• " + abil, 16, Color.black);
-                    }
-                }
+                    foreach (var a in data.Abilities)
+                        AddText("• " + a, 15, new Color(0.05f, 0.05f, 0.05f));
             }
         }
 
@@ -403,14 +396,22 @@ namespace AIROG_NPCExpansion
             if (txt != null) txt.text = "Generating...";
             string context = _manager.GetContextForQuickActions();
             bool success = await NPCGenerator.GenerateLore(_currentNpc, context);
-            if (success) 
-            {
+            if (success)
                 Refresh();
-            }
-            else 
-            {
-                if (txt != null) txt.text = "Generation Failed";
-            }
+            else if (txt != null)
+                txt.text = "Generation Failed";
+        }
+
+        // ─── Helpers ──────────────────────────────────────────────────────────────
+
+        private void AddDivider()
+        {
+            var obj = new GameObject("Divider", typeof(RectTransform));
+            obj.transform.SetParent(_scrollContent, false);
+            var img = obj.AddComponent<Image>();
+            img.color = new Color(0.45f, 0.28f, 0.1f, 0.3f);
+            var le = obj.AddComponent<LayoutElement>();
+            le.minHeight = 2; le.preferredHeight = 2;
         }
 
         private void AddHeader(string text)
@@ -419,28 +420,30 @@ namespace AIROG_NPCExpansion
             obj.transform.SetParent(_scrollContent, false);
             var txt = obj.AddComponent<TextMeshProUGUI>();
             txt.text = text.ToUpper();
-            txt.fontSize = 20;
+            txt.fontSize = 13;
             txt.fontStyle = FontStyles.Bold;
-            txt.color = new Color(0.3f, 0.15f, 0.05f, 1f);
+            txt.color = new Color(0.42f, 0.22f, 0.05f, 1f);
+            txt.characterSpacing = 2f;
             if (_titleText != null) txt.font = _titleText.font;
-            obj.GetComponent<RectTransform>().sizeDelta = new Vector2(0, 35);
+            var le = obj.AddComponent<LayoutElement>();
+            le.minHeight = 22; le.preferredHeight = 22;
         }
 
         private void AddStatRow(string label, string value)
         {
             var obj = new GameObject("StatRow", typeof(RectTransform));
             obj.transform.SetParent(_scrollContent, false);
-            var rect = obj.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(0, 25);
+            var le = obj.AddComponent<LayoutElement>();
+            le.minHeight = 22; le.preferredHeight = 22;
 
             var lObj = new GameObject("Label").AddComponent<TextMeshProUGUI>();
             lObj.transform.SetParent(obj.transform, false);
-            lObj.text = label + ":";
-            lObj.fontSize = 18;
-            lObj.color = new Color(0.05f, 0.05f, 0.05f, 0.9f);
+            lObj.text = label;
+            lObj.fontSize = 15;
+            lObj.color = new Color(0.3f, 0.2f, 0.1f);
             if (_titleText != null) lObj.font = _titleText.font;
             lObj.rectTransform.anchorMin = Vector2.zero;
-            lObj.rectTransform.anchorMax = new Vector2(0.55f, 1);
+            lObj.rectTransform.anchorMax = new Vector2(0.42f, 1);
             lObj.rectTransform.offsetMin = Vector2.zero;
             lObj.rectTransform.offsetMax = Vector2.zero;
             lObj.alignment = TextAlignmentOptions.Left;
@@ -450,18 +453,67 @@ namespace AIROG_NPCExpansion
             var vObj = new GameObject("Value").AddComponent<TextMeshProUGUI>();
             vObj.transform.SetParent(obj.transform, false);
             vObj.text = value;
-            vObj.fontSize = 18;
-            vObj.color = new Color(0f, 0f, 0f, 1f);
+            vObj.fontSize = 15;
+            vObj.color = new Color(0.05f, 0.05f, 0.05f);
             if (_titleText != null) vObj.font = _titleText.font;
             vObj.fontStyle = FontStyles.Bold;
-            vObj.rectTransform.anchorMin = new Vector2(0.55f, 0);
+            vObj.rectTransform.anchorMin = new Vector2(0.42f, 0);
             vObj.rectTransform.anchorMax = Vector2.one;
             vObj.rectTransform.offsetMin = Vector2.zero;
             vObj.rectTransform.offsetMax = Vector2.zero;
-            vObj.alignment = TextAlignmentOptions.Right;
+            vObj.alignment = TextAlignmentOptions.Left;
+            vObj.enableWordWrapping = false;
+            vObj.overflowMode = TextOverflowModes.Ellipsis;
         }
 
-        private void AddText(string text, int size, Color color)
+        private void AddInlineStats(string label1, string val1, string label2, string val2)
+        {
+            var row = new GameObject("InlineStats", typeof(RectTransform));
+            row.transform.SetParent(_scrollContent, false);
+            var le = row.AddComponent<LayoutElement>();
+            le.minHeight = 22; le.preferredHeight = 22;
+            var hlg = row.AddComponent<HorizontalLayoutGroup>();
+            hlg.childControlWidth = true; hlg.childForceExpandWidth = true;
+            hlg.childControlHeight = true; hlg.childForceExpandHeight = true;
+            hlg.spacing = 0;
+            AddStatCell(row.transform, label1, val1);
+            AddStatCell(row.transform, label2, val2);
+        }
+
+        private void AddStatCell(Transform parent, string label, string value)
+        {
+            var cell = new GameObject("Cell", typeof(RectTransform));
+            cell.transform.SetParent(parent, false);
+
+            var lTxt = new GameObject("L").AddComponent<TextMeshProUGUI>();
+            lTxt.transform.SetParent(cell.transform, false);
+            lTxt.text = label;
+            lTxt.fontSize = 15;
+            lTxt.color = new Color(0.3f, 0.2f, 0.1f);
+            if (_titleText != null) lTxt.font = _titleText.font;
+            lTxt.enableWordWrapping = false;
+            lTxt.rectTransform.anchorMin = Vector2.zero;
+            lTxt.rectTransform.anchorMax = new Vector2(0.48f, 1f);
+            lTxt.rectTransform.offsetMin = Vector2.zero;
+            lTxt.rectTransform.offsetMax = Vector2.zero;
+            lTxt.alignment = TextAlignmentOptions.Left;
+
+            var vTxt = new GameObject("V").AddComponent<TextMeshProUGUI>();
+            vTxt.transform.SetParent(cell.transform, false);
+            vTxt.text = value;
+            vTxt.fontSize = 15;
+            vTxt.color = new Color(0.05f, 0.05f, 0.05f);
+            vTxt.fontStyle = FontStyles.Bold;
+            if (_titleText != null) vTxt.font = _titleText.font;
+            vTxt.enableWordWrapping = false;
+            vTxt.rectTransform.anchorMin = new Vector2(0.48f, 0f);
+            vTxt.rectTransform.anchorMax = Vector2.one;
+            vTxt.rectTransform.offsetMin = Vector2.zero;
+            vTxt.rectTransform.offsetMax = Vector2.zero;
+            vTxt.alignment = TextAlignmentOptions.Left;
+        }
+
+        private void AddText(string text, int size, Color color, bool italic = false)
         {
             var obj = new GameObject("Text", typeof(RectTransform));
             obj.transform.SetParent(_scrollContent, false);
@@ -470,35 +522,82 @@ namespace AIROG_NPCExpansion
             txt.fontSize = size;
             txt.color = color;
             txt.enableWordWrapping = true;
+            if (italic) txt.fontStyle = FontStyles.Italic;
             if (_titleText != null) txt.font = _titleText.font;
-            
-            var csf = obj.AddComponent<UnityEngine.UI.ContentSizeFitter>();
-            csf.verticalFit = UnityEngine.UI.ContentSizeFitter.FitMode.PreferredSize;
+            obj.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
         }
+
+        private void AddInputField(string placeholder, string currentVal, System.Action<string> onEndEdit)
+        {
+            var obj = new GameObject("InputField", typeof(RectTransform));
+            obj.transform.SetParent(_scrollContent, false);
+
+            var img = obj.AddComponent<Image>();
+            img.color = new Color(0.92f, 0.9f, 0.86f, 0.9f);
+
+            var input = obj.AddComponent<TMP_InputField>();
+
+            var textArea = new GameObject("TextArea", typeof(RectTransform));
+            textArea.transform.SetParent(obj.transform, false);
+            var taRect = textArea.GetComponent<RectTransform>();
+            taRect.anchorMin = Vector2.zero; taRect.anchorMax = Vector2.one;
+            taRect.offsetMin = new Vector2(10, 5); taRect.offsetMax = new Vector2(-10, -5);
+
+            var textObj = new GameObject("Text", typeof(RectTransform));
+            textObj.transform.SetParent(textArea.transform, false);
+            var text = textObj.AddComponent<TextMeshProUGUI>();
+            text.fontSize = 15;
+            text.color = Color.black;
+            if (_titleText != null) text.font = _titleText.font;
+            var textRect = textObj.GetComponent<RectTransform>();
+            textRect.anchorMin = Vector2.zero; textRect.anchorMax = Vector2.one; textRect.sizeDelta = Vector2.zero;
+
+            var phObj = new GameObject("Placeholder", typeof(RectTransform));
+            phObj.transform.SetParent(textArea.transform, false);
+            var phText = phObj.AddComponent<TextMeshProUGUI>();
+            phText.text = placeholder;
+            phText.fontSize = 15;
+            phText.color = new Color(0.4f, 0.4f, 0.4f, 0.75f);
+            phText.fontStyle = FontStyles.Italic;
+            if (_titleText != null) phText.font = _titleText.font;
+            var phRect = phObj.GetComponent<RectTransform>();
+            phRect.anchorMin = Vector2.zero; phRect.anchorMax = Vector2.one; phRect.sizeDelta = Vector2.zero;
+
+            input.textViewport = taRect;
+            input.textComponent = text;
+            input.placeholder = phText;
+            input.text = currentVal;
+            input.onEndEdit.AddListener((val) => onEndEdit(val));
+
+            var le = obj.AddComponent<LayoutElement>();
+            le.minHeight = 40; le.preferredHeight = 40; le.flexibleHeight = 0;
+        }
+
         private void AddActionBtn(string label, System.Func<TextMeshProUGUI, Button, Task> asyncAction)
         {
             var obj = new GameObject("ActionBtn", typeof(RectTransform));
             obj.transform.SetParent(_scrollContent, false);
-            var rect = obj.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(0, 45);
 
             var img = obj.AddComponent<Image>();
-            img.color = new Color(0.2f, 0.35f, 0.6f, 1f); 
+            img.color = new Color(0.22f, 0.38f, 0.62f, 1f);
 
             var btn = obj.AddComponent<Button>();
-            
+
             var txtObj = new GameObject("Text");
             txtObj.transform.SetParent(obj.transform, false);
             var txt = txtObj.AddComponent<TextMeshProUGUI>();
             txt.text = label;
-            txt.fontSize = 20;
+            txt.fontSize = 22;
+            txt.fontStyle = FontStyles.Bold;
             txt.alignment = TextAlignmentOptions.Center;
             txt.color = Color.white;
             if (_titleText != null) txt.font = _titleText.font;
-            
             var txtRect = txtObj.GetComponent<RectTransform>();
-            txtRect.anchorMin = Vector2.zero; txtRect.anchorMax = Vector2.one; 
+            txtRect.anchorMin = Vector2.zero; txtRect.anchorMax = Vector2.one;
             txtRect.offsetMin = Vector2.zero; txtRect.offsetMax = Vector2.zero;
+
+            var le = obj.AddComponent<LayoutElement>();
+            le.minHeight = 70; le.preferredHeight = 70;
 
             btn.onClick.AddListener(async () => {
                 btn.interactable = false;
@@ -507,69 +606,16 @@ namespace AIROG_NPCExpansion
             });
         }
 
-        private void AddInputField(string placeholder, string currentVal, System.Action<string> onEndEdit)
-        {
-            var obj = new GameObject("InputField", typeof(RectTransform));
-            obj.transform.SetParent(_scrollContent, false);
-            var rect = obj.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(0, 45); // Standard height
-
-            var img = obj.AddComponent<Image>();
-            img.color = new Color(0.9f, 0.9f, 0.9f, 0.8f); // Off-white background
-
-            var input = obj.AddComponent<TMP_InputField>();
-            
-            // Text Area
-            var textArea = new GameObject("TextArea", typeof(RectTransform));
-            textArea.transform.SetParent(obj.transform, false);
-            var taRect = textArea.GetComponent<RectTransform>();
-            taRect.anchorMin = Vector2.zero; taRect.anchorMax = Vector2.one;
-            taRect.offsetMin = new Vector2(10, 5); taRect.offsetMax = new Vector2(-10, -5);
-            
-            var textObj = new GameObject("Text", typeof(RectTransform));
-            textObj.transform.SetParent(textArea.transform, false);
-            var text = textObj.AddComponent<TextMeshProUGUI>();
-            text.fontSize = 18;
-            text.color = Color.black;
-            if (_titleText != null) text.font = _titleText.font;
-            var textRect = textObj.GetComponent<RectTransform>();
-            textRect.anchorMin = Vector2.zero; textRect.anchorMax = Vector2.one; textRect.sizeDelta = Vector2.zero;
-
-            var placeholderObj = new GameObject("Placeholder", typeof(RectTransform));
-            placeholderObj.transform.SetParent(textArea.transform, false);
-            var phText = placeholderObj.AddComponent<TextMeshProUGUI>();
-            phText.text = placeholder;
-            phText.fontSize = 18;
-            phText.color = new Color(0.4f, 0.4f, 0.4f, 0.8f);
-            phText.fontStyle = FontStyles.Italic;
-            if (_titleText != null) phText.font = _titleText.font;
-            var phRect = placeholderObj.GetComponent<RectTransform>();
-            phRect.anchorMin = Vector2.zero; phRect.anchorMax = Vector2.one; phRect.sizeDelta = Vector2.zero;
-
-            input.textViewport = taRect;
-            input.textComponent = text;
-            input.placeholder = phText;
-            input.text = currentVal;
-            
-            input.onEndEdit.AddListener((val) => onEndEdit(val));
-
-            var le = obj.AddComponent<LayoutElement>();
-            le.minHeight = 45;
-            le.preferredHeight = 45;
-            le.flexibleHeight = 0;
-        }
         private void AddImageBtn(Sprite sprite, System.Func<Button, Task> asyncAction)
         {
             var obj = new GameObject("ImageActionBtn", typeof(RectTransform));
             obj.transform.SetParent(_scrollContent, false);
-            var rect = obj.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(0, 50); // Default height
-            
+
             var img = obj.AddComponent<Image>();
             img.sprite = sprite;
             img.type = Image.Type.Simple;
             img.preserveAspect = true;
-            
+
             var btn = obj.AddComponent<Button>();
             btn.onClick.AddListener(async () => {
                 btn.interactable = false;
@@ -578,8 +624,7 @@ namespace AIROG_NPCExpansion
             });
 
             var le = obj.AddComponent<LayoutElement>();
-            le.preferredHeight = 60; 
-            le.minHeight = 40;
+            le.preferredHeight = 80; le.minHeight = 60;
         }
     }
 }

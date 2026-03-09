@@ -175,6 +175,26 @@ namespace AIROG_Multiplayer
             }
         }
 
+        /// <summary>Broadcasts the full inventory database to all connected clients.</summary>
+        public void BroadcastInventory(string inventoryJson)
+        {
+            Broadcast(Packet.Create(PacketType.InventorySync, new InventorySyncPayload
+            {
+                InventoryJson = inventoryJson
+            }));
+            Log.LogInfo($"[Server] Broadcast inventory ({inventoryJson?.Length ?? 0} chars).");
+        }
+
+        /// <summary>Sends the inventory database to a single client (used on join).</summary>
+        public void SendInventoryTo(ConnectedClient client, string inventoryJson)
+        {
+            SendTo(client, Packet.Create(PacketType.InventorySync, new InventorySyncPayload
+            {
+                InventoryJson = inventoryJson
+            }));
+            Log.LogInfo($"[Server] Sent inventory to {client.PlayerName} ({inventoryJson?.Length ?? 0} chars).");
+        }
+
         /// <summary>Broadcasts any packet to all connected clients.</summary>
         public void BroadcastAll(Packet packet) => Broadcast(packet);
 
