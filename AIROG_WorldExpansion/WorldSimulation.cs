@@ -61,6 +61,10 @@ namespace AIROG_WorldExpansion
             // Peace checks for active wars
             CheckActiveWarPeace();
 
+            // Diplomatic drift — every 10 turns
+            if (turn % 10 == 0)
+                ShiftDiplomacyOverTime();
+
             // Minor Tick (faction actions) — every 5 turns
             if (turn % 5 == 0)
                 RunMinorTick(__instance);
@@ -132,6 +136,12 @@ namespace AIROG_WorldExpansion
                     int count = rng.Next(1, 4);
                     for (int i = 0; i < count; i++)
                         data.ClaimedPlaceUuids.Add($"territory_{faction.uuid}_{i}");
+                }
+                // Seed population on first initialization
+                if (data.Population == 500) // default value = not yet seeded
+                {
+                    data.Population = rng.Next(300, 1500);
+                    data.PopState   = "Normal";
                 }
             }
             WorldData.CurrentState.TerritoriesInitialized = true;
@@ -432,8 +442,16 @@ namespace AIROG_WorldExpansion
                 if (string.IsNullOrEmpty(data.Name))
                     data.Name = faction.GetPrettyName();
 
-                data.Resources += 5;
+                // Base income + population modifier
+                int popBonus = 0;
+                if      (data.PopState == "Thriving")  popBonus =  10;
+                else if (data.PopState == "Struggling") popBonus = -5;
+                else if (data.PopState == "Razed")      popBonus = -10;
+                data.Resources = Math.Max(0, data.Resources + 5 + popBonus);
             }
+
+            // Update faction populations and log state transitions
+            UpdateFactionPopulations(manager);
 
             // Pick an active non-player faction to act
             var activeFactions = factions
@@ -459,32 +477,36 @@ namespace AIROG_WorldExpansion
             UpdateFactionTag(target);
 
             string actingTag = actingData.Tag;
-            string targetTag = WorldData.GetFactionData(target.uuid).Tag;
-            string relKey    = WorldData.GetRelationshipKey(acting.uuid, target.uuid);
+            var    targetData = WorldData.GetFactionData(target.uuid);
+            string targetTag  = targetData.Tag;
+            string relKey     = WorldData.GetRelationshipKey(acting.uuid, target.uuid);
 
-            // Establish initial relationship if unknown
-            if (!WorldData.CurrentState.FactionRelationships.ContainsKey(relKey))
+            // Establish initial diplomatic relation if none exists
+            if (!WorldData.CurrentState.DiplomaticRelations.ContainsKey(relKey))
             {
-                string rel = "NEUTRAL";
+                DiplomaticTier initialTier = DiplomaticTier.Neutral;
                 if ((actingTag == "Holy" && targetTag == "Demon") || (actingTag == "Demon" && targetTag == "Holy"))
-                    rel = "ENEMIES";
+                    initialTier = DiplomaticTier.Hostile;
                 else if (actingTag == targetTag && actingTag != "Neutral")
-                    rel = "ALLIES";
+                    initialTier = DiplomaticTier.NonAggression;
                 else if (rng.NextDouble() > 0.8)
-                    rel = rng.NextDouble() > 0.5 ? "ALLIES" : "ENEMIES";
-                WorldData.CurrentState.FactionRelationships[relKey] = rel;
+                    initialTier = rng.NextDouble() > 0.5 ? DiplomaticTier.NonAggression : DiplomaticTier.Hostile;
+                WorldData.SetTier(relKey, initialTier, "first contact", WorldData.CurrentState.CurrentTurn,
+                    acting.GetPrettyName(), target.GetPrettyName());
             }
 
-            string relation = WorldData.CurrentState.FactionRelationships[relKey];
-            bool atWar      = WorldData.CurrentState.ActiveWars.ContainsKey(relKey);
+            DiplomaticTier tier = WorldData.GetTier(relKey);
+            bool atWar          = WorldData.CurrentState.ActiveWars.ContainsKey(relKey);
 
             // Action weights: [War/Raid, Trade, Rumor]
             double[] weights;
-            if (atWar || relation == "ENEMIES")
+            if (atWar || tier <= DiplomaticTier.Hostile)
                 weights = new double[] { 85, 0, 15 };
-            else if (relation == "ALLIES")
+            else if (tier >= DiplomaticTier.TradePact)
                 weights = new double[] { 0, 80, 20 };
-            else
+            else if (tier == DiplomaticTier.NonAggression)
+                weights = new double[] { 10, 50, 40 };
+            else // Neutral or ColdWar
             {
                 weights = new double[] { 30, 30, 40 };
                 if ((actingTag == "Holy" && targetTag == "Demon") || (actingTag == "Demon" && targetTag == "Holy"))
@@ -493,11 +515,9 @@ namespace AIROG_WorldExpansion
                     weights[1] += 40;
             }
 
-            int actionType = PickWeighted(weights);
-
-            var targetData = WorldData.GetFactionData(target.uuid);
-            string eventDesc = "";
-            string eventType = "INFO";
+            int    actionType = PickWeighted(weights);
+            string eventDesc  = "";
+            string eventType  = "INFO";
 
             if (actionType == 0) // WAR / RAID
             {
@@ -515,8 +535,20 @@ namespace AIROG_WorldExpansion
                         eventDesc = $"{acting.GetPrettyName()} raided {target.GetPrettyName()} and plundered {stolen} resources!";
                         eventType = "WAR";
 
+                        // Population damage from raid
+                        int popLoss = rng.Next(20, 80);
+                        targetData.Population = Math.Max(10, targetData.Population - popLoss);
+
                         // Accumulate grievance → escalate to formal war
                         WorldData.AddGrievance(relKey);
+                        if (WorldData.ShiftTier(relKey, -1, "raid escalation",
+                            acting.GetPrettyName(), target.GetPrettyName()))
+                        {
+                            WorldData.LogEvent(
+                                $"{acting.GetPrettyName()} and {target.GetPrettyName()} relations deteriorated to {WorldData.GetTierLabel(WorldData.GetTier(relKey))}.",
+                                "DIPLOMACY");
+                        }
+
                         int grievance = WorldData.GetGrievance(relKey);
                         if (grievance >= GRIEVANCE_WAR_THRESHOLD && !atWar)
                         {
@@ -549,16 +581,30 @@ namespace AIROG_WorldExpansion
                     eventDesc = $"{acting.GetPrettyName()} and {target.GetPrettyName()} have deepened their economic ties through trade.";
                     eventType = "TRADE";
 
-                    // Allies trading resets some grievances
-                    if (WorldData.CurrentState.GrievanceCounts.ContainsKey(relKey))
+                    // Population growth from trade prosperity
+                    actingData.Population += rng.Next(5, 20);
+                    targetData.Population += rng.Next(5, 20);
+
+                    // Trade improves relations
+                    if (WorldData.ShiftTier(relKey, 1, "trade goodwill",
+                        acting.GetPrettyName(), target.GetPrettyName()))
+                    {
+                        WorldData.LogEvent(
+                            $"{acting.GetPrettyName()} and {target.GetPrettyName()} relations improved to {WorldData.GetTierLabel(WorldData.GetTier(relKey))}.",
+                            "DIPLOMACY");
+                    }
+
+                    // Reduce lingering grievances between friendly trading partners
+                    if (tier >= DiplomaticTier.TradePact && WorldData.CurrentState.GrievanceCounts.ContainsKey(relKey))
                         WorldData.CurrentState.GrievanceCounts[relKey] = Math.Max(0, WorldData.CurrentState.GrievanceCounts[relKey] - 1);
                 }
             }
             else // RUMOR / DIPLOMACY
             {
-                string[] flavors = relation == "ENEMIES"
+                bool isHostile = atWar || tier <= DiplomaticTier.Hostile;
+                string[] flavors = isHostile
                     ? new[] { "denounced", "mocked", "threatened", "spied on", "accused" }
-                    : relation == "ALLIES"
+                    : tier >= DiplomaticTier.TradePact
                         ? new[] { "praised", "sent gifts to", "held a feast for", "supported", "defended" }
                         : new[] { "sent diplomats to", "observed", "has concerns about", "is ignoring", "proposed talks with" };
 
@@ -599,6 +645,10 @@ namespace AIROG_WorldExpansion
                 victorData.ClaimedPlaceUuids.Add(territory);
             loserData.ClaimedPlaceUuids.Clear();
 
+            // Population devastated by conquest
+            loserData.Population = Math.Max(10, loserData.Population / 5);
+            loserData.PopState   = "Razed";
+
             string desc = $"[FALL OF {loser.GetPrettyName().ToUpper()}] {loser.GetPrettyName()} has been utterly defeated and absorbed by {victor.GetPrettyName()}!";
             WorldData.LogEvent(desc, "MAJOR");
             WorldData.CurrentState.MajorEventHistory.Add(desc);
@@ -612,6 +662,63 @@ namespace AIROG_WorldExpansion
                 new List<string> { loser.GetPrettyName(), victor.GetPrettyName(), "fallen", "conquered" });
             WorldEventsUI.MarkDirty();
             Debug.Log($"[WorldExpansion] Faction eliminated: {loser.GetPrettyName()}");
+        }
+
+        // ─── Population Update ────────────────────────────────────────────────────
+        private static void UpdateFactionPopulations(GameplayManager manager)
+        {
+            var factions  = manager.GetCurrentFactions();
+            if (factions == null) return;
+            var eliminated = WorldData.CurrentState.EliminatedFactions;
+
+            foreach (var faction in factions)
+            {
+                if (faction.GetPrettyName() == "Player") continue;
+                if (eliminated.Contains(faction.uuid)) continue;
+
+                var data    = WorldData.GetFactionData(faction.uuid);
+                bool isAtWar = WorldData.CurrentState.ActiveWars.Values.Any(
+                    w => w.ActorUuid == faction.uuid || w.TargetUuid == faction.uuid);
+
+                int delta;
+                if      (isAtWar)             delta = -rng.Next(10, 30);
+                else if (data.Tag == "Trade") delta =  rng.Next(5, 15);
+                else                          delta =  rng.Next(0, 8);
+
+                data.Population = Math.Max(10, data.Population + delta);
+
+                // Update pop state and log transitions
+                string oldState = data.PopState;
+                if      (data.Population > 2000) data.PopState = "Thriving";
+                else if (data.Population > 500)  data.PopState = "Normal";
+                else if (data.Population > 100)  data.PopState = "Struggling";
+                else                             data.PopState = "Razed";
+
+                if (data.PopState != oldState && !string.IsNullOrEmpty(data.Name))
+                {
+                    WorldData.LogEvent($"{data.Name}'s territories are now {data.PopState} (pop: {data.Population}).", "POPULATION");
+                    WorldEventsUI.MarkDirty();
+                }
+            }
+        }
+
+        // ─── Diplomatic Drift ─────────────────────────────────────────────────────
+        private static void ShiftDiplomacyOverTime()
+        {
+            int turn = WorldData.CurrentState.CurrentTurn;
+            foreach (var kvp in WorldData.CurrentState.DiplomaticRelations)
+            {
+                // Active wars are managed by the war system, skip them
+                if (WorldData.CurrentState.ActiveWars.ContainsKey(kvp.Key)) continue;
+                var rel = kvp.Value;
+                // Only drift if enough time has passed since last change
+                if (turn - rel.TierChangedTurn < 30) continue;
+                int target = (int)DiplomaticTier.Neutral;
+                if (rel.Tier == target) continue;
+                rel.Tier            += (rel.Tier < target) ? 1 : -1;
+                rel.TierChangedTurn  = turn;
+                rel.TierChangeReason = "natural drift";
+            }
         }
 
         // ─── Helpers ──────────────────────────────────────────────────────────────

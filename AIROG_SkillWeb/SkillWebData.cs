@@ -8,6 +8,8 @@ using Newtonsoft.Json.Linq;
 
 namespace AIROG_SkillWeb
 {
+    public enum NodeType { Basic, Notable, Keystone }
+
     [Serializable]
     public class SkillNode
     {
@@ -31,6 +33,9 @@ namespace AIROG_SkillWeb
 
         /// <summary>Milestone nodes are generated at level milestones and have richer effects.</summary>
         public bool isMilestone = false;
+
+        /// <summary>Visual and mechanical tier: Basic (small), Notable (medium), Keystone (powerful with tradeoff).</summary>
+        public NodeType nodeType = NodeType.Basic;
 
         public SkillNode() { }
 
@@ -184,7 +189,16 @@ namespace AIROG_SkillWeb
         /// </summary>
         public int UnlockCost(SkillNode node)
         {
-            if (!node.isUnlocked) return SkillWebPlugin.Instance.SkillConfig.NodeCost;
+            if (!node.isUnlocked)
+            {
+                int baseCost = SkillWebPlugin.Instance.SkillConfig.NodeCost;
+                switch (node.nodeType)
+                {
+                    case NodeType.Notable:  return baseCost * 2;
+                    case NodeType.Keystone: return baseCost * 4;
+                    default:                return baseCost;
+                }
+            }
             return SkillWebPlugin.Instance.SkillConfig.UpgradeCost * node.tier;
         }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -25,6 +26,14 @@ namespace AIROG_Multiplayer
         private readonly List<ConnectedClient> _clients = new List<ConnectedClient>();
         private readonly object _clientLock = new object();
 
+        // Disconnected players awaiting reconnection
+        private readonly Dictionary<string, DisconnectedPlayer> _disconnectedPlayers
+            = new Dictionary<string, DisconnectedPlayer>();
+        private readonly object _disconnectedLock = new object();
+
+        /// <summary>How long (minutes) a disconnected player slot is kept for reconnection.</summary>
+        public float ReconnectTimeoutMinutes { get; set; } = 10f;
+
         private TcpListener _listener;
         private Thread _acceptThread;
 
@@ -39,6 +48,21 @@ namespace AIROG_Multiplayer
 
         // v2.0: turn gate — fires on main thread when a client signals TurnReady
         public event Action<ConnectedClient> OnTurnReady;
+
+        // Character stats update from a client (fires on main thread)
+        public event Action<ConnectedClient, RemoteCharacterInfo> OnCharacterUpdateReceived;
+
+        // Item transfer request from a client (fires on main thread)
+        public event Action<ConnectedClient, ItemTransferPayload> OnItemTransferReceived;
+
+        // Reconnection: fires when a client successfully reconnects (main thread)
+        public event Action<ConnectedClient, ReconnectPayload> OnClientReconnected;
+
+        // Private actions
+        public event Action<ConnectedClient, PrivateActionPayload> OnPrivateActionReceived;
+
+        // Combat
+        public event Action<ConnectedClient, CombatActionPayload> OnCombatActionReceived;
 
         public void Start(int port)
         {
@@ -73,6 +97,21 @@ namespace AIROG_Multiplayer
         public void BroadcastStoryTurn(StoryEntry entry)
         {
             Broadcast(Packet.Create(PacketType.StoryTurn, entry));
+
+            // Buffer for disconnected players awaiting reconnection
+            lock (_disconnectedLock)
+            {
+                foreach (var dc in _disconnectedPlayers.Values)
+                {
+                    lock (dc.MissedStoryTurns)
+                    {
+                        dc.MissedStoryTurns.Add(entry);
+                        // Cap at 100 to avoid unbounded memory growth
+                        if (dc.MissedStoryTurns.Count > 100)
+                            dc.MissedStoryTurns.RemoveAt(0);
+                    }
+                }
+            }
         }
 
         public void BroadcastPartyUpdate(PartyUpdatePayload party)
@@ -195,6 +234,35 @@ namespace AIROG_Multiplayer
             Log.LogInfo($"[Server] Sent inventory to {client.PlayerName} ({inventoryJson?.Length ?? 0} chars).");
         }
 
+        /// <summary>Broadcasts quest state to all connected clients.</summary>
+        public void BroadcastQuestSync(MPQuestInfo[] quests)
+        {
+            Broadcast(Packet.Create(PacketType.QuestSync, new QuestSyncPayload
+            {
+                Quests = quests,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            }));
+        }
+
+        /// <summary>Sends quest state to a single client (used on join/reconnect).</summary>
+        public void SendQuestSyncTo(ConnectedClient client, MPQuestInfo[] quests)
+        {
+            SendTo(client, Packet.Create(PacketType.QuestSync, new QuestSyncPayload
+            {
+                Quests = quests,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            }));
+        }
+
+        /// <summary>Sends a private action result to a specific client.</summary>
+        public void SendPrivateResult(ConnectedClient client, string resultText)
+        {
+            SendTo(client, Packet.Create(PacketType.PrivateResult, new PrivateResultPayload
+            {
+                ResultText = resultText
+            }));
+        }
+
         /// <summary>Broadcasts any packet to all connected clients.</summary>
         public void BroadcastAll(Packet packet) => Broadcast(packet);
 
@@ -253,28 +321,88 @@ namespace AIROG_Multiplayer
         {
             Log.LogInfo($"[Server] New connection from {client.RemoteEndPoint}");
 
+
             try
             {
                 NetworkStream stream = client.GetStream();
 
-                // First packet MUST be Hello
-                Packet hello = Packet.ReadFrom(stream);
-                if (hello == null || hello.Type != PacketType.Hello)
+                // First packet MUST be Hello or Reconnect
+                Packet firstPkt = Packet.ReadFrom(stream);
+                if (firstPkt == null)
                 {
-                    Log.LogWarning("[Server] Client sent no Hello packet — rejecting.");
+                    Log.LogWarning("[Server] Client sent no initial packet — rejecting.");
                     client.Send(Packet.Create(PacketType.Rejected));
                     client.Disconnect();
                     return;
                 }
 
-                var helloPayload = hello.GetPayload<HelloPayload>();
-                client.CharacterInfo = helloPayload.Character;
-                client.PlayerName = helloPayload.Character?.PlayerName ?? "Unknown";
+                if (firstPkt.Type == PacketType.Reconnect)
+                {
+                    var reconnPayload = firstPkt.GetPayload<ReconnectPayload>();
+                    string prevId = reconnPayload.PreviousPlayerId;
 
-                lock (_clientLock) { _clients.Add(client); }
+                    DisconnectedPlayer dc = null;
+                    lock (_disconnectedLock)
+                    {
+                        if (prevId != null && _disconnectedPlayers.TryGetValue(prevId, out dc))
+                            _disconnectedPlayers.Remove(prevId);
+                    }
 
-                // Notify main thread
-                MainThreadQueue.Enqueue(() => OnClientConnected?.Invoke(client, helloPayload));
+                    if (dc == null)
+                    {
+                        // No slot found — tell client to do a fresh join
+                        client.Send(Packet.Create(PacketType.ReconnectResult, new ReconnectResultPayload
+                        {
+                            Success = false,
+                            Reason = "No previous session found. Please join normally."
+                        }));
+                        client.Disconnect();
+                        return;
+                    }
+
+                    // Restore the original PlayerId
+                    client.RestorePlayerId(dc.PlayerId);
+                    client.CharacterInfo = reconnPayload.Character ?? dc.CharacterInfo;
+                    client.PlayerName = reconnPayload.Character?.PlayerName ?? dc.PlayerName;
+                    client.IsSpectator = reconnPayload.Character?.IsSpectator ?? dc.IsSpectator;
+                    // reconnect path
+
+                    // Send reconnect result with catch-up turns
+                    StoryEntry[] catchUp;
+                    lock (dc.MissedStoryTurns)
+                    {
+                        catchUp = dc.MissedStoryTurns.ToArray();
+                    }
+
+                    client.Send(Packet.Create(PacketType.ReconnectResult, new ReconnectResultPayload
+                    {
+                        Success = true,
+                        AssignedPlayerId = dc.PlayerId,
+                        CatchUpTurns = catchUp,
+                        Reason = $"Reconnected! {catchUp.Length} missed turn(s)."
+                    }));
+
+                    lock (_clientLock) { _clients.Add(client); }
+                    MainThreadQueue.Enqueue(() => OnClientReconnected?.Invoke(client, reconnPayload));
+                    Log.LogInfo($"[Server] Client {client.PlayerId} ({client.PlayerName}) reconnected with {catchUp.Length} catch-up turns.");
+                }
+                else if (firstPkt.Type == PacketType.Hello)
+                {
+                    var helloPayload = firstPkt.GetPayload<HelloPayload>();
+                    client.CharacterInfo = helloPayload.Character;
+                    client.PlayerName = helloPayload.Character?.PlayerName ?? "Unknown";
+                    client.IsSpectator = helloPayload.IsSpectator || (helloPayload.Character?.IsSpectator ?? false);
+
+                    lock (_clientLock) { _clients.Add(client); }
+                    MainThreadQueue.Enqueue(() => OnClientConnected?.Invoke(client, helloPayload));
+                }
+                else
+                {
+                    Log.LogWarning($"[Server] Client sent unexpected first packet: {firstPkt.Type} — rejecting.");
+                    client.Send(Packet.Create(PacketType.Rejected));
+                    client.Disconnect();
+                    return;
+                }
 
                 // Read loop
                 while (IsRunning && client.IsConnected)
@@ -296,10 +424,39 @@ namespace AIROG_Multiplayer
             finally
             {
                 lock (_clientLock) { _clients.Remove(client); }
+
+                // Save disconnected player slot for potential reconnection
+                lock (_disconnectedLock)
+                {
+                    CleanupExpiredDisconnects();
+                    _disconnectedPlayers[client.PlayerId] = new DisconnectedPlayer
+                    {
+                        PlayerId = client.PlayerId,
+                        PlayerName = client.PlayerName,
+                        CharacterInfo = client.CharacterInfo,
+                        IsSpectator = client.IsSpectator,
+                        DisconnectedAt = DateTime.UtcNow
+                    };
+                }
+
                 client.Disconnect();
                 MainThreadQueue.Enqueue(() => OnClientDisconnected?.Invoke(client));
-                Log.LogInfo($"[Server] Client {client.PlayerId} ({client.PlayerName}) disconnected.");
+                Log.LogInfo($"[Server] Client {client.PlayerId} ({client.PlayerName}) disconnected. Reconnect slot saved.");
             }
+        }
+
+        private void CleanupExpiredDisconnects()
+        {
+            // Must be called under _disconnectedLock
+            var expired = new List<string>();
+            var cutoff = DateTime.UtcNow.AddMinutes(-ReconnectTimeoutMinutes);
+            foreach (var kvp in _disconnectedPlayers)
+            {
+                if (kvp.Value.DisconnectedAt < cutoff)
+                    expired.Add(kvp.Key);
+            }
+            foreach (var key in expired)
+                _disconnectedPlayers.Remove(key);
         }
 
         private void HandleClientPacket(ConnectedClient client, Packet pkt)
@@ -331,6 +488,30 @@ namespace AIROG_Multiplayer
                     }
                     break;
 
+                case PacketType.CharacterUpdate:
+                    var charUpdate = pkt.GetPayload<RemoteCharacterInfo>();
+                    client.CharacterInfo = charUpdate;
+                    MainThreadQueue.Enqueue(() => OnCharacterUpdateReceived?.Invoke(client, charUpdate));
+                    break;
+
+                case PacketType.ItemTransfer:
+                    var transfer = pkt.GetPayload<ItemTransferPayload>();
+                    transfer.FromPlayerId = client.PlayerId; // Always authoritative from server
+                    MainThreadQueue.Enqueue(() => OnItemTransferReceived?.Invoke(client, transfer));
+                    break;
+
+                case PacketType.PrivateAction:
+                    var privAction = pkt.GetPayload<PrivateActionPayload>();
+                    privAction.PlayerId = client.PlayerId;
+                    MainThreadQueue.Enqueue(() => OnPrivateActionReceived?.Invoke(client, privAction));
+                    break;
+
+                case PacketType.CombatAction:
+                    var combatAction = pkt.GetPayload<CombatActionPayload>();
+                    combatAction.PlayerId = client.PlayerId;
+                    MainThreadQueue.Enqueue(() => OnCombatActionReceived?.Invoke(client, combatAction));
+                    break;
+
                 case PacketType.Ping:
                     client.Send(Packet.Create(PacketType.Pong));
                     break;
@@ -349,9 +530,10 @@ namespace AIROG_Multiplayer
     {
         private static ManualLogSource Log => MultiplayerPlugin.Instance.Log;
 
-        public string PlayerId { get; } = Guid.NewGuid().ToString("N").Substring(0, 8);
+        public string PlayerId { get; private set; } = Guid.NewGuid().ToString("N").Substring(0, 8);
         public string PlayerName { get; set; } = "Unknown";
         public RemoteCharacterInfo CharacterInfo { get; set; }
+        public bool IsSpectator { get; set; }
         public bool IsConnected => _tcp?.Connected ?? false;
         public string RemoteEndPoint => _tcp?.Client?.RemoteEndPoint?.ToString() ?? "?";
 
@@ -370,6 +552,9 @@ namespace AIROG_Multiplayer
             _tcp = tcp;
             _server = server;
         }
+
+        /// <summary>Restores a previous PlayerId during reconnection.</summary>
+        public void RestorePlayerId(string id) => PlayerId = id;
 
         public void SetPendingAction(string action) => PendingAction = action;
         public void ClearPendingAction() => PendingAction = null;
@@ -392,5 +577,18 @@ namespace AIROG_Multiplayer
             try { _tcp?.Close(); }
             catch { /* ignore */ }
         }
+    }
+
+    /// <summary>
+    /// Tracks a disconnected player's state for potential reconnection.
+    /// </summary>
+    public class DisconnectedPlayer
+    {
+        public string PlayerId { get; set; }
+        public string PlayerName { get; set; }
+        public RemoteCharacterInfo CharacterInfo { get; set; }
+        public bool IsSpectator { get; set; }
+        public DateTime DisconnectedAt { get; set; }
+        public List<StoryEntry> MissedStoryTurns { get; } = new List<StoryEntry>();
     }
 }

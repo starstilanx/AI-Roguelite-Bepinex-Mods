@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using AIROG_Multiplayer.Inventory;
 using AIROG_Multiplayer.Network;
+using AIROG_Multiplayer.Util;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -32,6 +33,24 @@ namespace AIROG_Multiplayer
         private float _toastHideTime;
         private MPInventoryUI _inventoryUI;
 
+        // HP edit panel (client mode only)
+        private GameObject _hpEditPanel;
+        private TMP_InputField _hpInput;
+        private TMP_InputField _maxHpInput;
+
+        private bool _isHostMode = false;
+        private bool _whisperMode = false;
+        private bool _collapsed = false;
+        private Button _whisperBtn;
+        private Button _collapseBtn;
+        private GameObject _bodyPanel;
+
+        /// <summary>
+        /// When true, the client's next action submission will be sent as a private/whisper action
+        /// instead of a normal action. Resets to false after sending.
+        /// </summary>
+        public bool IsWhisperMode => _whisperMode;
+
         private readonly List<string> _chatLines = new List<string>();
         private const int MAX_CHAT_LINES = 40;
 
@@ -39,18 +58,42 @@ namespace AIROG_Multiplayer
 
         public static void Show(WelcomePayload welcome)
         {
+            bool spectator = MultiplayerPlugin.LocalCharacterInfo?.IsSpectator ?? false;
+            string statusMsg = spectator
+                ? $"👁 Spectating — host at: {welcome?.CurrentLocation ?? "?"}"
+                : $"Connected — host at: {welcome?.CurrentLocation ?? "?"}";
+
             if (Instance != null)
             {
                 Instance.gameObject.SetActive(true);
-                Instance.SetStatus($"Connected — host at: {welcome?.CurrentLocation ?? "?"}");
+                Instance.SetStatus(statusMsg);
                 return;
             }
 
             var go = new GameObject("AIROG_CoopOverlay");
             DontDestroyOnLoad(go);
             Instance = go.AddComponent<CoopStatusOverlay>();
+            Instance._isHostMode = false;
             Instance.BuildUI();
-            Instance.SetStatus($"Connected — host at: {welcome?.CurrentLocation ?? "?"}");
+            Instance.SetStatus(statusMsg);
+        }
+
+        /// <summary>Shows the overlay for the hosting player (no HP edit, Stop Hosting button).</summary>
+        public static void ShowForHost(int port)
+        {
+            if (Instance != null)
+            {
+                Instance.gameObject.SetActive(true);
+                Instance.SetStatus($"Hosting on port {port}");
+                return;
+            }
+
+            var go = new GameObject("AIROG_CoopOverlay");
+            DontDestroyOnLoad(go);
+            Instance = go.AddComponent<CoopStatusOverlay>();
+            Instance._isHostMode = true;
+            Instance.BuildUI();
+            Instance.SetStatus($"Hosting on port {port}");
         }
 
         public static void Hide()
@@ -73,8 +116,11 @@ namespace AIROG_Multiplayer
         {
             if (_partyText == null || members == null) return;
             var sb = new StringBuilder();
+
+            // Active players first
             foreach (var m in members)
             {
+                if (m.IsSpectator) continue;
                 sb.Append($"<color=#88ccff>{EscRt(m.CharacterName)}</color>");
                 if (!string.IsNullOrEmpty(m.CharacterClass))
                     sb.Append($" <color=#aaaaaa>({EscRt(m.CharacterClass)})</color>");
@@ -82,6 +128,21 @@ namespace AIROG_Multiplayer
                 if (m.MaxHealth > 0)
                     sb.AppendLine($"  HP {m.Health}/{m.MaxHealth}");
             }
+
+            // Spectators section
+            bool hasSpectators = false;
+            foreach (var m in members)
+            {
+                if (!m.IsSpectator) continue;
+                if (!hasSpectators)
+                {
+                    sb.AppendLine("<color=#777777>Spectators:</color>");
+                    hasSpectators = true;
+                }
+                string name = !string.IsNullOrEmpty(m.CharacterName) ? m.CharacterName : m.PlayerName ?? "Spectator";
+                sb.AppendLine($"  <color=#999999>👁 {EscRt(name)}</color>");
+            }
+
             _partyText.text = sb.ToString().TrimEnd();
         }
 
@@ -175,37 +236,125 @@ namespace AIROG_Multiplayer
             aRT.sizeDelta = new Vector2(3f, 0f);
             aRT.anchoredPosition = Vector2.zero;
 
-            // Header row
-            AddLayoutLabel(panel.transform, "⚔ Co-op", 13f, FontStyles.Bold, Color.white);
+            // Header row (label + collapse toggle)
+            var headerRow = MakeHRow(panel.transform, "HeaderRow", 22f);
+            var headerLabel = new GameObject("HeaderLabel");
+            headerLabel.transform.SetParent(headerRow.transform, false);
+            var headerTxt = headerLabel.AddComponent<TextMeshProUGUI>();
+            headerTxt.text = "⚔ Co-op"; headerTxt.fontSize = 13f;
+            headerTxt.fontStyle = FontStyles.Bold; headerTxt.color = Color.white;
+            headerTxt.alignment = TextAlignmentOptions.MidlineLeft;
+            headerLabel.AddComponent<LayoutElement>().flexibleWidth = 1f;
+
+            _collapseBtn = MakeSmallButton(headerRow.transform, "▲", new Color(0.2f, 0.22f, 0.32f), ToggleCollapse);
+            _collapseBtn.gameObject.AddComponent<LayoutElement>().preferredWidth = 20f;
+
+            // Body panel — wraps everything below the header, toggled by collapse button
+            _bodyPanel = new GameObject("BodyPanel");
+            _bodyPanel.transform.SetParent(panel.transform, false);
+            _bodyPanel.AddComponent<LayoutElement>().flexibleWidth = 1f;
+            var bodyVlg = _bodyPanel.AddComponent<VerticalLayoutGroup>();
+            bodyVlg.childForceExpandWidth = true;
+            bodyVlg.childForceExpandHeight = false;
+            bodyVlg.spacing = 4f;
+            _bodyPanel.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             // Status line
-            _statusText = AddLayoutLabel(panel.transform, "Connecting...", 10f, FontStyles.Normal, new Color(0.4f, 1f, 0.5f));
+            _statusText = AddLayoutLabel(_bodyPanel.transform, "Connecting...", 10f, FontStyles.Normal, new Color(0.4f, 1f, 0.5f));
 
             // Divider
-            AddDivider(panel.transform);
+            AddDivider(_bodyPanel.transform);
 
             // Party header
-            AddLayoutLabel(panel.transform, "Party", 10f, FontStyles.Bold, new Color(0.7f, 0.85f, 1f));
+            AddLayoutLabel(_bodyPanel.transform, "Party", 10f, FontStyles.Bold, new Color(0.7f, 0.85f, 1f));
 
             // Party list
-            _partyText = AddLayoutLabel(panel.transform, "—", 9.5f, FontStyles.Normal, new Color(0.85f, 0.85f, 0.9f));
+            _partyText = AddLayoutLabel(_bodyPanel.transform, "—", 9.5f, FontStyles.Normal, new Color(0.85f, 0.85f, 0.9f));
             _partyText.alignment = TextAlignmentOptions.TopLeft;
 
             // Divider
-            AddDivider(panel.transform);
+            AddDivider(_bodyPanel.transform);
 
-            // Chat toggle button + inventory button + disconnect button row
-            var chatBtnRow = MakeHRow(panel.transform, "ChatRow", 26f);
+            // Chat toggle button + inventory button + action button row
+            var chatBtnRow = MakeHRow(_bodyPanel.transform, "ChatRow", 26f);
             MakeButton(chatBtnRow.transform, "ChatToggle", "💬 Chat", new Color(0.2f, 0.45f, 0.75f), () => ToggleChat());
+            MakeButton(chatBtnRow.transform, "DiceBtn", "🎲", new Color(0.55f, 0.35f, 0.15f), () => OnDiceButtonClicked());
             MakeButton(chatBtnRow.transform, "InvToggle", "🎒 Inv", new Color(0.2f, 0.5f, 0.22f), () => ToggleInventory());
-            MakeButton(chatBtnRow.transform, "Disconnect", "Disconnect", new Color(0.45f, 0.12f, 0.12f), () =>
+            MakeButton(chatBtnRow.transform, "QuestToggle", "📜 Quests", new Color(0.6f, 0.5f, 0.15f), () => ToggleQuests());
+            MakeButton(chatBtnRow.transform, "MapToggle", "🗺 Map", new Color(0.2f, 0.35f, 0.6f), () => ToggleMap());
+
+            if (_isHostMode)
             {
-                MultiplayerPlugin.StopClient();
-                SetStatus("Disconnected.", connected: false);
-            });
+                MakeButton(chatBtnRow.transform, "StopHosting", "Stop Hosting", new Color(0.45f, 0.12f, 0.12f), () =>
+                {
+                    MultiplayerPlugin.StopHost();
+                    SetStatus("Stopped hosting.", connected: false);
+                    gameObject.SetActive(false);
+                });
+            }
+            else
+            {
+                MakeButton(chatBtnRow.transform, "EditHP", "✎ HP", new Color(0.3f, 0.3f, 0.55f), () => ToggleHpEdit());
+                _whisperBtn = MakeButton(chatBtnRow.transform, "WhisperBtn", "🤫 Whisper", new Color(0.4f, 0.25f, 0.5f), () => ToggleWhisper());
+                MakeButton(chatBtnRow.transform, "Disconnect", "Disconnect", new Color(0.45f, 0.12f, 0.12f), () =>
+                {
+                    MultiplayerPlugin.StopClient();
+                    SetStatus("Disconnected.", connected: false);
+                });
+            }
+
+            // HP edit panel (client mode only, hidden by default)
+            if (!_isHostMode)
+            {
+                _hpEditPanel = new GameObject("HpEditPanel");
+                _hpEditPanel.transform.SetParent(_bodyPanel.transform, false);
+                var hpVlg = _hpEditPanel.AddComponent<VerticalLayoutGroup>();
+                hpVlg.childForceExpandWidth = true;
+                hpVlg.childForceExpandHeight = false;
+                hpVlg.padding = new RectOffset(4, 4, 2, 2);
+                hpVlg.spacing = 2f;
+                _hpEditPanel.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+                var hpRow = new GameObject("HpRow");
+                hpRow.transform.SetParent(_hpEditPanel.transform, false);
+                var hpRowLE = hpRow.AddComponent<LayoutElement>();
+                hpRowLE.preferredHeight = 26f;
+                hpRowLE.flexibleWidth = 1f;
+                var hpRowHlg = hpRow.AddComponent<HorizontalLayoutGroup>();
+                hpRowHlg.childForceExpandHeight = true;
+                hpRowHlg.spacing = 3f;
+
+                // Label
+                var hpLblGo = new GameObject("HpLabel");
+                hpLblGo.transform.SetParent(hpRow.transform, false);
+                var hpLbl = hpLblGo.AddComponent<TextMeshProUGUI>();
+                hpLbl.text = "HP:"; hpLbl.fontSize = 10f; hpLbl.color = new Color(0.85f, 0.85f, 0.9f);
+                hpLbl.alignment = TextAlignmentOptions.MidlineLeft;
+                hpLblGo.AddComponent<LayoutElement>().preferredWidth = 28f;
+
+                _hpInput = MakeInputField(hpRow.transform, "100");
+                _hpInput.gameObject.AddComponent<LayoutElement>().preferredWidth = 52f;
+                _hpInput.contentType = TMP_InputField.ContentType.IntegerNumber;
+
+                var slashGo = new GameObject("Slash");
+                slashGo.transform.SetParent(hpRow.transform, false);
+                var slashTxt = slashGo.AddComponent<TextMeshProUGUI>();
+                slashTxt.text = "/"; slashTxt.fontSize = 10f; slashTxt.color = new Color(0.6f, 0.6f, 0.7f);
+                slashTxt.alignment = TextAlignmentOptions.Center;
+                slashGo.AddComponent<LayoutElement>().preferredWidth = 10f;
+
+                _maxHpInput = MakeInputField(hpRow.transform, "100");
+                _maxHpInput.gameObject.AddComponent<LayoutElement>().preferredWidth = 52f;
+                _maxHpInput.contentType = TMP_InputField.ContentType.IntegerNumber;
+
+                var saveBtn = MakeSmallButton(hpRow.transform, "✓", new Color(0.2f, 0.55f, 0.25f), OnHpSaved);
+                saveBtn.gameObject.AddComponent<LayoutElement>().preferredWidth = 28f;
+
+                _hpEditPanel.SetActive(false);
+            }
 
             // ---- Chat panel (hidden by default) ----
-            _chatPanel = MakeBox(panel.transform, "ChatPanel", new Color(0.04f, 0.04f, 0.08f, 0.95f));
+            _chatPanel = MakeBox(_bodyPanel.transform, "ChatPanel", new Color(0.04f, 0.04f, 0.08f, 0.95f));
             var chatVlg = _chatPanel.AddComponent<VerticalLayoutGroup>();
             chatVlg.childForceExpandWidth = true;
             chatVlg.childForceExpandHeight = false;
@@ -275,6 +424,22 @@ namespace AIROG_Multiplayer
             Canvas.ForceUpdateCanvases();
         }
 
+        // ---- Collapse ----
+
+        private void ToggleCollapse()
+        {
+            _collapsed = !_collapsed;
+            if (_bodyPanel != null)
+                _bodyPanel.SetActive(!_collapsed);
+
+            // Update button label to indicate current state
+            if (_collapseBtn != null)
+            {
+                var txt = _collapseBtn.GetComponentInChildren<TMP_Text>();
+                if (txt != null) txt.text = _collapsed ? "▼" : "▲";
+            }
+        }
+
         // ---- Chat logic ----
 
         private void ToggleChat()
@@ -290,16 +455,167 @@ namespace AIROG_Multiplayer
             _inventoryUI.Toggle();
         }
 
+        private void ToggleQuests()
+        {
+            MPQuestUI.GetOrCreate(gameObject).Toggle();
+        }
+
+        private void ToggleMap()
+        {
+            MPMapOverlay.GetOrCreate(gameObject).Toggle();
+        }
+
+        private void ToggleWhisper()
+        {
+            _whisperMode = !_whisperMode;
+            if (_whisperBtn != null)
+            {
+                var img = _whisperBtn.GetComponent<Image>();
+                if (img != null)
+                    img.color = _whisperMode ? new Color(0.6f, 0.2f, 0.7f) : new Color(0.4f, 0.25f, 0.5f);
+                var txt = _whisperBtn.GetComponentInChildren<TMP_Text>();
+                if (txt != null)
+                    txt.text = _whisperMode ? "🤫 ON" : "🤫 Whisper";
+            }
+            AddChat("System", _whisperMode
+                ? "<color=#CC88FF>Whisper mode ON — your next action will be private.</color>"
+                : "<color=#AAAAAA>Whisper mode OFF — actions are normal.</color>", isSystem: true);
+        }
+
+        /// <summary>
+        /// If whisper mode is active, consumes it (sets to false) and returns true.
+        /// Used by the action submission patch to route the action as private.
+        /// </summary>
+        public bool ConsumeWhisperMode()
+        {
+            if (!_whisperMode) return false;
+            _whisperMode = false;
+            // Reset button appearance
+            if (_whisperBtn != null)
+            {
+                var img = _whisperBtn.GetComponent<Image>();
+                if (img != null) img.color = new Color(0.4f, 0.25f, 0.5f);
+                var txt = _whisperBtn.GetComponentInChildren<TMP_Text>();
+                if (txt != null) txt.text = "🤫 Whisper";
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Displays a private action result in the chat log with distinct formatting.
+        /// </summary>
+        public void ShowPrivateResult(string resultText)
+        {
+            AddChat("Private", $"<color=#CC88FF>[Secret] {resultText}</color>", isSystem: true);
+        }
+
         private void OnSendChat()
         {
             if (_chatInput == null) return;
             string msg = _chatInput.text.Trim();
             if (string.IsNullOrEmpty(msg)) return;
-            if (!MultiplayerPlugin.IsClient) return;
 
-            MultiplayerPlugin.Client.SendChat(msg);
-            AddChat(MultiplayerPlugin.LocalCharacterName, msg);
+            // Intercept /roll commands
+            if (msg.StartsWith("/roll ", StringComparison.OrdinalIgnoreCase))
+            {
+                HandleDiceRoll(msg.Substring(6).Trim());
+                _chatInput.text = "";
+                return;
+            }
+
+            if (MultiplayerPlugin.IsClient)
+            {
+                MultiplayerPlugin.Client.SendChat(msg);
+                AddChat(MultiplayerPlugin.LocalCharacterName, msg);
+            }
+            else if (MultiplayerPlugin.IsHost)
+            {
+                // Host relays OOC chat to all clients and shows it locally
+                var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
+                string hostName = manager?.playerCharacter?.pcGameEntity?.name ?? "Host";
+                MultiplayerPlugin.Server?.BroadcastChat(hostName, msg);
+                AddChat(hostName, msg);
+            }
             _chatInput.text = "";
+        }
+
+        private void HandleDiceRoll(string expression)
+        {
+            if (!DiceRoller.TryParse(expression, out string normalized))
+            {
+                AddChat("System", "Invalid dice expression. Use NdM+K format (e.g., 2d6+3, 1d20).", isSystem: true);
+                return;
+            }
+
+            var result = DiceRoller.Roll(normalized);
+            string senderName;
+
+            if (MultiplayerPlugin.IsClient)
+                senderName = MultiplayerPlugin.LocalCharacterName;
+            else
+            {
+                var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
+                senderName = manager?.playerCharacter?.pcGameEntity?.name ?? "Host";
+            }
+
+            string rollMsg = $"🎲 {senderName} rolled {result.Expression}: {DiceRoller.FormatResult(result)}";
+
+            if (MultiplayerPlugin.IsClient)
+            {
+                MultiplayerPlugin.Client.SendChat(rollMsg);
+                AddChat(senderName, rollMsg);
+            }
+            else if (MultiplayerPlugin.IsHost)
+            {
+                MultiplayerPlugin.Server?.BroadcastChat(senderName, rollMsg);
+                AddChat(senderName, rollMsg);
+            }
+        }
+
+        private void OnDiceButtonClicked()
+        {
+            // Open chat panel if not already open, pre-fill with /roll
+            if (_chatPanel != null && !_chatPanel.activeSelf)
+                _chatPanel.SetActive(true);
+            if (_chatInput != null)
+            {
+                _chatInput.text = "/roll 1d20";
+                _chatInput.ActivateInputField();
+                _chatInput.caretPosition = _chatInput.text.Length;
+            }
+        }
+
+        private void ToggleHpEdit()
+        {
+            if (_hpEditPanel == null) return;
+            bool next = !_hpEditPanel.activeSelf;
+            _hpEditPanel.SetActive(next);
+
+            // Pre-fill with current known values when opening
+            if (next && MultiplayerPlugin.LocalCharacterInfo != null)
+            {
+                var info = MultiplayerPlugin.LocalCharacterInfo;
+                if (_hpInput != null) _hpInput.text = info.Health.ToString();
+                if (_maxHpInput != null) _maxHpInput.text = info.MaxHealth.ToString();
+            }
+        }
+
+        private void OnHpSaved()
+        {
+            if (!MultiplayerPlugin.IsClient) return;
+            var info = MultiplayerPlugin.LocalCharacterInfo;
+            if (info == null) return;
+
+            long.TryParse(_hpInput?.text ?? "", out long hp);
+            long.TryParse(_maxHpInput?.text ?? "", out long maxHp);
+            if (maxHp <= 0) maxHp = hp;
+
+            info.Health = hp;
+            info.MaxHealth = maxHp;
+
+            MultiplayerPlugin.Client?.SendCharacterUpdate(info);
+            ShowToast($"HP updated: {hp}/{maxHp}", 2.5f);
+            _hpEditPanel?.SetActive(false);
         }
 
         // ---- Toast ----
@@ -369,7 +685,7 @@ namespace AIROG_Multiplayer
             return go;
         }
 
-        private void MakeButton(Transform parent, string name, string label, Color color, Action onClick)
+        private Button MakeButton(Transform parent, string name, string label, Color color, Action onClick)
         {
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
@@ -389,6 +705,7 @@ namespace AIROG_Multiplayer
             var tRT = txtGo.GetComponent<RectTransform>();
             tRT.anchorMin = Vector2.zero; tRT.anchorMax = Vector2.one;
             tRT.offsetMin = Vector2.zero; tRT.offsetMax = Vector2.zero;
+            return btn;
         }
 
         private Button MakeSmallButton(Transform parent, string label, Color color, Action onClick)

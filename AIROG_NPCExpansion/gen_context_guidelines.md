@@ -65,6 +65,31 @@ When modifying `AIROG_NPCExpansion/NPCData.cs`, ensure the corresponding fields 
 | **Autonomy Flags** | AllowAutoEquip, AllowSelfPreservation, AllowEconomicActivity, AllowWorldInteraction | ✗ No (runtime only) |
 | **Special Flags** | IsNemesis | ✓ Yes |
 
+### NPC Scenario Update Rate
+
+Scenario updates (the per-NPC AI call that refreshes `CurrentGoal`, `RecentThoughts`, etc.) are **staggered and randomized** to avoid flooding the LLM every turn.
+
+**How it works (`ScenarioUpdater.cs`):**
+- Each NPC tracks its own `nextUpdateTurn` stored in `_npcNextUpdateTurn` (uuid → global turn).
+- When first encountered, a random initial delay of **2–5 turns** is assigned.
+- After each update fires, the NPC's next update is scheduled **2–5 turns later** (re-randomized each time).
+- Only NPCs whose `nextUpdateTurn ≤ globalTurn` are included in a given turn's update batch.
+- The `_isUpdating` lock still prevents concurrent batches; any NPC that would have fired while a batch is running simply catches the next available turn.
+
+**Key constants:**
+| Constant | Value | Meaning |
+|---|---|---|
+| `SCENARIO_MIN_INTERVAL` | 2 | Minimum turns between scenario updates per NPC |
+| `SCENARIO_MAX_INTERVAL` | 5 | Maximum turns between scenario updates per NPC |
+| `AUTONOMY_TURNS_PER_UPDATE` | 3 | All nearby NPCs run autonomy every N turns |
+| `BARK_INTERVAL` | 5 | Ambient dialogue attempt every N turns |
+| `RUMOR_INTERVAL` | 3 | Rumor propagation every N turns |
+| `MEMORY_INTERVAL` | 10 | Memory synthesis + quest deadlines every N turns |
+
+**Design rationale:** With 5+ nearby NPCs and `TURNS_PER_UPDATE = 1`, every player action triggered 5+ sequential LLM calls. Staggering reduces this to typically 0–2 calls per turn, with the load spread naturally over time.
+
+---
+
 ### Scene Snapshot Feature
 
 The NPCProvider now includes a **Scene Snapshot** that provides contextual awareness:

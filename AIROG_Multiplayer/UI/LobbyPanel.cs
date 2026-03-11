@@ -26,9 +26,11 @@ namespace AIROG_Multiplayer
         private TMP_InputField _charHpInput;
         private TMP_InputField _charMaxHpInput;
         private TMP_InputField _charLevelInput;
-        private TMP_Text _statusText;
+            private TMP_Text _statusText;
         private Button _hostBtn;
         private Button _joinBtn;
+        private Button _spectateBtn;
+        private Button _reconnectBtn;
         private Button _closeBtn;
         private MainMenu _mainMenu;
 
@@ -195,6 +197,16 @@ namespace AIROG_Multiplayer
                 new Vector2(40, y - 10), new Vector2(150, 36),
                 new Color(0.2f, 0.7f, 0.45f), OnJoinClicked);
 
+            _spectateBtn = CreateButton(dlg, "SpectateBtn", "👁 Spectate",
+                new Vector2(40, y - 50), new Vector2(150, 32),
+                new Color(0.4f, 0.4f, 0.55f), OnSpectateClicked);
+
+            _reconnectBtn = CreateButton(dlg, "ReconnectBtn", "🔄 Reconnect",
+                new Vector2(-120, y - 50), new Vector2(150, 32),
+                new Color(0.6f, 0.45f, 0.2f), OnReconnectClicked);
+            // Only show if there's a saved PlayerId from a previous session
+            _reconnectBtn.gameObject.SetActive(!string.IsNullOrEmpty(PlayerPrefs.GetString("MP_LastPlayerId", "")));
+
             _closeBtn = CreateButton(dlg, "CloseBtn", "✕",
                 new Vector2(225, 360), new Vector2(32, 32),
                 new Color(0.55f, 0.15f, 0.15f), () => Hide());
@@ -211,6 +223,12 @@ namespace AIROG_Multiplayer
 
             _hostBtn.interactable = !joined;
             _joinBtn.interactable = !hosting;
+            if (_spectateBtn != null) _spectateBtn.interactable = !hosting;
+            if (_reconnectBtn != null)
+            {
+                _reconnectBtn.interactable = !hosting && !joined;
+                _reconnectBtn.gameObject.SetActive(!string.IsNullOrEmpty(PlayerPrefs.GetString("MP_LastPlayerId", "")));
+            }
 
             if (hosting)
             {
@@ -313,6 +331,121 @@ namespace AIROG_Multiplayer
                 {
                     SetStatus($"✖ {reason}", new Color(1f, 0.4f, 0.4f));
                     _joinBtn.GetComponentInChildren<TMP_Text>().text = "Join Game";
+                    RefreshButtonStates();
+                }
+            );
+        }
+
+        private void OnSpectateClicked()
+        {
+            if (MultiplayerPlugin.IsClient)
+            {
+                MultiplayerPlugin.StopClient();
+                SetStatus("Disconnected.", new Color(1f, 0.8f, 0.4f));
+                return;
+            }
+
+            string ip = _ipInput.text.Trim();
+            if (string.IsNullOrEmpty(ip)) { SetStatus("✖ Enter a host IP address.", new Color(1f, 0.4f, 0.4f)); return; }
+            if (!int.TryParse(_portInput.text, out int port)) port = 7777;
+
+            MultiplayerPlugin.Instance.LastIP.Value = ip;
+            MultiplayerPlugin.Instance.LastPort.Value = port;
+            MultiplayerPlugin.LocalCharacterName = "Spectator";
+
+            SetStatus($"Connecting as spectator to {ip}:{port}...", Color.yellow);
+
+            var charInfo = new RemoteCharacterInfo
+            {
+                PlayerName = "Spectator",
+                CharacterName = "Spectator",
+                CharacterClass = "",
+                Health = 0,
+                MaxHealth = 0,
+                Level = 0,
+                IsSpectator = true
+            };
+
+            MultiplayerPlugin.StartClient(ip, port, charInfo,
+                onConnected: (welcome) =>
+                {
+                    SetStatus($"✔ Spectating!", new Color(0.4f, 1f, 0.4f));
+                    CoopStatusOverlay.Show(welcome);
+                    Hide();
+                },
+                onDisconnected: (reason) =>
+                {
+                    SetStatus($"✖ {reason}", new Color(1f, 0.4f, 0.4f));
+                    RefreshButtonStates();
+                }
+            );
+        }
+
+        private void OnReconnectClicked()
+        {
+            if (MultiplayerPlugin.IsClient || MultiplayerPlugin.IsHost) return;
+
+            string previousId = PlayerPrefs.GetString("MP_LastPlayerId", "");
+            if (string.IsNullOrEmpty(previousId))
+            {
+                SetStatus("✖ No previous session to reconnect to.", new Color(1f, 0.4f, 0.4f));
+                return;
+            }
+
+            // Auto-fill IP/port from saved values if the fields are empty
+            string savedHost = PlayerPrefs.GetString("MP_LastHost", "");
+            int savedPort = PlayerPrefs.GetInt("MP_LastPort", 7777);
+            if (!string.IsNullOrEmpty(savedHost) && string.IsNullOrEmpty(_ipInput.text.Trim()))
+                _ipInput.text = savedHost;
+            if (string.IsNullOrEmpty(_portInput.text.Trim()))
+                _portInput.text = savedPort.ToString();
+
+            string ip = _ipInput.text.Trim();
+            if (string.IsNullOrEmpty(ip)) { SetStatus("✖ Enter a host IP address.", new Color(1f, 0.4f, 0.4f)); return; }
+            if (!int.TryParse(_portInput.text, out int port)) port = 7777;
+
+            // Build character info from form fields (or saved PlayerPrefs)
+            string charName = _charNameInput.text.Trim();
+            if (string.IsNullOrEmpty(charName)) charName = PlayerPrefs.GetString("MP_CharName", "Player");
+
+            long hp    = long.TryParse(_charHpInput.text,    out long hpVal)    ? hpVal    : 100;
+            long maxHp = long.TryParse(_charMaxHpInput.text, out long maxHpVal) ? maxHpVal : 100;
+            int  level = int.TryParse (_charLevelInput.text, out int  lvlVal)   ? lvlVal   : 1;
+
+            MultiplayerPlugin.Instance.LastIP.Value = ip;
+            MultiplayerPlugin.Instance.LastPort.Value = port;
+            MultiplayerPlugin.LocalCharacterName = charName;
+
+            SetStatus($"Reconnecting to {ip}:{port}...", Color.yellow);
+
+            var charInfo = new RemoteCharacterInfo
+            {
+                PlayerName = charName,
+                CharacterName = charName,
+                CharacterClass = _charClassInput.text.Trim(),
+                CharacterBackground = _charBgInput.text.Trim(),
+                Personality = _charPersonalityInput.text.Trim(),
+                CharacterAppearance = _charAppearanceInput.text.Trim(),
+                Health = hp,
+                MaxHealth = maxHp,
+                Level = level
+            };
+
+            MultiplayerPlugin.StartClientReconnect(ip, port, previousId, charInfo,
+                onReconnected: (result) =>
+                {
+                    SetStatus($"✔ Reconnected! Replayed {result.CatchUpTurns?.Length ?? 0} missed turn(s).", new Color(0.4f, 1f, 0.4f));
+                    CoopStatusOverlay.Show(new WelcomePayload
+                    {
+                        AssignedPlayerId = result.AssignedPlayerId,
+                        HostCharacterName = "Host",
+                        CurrentLocation = ""
+                    });
+                    Hide();
+                },
+                onDisconnected: (reason) =>
+                {
+                    SetStatus($"✖ {reason}", new Color(1f, 0.4f, 0.4f));
                     RefreshButtonStates();
                 }
             );

@@ -78,13 +78,14 @@ namespace AIROG_SkillWeb
             return 0f;
         }
 
-        static SkillNode BuildNode(NodeInfo info, Vector2 position, string treeId = null)
+        static SkillNode BuildNode(NodeInfo info, Vector2 position, string treeId = null, NodeType nodeType = NodeType.Basic)
         {
             var node = new SkillNode(Guid.NewGuid().ToString(), info.name, info.description, position)
             {
                 treeId     = treeId,
                 isUnlocked = false,
-                tier       = 0
+                tier       = 0,
+                nodeType   = nodeType
             };
             if (info.stats != null)
                 foreach (var kvp in info.stats)
@@ -117,7 +118,8 @@ namespace AIROG_SkillWeb
         /// Optionally constrained to a specific discipline tree.
         /// </summary>
         public static async Task<SkillNode> GenerateLoreBasedNode(
-            GameplayManager manager, SkillNode parent, Vector2 position, SkillTree tree = null)
+            GameplayManager manager, SkillNode parent, Vector2 position, SkillTree tree = null,
+            NodeType nodeType = NodeType.Notable)
         {
             string worldCtx  = WorldContext(manager);
             string playerCtx = PlayerContext(manager);
@@ -132,16 +134,21 @@ namespace AIROG_SkillWeb
                   "\nThis skill may be an evolution or complement of the parent."
                 : "";
 
-            // Use string concatenation to avoid escaping issues in verbatim strings
+            string typeGuidance = nodeType == NodeType.Notable
+                ? "- This is a NOTABLE node: meaningful, named passive with moderate power.\n" +
+                  "- Stats: values 5-12. Maximum 2 stats and 2 traits.\n"
+                : "- This is a BASIC node: a small stepping-stone passive.\n" +
+                  "- Stats: values 3-8. Maximum 1 stat and 1 trait.\n";
+
             string prompt = "You are designing a node for a lore-driven Path-of-Exile-style skill web.\n\n" +
                 "=== WORLD ===\n" + worldCtx + "\n\n" +
                 "=== PLAYER ===\n" + playerCtx + disciplineCtx + parentCtx + "\n\n" +
                 "=== RULES ===\n" +
                 "- Name: 2-5 evocative words\n" +
                 "- Description: 1-2 sentences, grounded in the world's lore\n" +
-                "- Stats: use ONLY these keys: Strength, Dexterity, Intellect, Cunning, Charisma. Values 3-15.\n" +
-                "- Traits: non-numerical capabilities such as Water Breathing, Passive Regeneration, Improved Tracking\n" +
-                "- Maximum 2 stats and 2 traits\n\n" +
+                "- Stats: use ONLY these keys: Strength, Dexterity, Intellect, Cunning, Charisma.\n" +
+                typeGuidance +
+                "- Traits: non-numerical capabilities such as Water Breathing, Passive Regeneration, Improved Tracking\n\n" +
                 "Respond ONLY with valid JSON, no prose:\n" +
                 "{\n" +
                 "  \"name\": \"\",\n" +
@@ -163,7 +170,7 @@ namespace AIROG_SkillWeb
                 var info = ExtractSingleNodeInfo(response);
                 if (info == null) return null;
 
-                var node = BuildNode(info, position, tree?.id);
+                var node = BuildNode(info, position, tree?.id, nodeType);
                 await GenerateImageForNode(manager, node);
                 return node;
             }
@@ -250,7 +257,7 @@ namespace AIROG_SkillWeb
                     };
                     newTrees.Add(t);
 
-                    var node = BuildNode(info, positions[i], t.id);
+                    var node = BuildNode(info, positions[i], t.id, NodeType.Notable);
                     await GenerateImageForNode(manager, node);
                     newNodes.Add(node);
                 }
@@ -276,7 +283,7 @@ namespace AIROG_SkillWeb
 
             foreach (var pos in positions)
             {
-                var node = await GenerateLoreBasedNode(manager, origin, pos, tree);
+                var node = await GenerateLoreBasedNode(manager, origin, pos, tree, NodeType.Basic);
                 if (node == null) continue;
                 if (data.TryAddNode(node))
                 {
@@ -285,6 +292,67 @@ namespace AIROG_SkillWeb
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// Generates a Keystone node: a paradigm-shifting passive with power and a tradeoff.
+        /// </summary>
+        public static async Task<SkillNode> GenerateKeystoneNode(
+            GameplayManager manager, SkillNode parent, Vector2 position, SkillTree tree = null)
+        {
+            string worldCtx  = WorldContext(manager);
+            string playerCtx = PlayerContext(manager);
+
+            string disciplineCtx = tree != null
+                ? "\nDiscipline: " + tree.name + "\nDiscipline Theme: " + tree.purpose +
+                  "\nThis keystone MUST fit thematically within this discipline."
+                : "";
+
+            string parentCtx = parent != null
+                ? "\nBranching from: " + parent.name + " - " + parent.description
+                : "";
+
+            string prompt = "You are designing a KEYSTONE node for a lore-driven Path-of-Exile-style skill web.\n\n" +
+                "=== WORLD ===\n" + worldCtx + "\n\n" +
+                "=== PLAYER ===\n" + playerCtx + disciplineCtx + parentCtx + "\n\n" +
+                "=== RULES ===\n" +
+                "- Keystones are LEGENDARY, paradigm-shifting passives that fundamentally alter the character.\n" +
+                "- Name: 2-4 powerful, iconic words (feel legendary and unique)\n" +
+                "- Description: 2-3 sentences. Describe a transformative ability AND a meaningful cost or limitation.\n" +
+                "- Stats: 1-2 from [Strength, Dexterity, Intellect, Cunning, Charisma]. Values 12-20.\n" +
+                "- Traits: 1-2 powerful narrative capabilities. One MAY be a drawback (e.g. 'Cannot Heal Naturally').\n" +
+                "- Maximum 2 stats and 2 traits\n\n" +
+                "Respond ONLY with valid JSON, no prose:\n" +
+                "{\n" +
+                "  \"name\": \"\",\n" +
+                "  \"description\": \"\",\n" +
+                "  \"stats\": { \"StatName\": 15 },\n" +
+                "  \"traits\": [\"Powerful Trait\", \"Drawback Trait\"]\n" +
+                "}";
+
+            try
+            {
+                string response = await AIAsker.GenerateTxtNoTryStrStyle(
+                    AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER,
+                    prompt,
+                    AIAsker.ChatGptPostprocessingType.NONE,
+                    false, false, null, false, true,
+                    AIAsker.ModelOverrideMode.GOOD_FOR_CORRECTNESS,
+                    true);
+
+                var info = ExtractSingleNodeInfo(response);
+                if (info == null) return null;
+
+                var node = BuildNode(info, position, tree?.id, NodeType.Keystone);
+                node.isMilestone = true;
+                await GenerateImageForNode(manager, node);
+                return node;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError("[SkillWeb] GenerateKeystoneNode failed: " + ex.Message);
+                return null;
+            }
         }
 
         // ── Image generation ────────────────────────────────────────────────────

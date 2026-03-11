@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using HarmonyLib;
+using AIROG_Multiplayer.Combat;
 using AIROG_Multiplayer.Inventory;
 using AIROG_Multiplayer.Network;
 using UnityEngine;
@@ -98,6 +99,7 @@ namespace AIROG_Multiplayer.Patches
 
                 foreach (var client in clients)
                 {
+                    if (client.IsSpectator) continue; // Spectators are not part of the AI narrative
                     var info = client.CharacterInfo;
                     if (info == null) continue;
 
@@ -189,8 +191,22 @@ namespace AIROG_Multiplayer.Patches
                 if (newLocation == _lastBroadcastLocation) return;
 
                 _lastBroadcastLocation = newLocation;
-                string description = __instance.currentPlace?.description ?? "";
-                MultiplayerPlugin.BroadcastLocation(newLocation, description);
+                var place = __instance.currentPlace;
+                string description = place?.description ?? "";
+
+                // Build extended location data for the map overlay
+                var payload = new LocationUpdatePayload
+                {
+                    LocationName = newLocation,
+                    LocationDescription = description,
+                    ParentLocationName = place?.parentPlace?.name ?? place?.parentRegion?.name ?? "",
+                    DangerLevel = place?.dangerLvl ?? -1,
+                    AdjacentLocationNames = place?.childPlaces?.ConvertAll(p => p.name)?.ToArray(),
+                    NPCNames = place?.npcs?.ConvertAll(n => n.name)?.ToArray(),
+                    EnemyNames = place?.enemies?.ConvertAll(e => e.name)?.ToArray(),
+                    ThingNames = place?.things?.ConvertAll(t => t.name)?.ToArray()
+                };
+                MultiplayerPlugin.BroadcastLocationPayload(payload);
             }
             catch (Exception ex)
             {
@@ -210,32 +226,62 @@ namespace AIROG_Multiplayer.Patches
             if (illustratedStoryTurn == null) return;
             if (MultiplayerPlugin.Server == null) return;
 
+            // ── Capture ALL Unity-managed values on the main thread BEFORE Task.Run ──
+            // GetImgPathNoExt() accesses SS.I.saveSubDirAsArg, and SS.I.saveTopLvlDir are
+            // Unity objects — accessing them from Task.Run throws a silent UnityException.
+            string pathNoExt;
+            try
+            {
+                pathNoExt = illustratedStoryTurn.GetImgPathNoExt(GameEntity.ImgType.REGULAR);
+            }
+            catch (Exception ex)
+            {
+                MultiplayerPlugin.Instance?.Log.LogError($"[Host] GetImgPathNoExt failed: {ex.Message}");
+                return;
+            }
+
+            string saveTopLvlDir = MultiplayerPlugin.SaveTopLvlDir; // Cached, thread-safe
+            string turnText = illustratedStoryTurn.turnTxt ?? "";
+
+            UnityEngine.Debug.Log($"[MP-DIAG] Postfix_UpdateMainImageWithXfade: relaying image pathNoExt='{pathNoExt}'");
+
             Task.Run(() =>
             {
                 try
                 {
-                    string pathNoExt = illustratedStoryTurn.GetImgPathNoExt(GameEntity.ImgType.REGULAR);
-                    string fullPathNoExt = System.IO.Path.Combine(SS.I.saveTopLvlDir, pathNoExt);
+                    string fullPathNoExt = System.IO.Path.Combine(saveTopLvlDir, pathNoExt);
 
-                    string pngPath = fullPathNoExt + ".png";
-                    bool isPng = File.Exists(pngPath);
-                    if (!isPng)
+                    // Poll up to 10 seconds — image file may be renamed from _unfinished.png
+                    // to {uuid}.png just after UpdateMainImageWithXfade is first called.
+                    string pngPath = null;
+                    for (int attempt = 0; attempt < 20; attempt++)
                     {
-                        pngPath = fullPathNoExt + ".jpg";
-                        if (!File.Exists(pngPath)) return;
+                        string tryPng = fullPathNoExt + ".png";
+                        if (File.Exists(tryPng)) { pngPath = tryPng; break; }
+                        string tryJpg = fullPathNoExt + ".jpg";
+                        if (File.Exists(tryJpg)) { pngPath = tryJpg; break; }
+                        System.Threading.Thread.Sleep(500);
+                    }
+
+                    if (pngPath == null)
+                    {
+                        UnityEngine.Debug.Log($"[MP-DIAG] Image file not found after polling: {fullPathNoExt}");
+                        MultiplayerPlugin.Instance?.Log.LogWarning($"[Host] Image not found after polling: {fullPathNoExt}");
+                        return;
                     }
 
                     byte[] imgBytes = File.ReadAllBytes(pngPath);
                     string base64 = Convert.ToBase64String(imgBytes);
-                    string turnText = illustratedStoryTurn.turnTxt ?? "";
                     string fileName = System.IO.Path.GetFileName(pngPath);
 
                     MultiplayerPlugin.Server?.BroadcastStoryImage(base64, turnText, fileName);
+                    UnityEngine.Debug.Log($"[MP-DIAG] Broadcast story image ({imgBytes.Length / 1024}KB) '{fileName}'");
                     MultiplayerPlugin.Instance?.Log.LogInfo(
                         $"[Host] Broadcast story image ({imgBytes.Length / 1024}KB) '{fileName}' for turn: {TruncateStr(turnText, 40)}");
                 }
                 catch (Exception ex)
                 {
+                    UnityEngine.Debug.Log($"[MP-DIAG] Image relay Task.Run error: {ex.GetType().Name}: {ex.Message}");
                     MultiplayerPlugin.Instance?.Log.LogError($"[Multiplayer] Image relay error: {ex.Message}");
                 }
             });
@@ -338,9 +384,24 @@ namespace AIROG_Multiplayer.Patches
 
                 if (!string.IsNullOrEmpty(text))
                 {
-                    MultiplayerPlugin.Client.SendAction(text);
-                    MultiplayerPlugin.Client.SendTurnReady();
-                    CoopStatusOverlay.Instance?.ShowActionQueued(text);
+                    // Check whisper mode — route to private action if active
+                    if (CoopStatusOverlay.Instance != null && CoopStatusOverlay.Instance.ConsumeWhisperMode())
+                    {
+                        MultiplayerPlugin.Client.SendPrivateAction(text);
+                        CoopStatusOverlay.Instance?.ShowActionQueued($"[Whisper] {text}");
+                    }
+                    else if (CombatManager.IsCombatActive)
+                    {
+                        // Route to combat action during active combat
+                        MultiplayerPlugin.Client.SendCombatAction(text);
+                        CoopStatusOverlay.Instance?.ShowActionQueued($"[Combat] {text}");
+                    }
+                    else
+                    {
+                        MultiplayerPlugin.Client.SendAction(text);
+                        MultiplayerPlugin.Client.SendTurnReady();
+                        CoopStatusOverlay.Instance?.ShowActionQueued(text);
+                    }
                 }
                 return false; // Block local AI turn
             }
@@ -403,6 +464,7 @@ namespace AIROG_Multiplayer.Patches
                         sb.AppendLine("This is a co-op session. The following characters are adventuring alongside the player:");
                         foreach (var c in clients)
                         {
+                            if (c.IsSpectator) continue; // Spectators not in AI context
                             var info = c.CharacterInfo;
                             if (info == null) continue;
                             sb.Append($"- {info.CharacterName}");
@@ -525,6 +587,16 @@ namespace AIROG_Multiplayer.Patches
             catch (Exception ex)
             {
                 MultiplayerPlugin.Instance?.Log.LogError($"[Multiplayer] WriteSaveFilePatch inventory sync error: {ex.Message}");
+            }
+
+            // Sync quest state to all clients
+            try
+            {
+                MultiplayerPlugin.BroadcastQuestSync();
+            }
+            catch (Exception ex)
+            {
+                MultiplayerPlugin.Instance?.Log.LogError($"[Multiplayer] WriteSaveFilePatch quest sync error: {ex.Message}");
             }
         }
     }

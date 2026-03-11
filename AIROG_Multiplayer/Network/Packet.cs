@@ -42,7 +42,28 @@ namespace AIROG_Multiplayer.Network
         Disconnect,  // Graceful disconnect notification
 
         // Inventory
-        InventorySync   // Host -> All Clients: full MPInventoryDatabase JSON
+        InventorySync,  // Host -> All Clients: full MPInventoryDatabase JSON
+
+        // Equipment
+        ItemTransfer,   // Client -> Host: request to gift an item to another player
+
+        // Reconnection
+        Reconnect,       // Client -> Host: "I'm reconnecting with my previous PlayerId"
+        ReconnectResult, // Host -> Client: success/fail + catch-up data
+
+        // Quests
+        QuestSync,       // Host -> All Clients: current quest state
+
+        // Private Actions
+        PrivateAction,   // Client -> Host: secret action request
+        PrivateResult,   // Host -> Client: private action result
+
+        // Combat
+        CombatBegin,        // Host -> All Clients: combat started, here's the turn order
+        CombatTurnNotify,   // Host -> Client: it's your turn to act
+        CombatAction,       // Client -> Host: my combat action
+        CombatResult,       // Host -> All Clients: AI resolution of the combat round
+        CombatEnd           // Host -> All Clients: combat is over
     }
 
     /// <summary>
@@ -62,6 +83,7 @@ namespace AIROG_Multiplayer.Network
         public long MaxHealth { get; set; }
         public int Level { get; set; }
         public string CurrentLocation { get; set; }
+        public bool IsSpectator { get; set; }
     }
 
     /// <summary>
@@ -154,6 +176,7 @@ namespace AIROG_Multiplayer.Network
     {
         public string PluginVersion { get; set; }
         public RemoteCharacterInfo Character { get; set; }
+        public bool IsSpectator { get; set; }
     }
 
     [Serializable]
@@ -194,6 +217,14 @@ namespace AIROG_Multiplayer.Network
     {
         public string LocationName { get; set; }
         public string LocationDescription { get; set; }
+
+        // Extended map data (F3)
+        public string[] AdjacentLocationNames { get; set; }
+        public string[] NPCNames { get; set; }
+        public string[] EnemyNames { get; set; }
+        public int DangerLevel { get; set; }
+        public string ParentLocationName { get; set; }
+        public string[] ThingNames { get; set; }
     }
 
     [Serializable]
@@ -264,6 +295,112 @@ namespace AIROG_Multiplayer.Network
     {
         /// <summary>Compact JSON of MPInventoryDatabase.</summary>
         public string InventoryJson { get; set; }
+    }
+
+    /// <summary>
+    /// Requests that the host transfer one item from fromPlayerId's inventory to toPlayerId's.
+    /// The host sets FromPlayerId server-side from the sending ConnectedClient.
+    /// </summary>
+    [Serializable]
+    public class ItemTransferPayload
+    {
+        public string FromPlayerId { get; set; }
+        public string ToPlayerId { get; set; }
+        public string ItemName { get; set; }
+    }
+
+    /// <summary>
+    /// Sent by a client attempting to reconnect with a previously assigned PlayerId.
+    /// </summary>
+    [Serializable]
+    public class ReconnectPayload
+    {
+        public string PluginVersion { get; set; }
+        public string PreviousPlayerId { get; set; }
+        public RemoteCharacterInfo Character { get; set; }
+    }
+
+    /// <summary>
+    /// Server response to a reconnect attempt.
+    /// </summary>
+    [Serializable]
+    public class ReconnectResultPayload
+    {
+        public bool Success { get; set; }
+        public string Reason { get; set; }
+        public string AssignedPlayerId { get; set; }
+        public StoryEntry[] CatchUpTurns { get; set; }
+    }
+
+    // --- Quest Sync ---
+
+    /// <summary>
+    /// Lightweight quest info for multiplayer display (extracted from game's QuestLogV4).
+    /// </summary>
+    [Serializable]
+    public class MPQuestInfo
+    {
+        public string Id { get; set; }
+        public string Title { get; set; }
+        public string Objective { get; set; }
+        public string Status { get; set; }  // "Active", "Completed", "Failed"
+        public string QuestType { get; set; } // "Main", "Side"
+        public string GiverName { get; set; }
+    }
+
+    [Serializable]
+    public class QuestSyncPayload
+    {
+        public MPQuestInfo[] Quests { get; set; }
+        public long Timestamp { get; set; }
+    }
+
+    // --- Private Actions ---
+
+    [Serializable]
+    public class PrivateActionPayload
+    {
+        public string PlayerId { get; set; }
+        public string CharacterName { get; set; }
+        public string ActionText { get; set; }
+    }
+
+    [Serializable]
+    public class PrivateResultPayload
+    {
+        public string ResultText { get; set; }
+    }
+
+    // --- Combat ---
+
+    [Serializable]
+    public class CombatBeginPayload
+    {
+        public string[] TurnOrder { get; set; }   // Character names in initiative order
+        public string[] EnemyNames { get; set; }
+        public int RoundNumber { get; set; }
+    }
+
+    [Serializable]
+    public class CombatTurnNotifyPayload
+    {
+        public string ActiveCharacterName { get; set; }
+        public int RoundNumber { get; set; }
+    }
+
+    [Serializable]
+    public class CombatActionPayload
+    {
+        public string PlayerId { get; set; }
+        public string CharacterName { get; set; }
+        public string ActionText { get; set; }
+    }
+
+    [Serializable]
+    public class CombatResultPayload
+    {
+        public string NarrativeText { get; set; }
+        public int RoundNumber { get; set; }
     }
 
     /// <summary>

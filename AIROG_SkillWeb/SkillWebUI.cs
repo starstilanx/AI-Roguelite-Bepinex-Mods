@@ -23,7 +23,9 @@ namespace AIROG_SkillWeb
         private RectTransform _nodeContainer;
         private RectTransform _lineContainer;
         private Canvas        _tooltipCanvas;
-        private Sprite        _nodeFrameSprite;
+        private Sprite        _spriteBasic;
+        private Sprite        _spriteNotable;
+        private Sprite        _spriteKeystone;
 
         // Header / HUD
         private TextMeshProUGUI _pointsText;
@@ -149,7 +151,7 @@ namespace AIROG_SkillWeb
             _lineContainer = NewLayer("Lines", _contentRoot);
             _nodeContainer = NewLayer("Nodes", _contentRoot);
 
-            LoadNodeFrame();
+            LoadNodeFrames();
 
             // Bottom bar (0% – 6%) ----------------------------------------------
             BuildBottomBar();
@@ -215,21 +217,30 @@ namespace AIROG_SkillWeb
             // Status text (left)
             _statusText = NewText("Status", bar.transform, "", 15, TextAlignmentOptions.Left);
             _statusText.color = Color.yellow;
-            AnchorText(_statusText.rectTransform, new Vector2(0, 0), new Vector2(0.55f, 1), new Vector2(10, 0), Vector2.zero);
+            AnchorText(_statusText.rectTransform, new Vector2(0, 0), new Vector2(0.40f, 1), new Vector2(10, 0), Vector2.zero);
 
-            // Extend Web button
+            // Extend Web button (generates Notable)
             var extBtn = NewButton("Extend Web", bar.transform, new Color(0.08f, 0.18f, 0.08f));
             var extRect = extBtn.GetComponent<RectTransform>();
-            extRect.anchorMin = new Vector2(0.55f, 0.1f);
-            extRect.anchorMax = new Vector2(0.75f, 0.9f);
+            extRect.anchorMin = new Vector2(0.41f, 0.1f);
+            extRect.anchorMax = new Vector2(0.56f, 0.9f);
             extRect.offsetMin = extRect.offsetMax = Vector2.zero;
             extRect.sizeDelta = Vector2.zero;
             extBtn.GetComponent<Button>().onClick.AddListener(AddLoreNodeAction);
 
+            // Keystone button
+            var ksBtn = NewButton("⬡ Keystone", bar.transform, new Color(0.22f, 0.15f, 0.04f));
+            var ksRect = ksBtn.GetComponent<RectTransform>();
+            ksRect.anchorMin = new Vector2(0.57f, 0.1f);
+            ksRect.anchorMax = new Vector2(0.72f, 0.9f);
+            ksRect.offsetMin = ksRect.offsetMax = Vector2.zero;
+            ksRect.sizeDelta = Vector2.zero;
+            ksBtn.GetComponent<Button>().onClick.AddListener(AddKeystoneNodeAction);
+
             // New Discipline button
             var discBtn = NewButton("New Discipline", bar.transform, new Color(0.15f, 0.07f, 0.25f));
             var discRect = discBtn.GetComponent<RectTransform>();
-            discRect.anchorMin = new Vector2(0.76f, 0.1f);
+            discRect.anchorMin = new Vector2(0.73f, 0.1f);
             discRect.anchorMax = new Vector2(0.99f, 0.9f);
             discRect.offsetMin = discRect.offsetMax = Vector2.zero;
             discRect.sizeDelta = Vector2.zero;
@@ -436,9 +447,11 @@ namespace AIROG_SkillWeb
             var tree = _data.GetTree(node.treeId);
 
             // Title line
+            string typeTag = node.nodeType == NodeType.Keystone ? "<color=#FFD700>[⬡ Keystone] </color>" :
+                             node.nodeType == NodeType.Notable  ? "<color=#AAD4FF>[◆ Notable] </color>"  : "";
             string tierTag = node.isUnlocked ? " [T" + node.tier + "]" : " [Locked]";
             string treeTag = tree != null ? "\n<size=11><color=" + tree.colorHex + ">" + tree.name + "</color></size>" : "";
-            _actionTitle.text = node.name + tierTag + treeTag;
+            _actionTitle.text = typeTag + node.name + tierTag + treeTag;
 
             // Description + stats + traits
             string stats = "";
@@ -555,7 +568,8 @@ namespace AIROG_SkillWeb
             if (_isGenerating) return;
             _isGenerating = true;
             var tree  = _data.GetTree(origin.treeId);
-            int count = SkillWebPlugin.Instance.SkillConfig.FrontierNodesPerUnlock;
+            var cfg   = SkillWebPlugin.Instance.SkillConfig;
+            int count = UnityEngine.Random.Range(cfg.FrontierNodesMin, cfg.FrontierNodesMax + 1);
             SetStatus("Expanding the web...");
             var newNodes = await SkillWebGenerator.GenerateFrontierNodes(_manager, origin, _data, tree, count);
             SkillWebPlugin.Instance.SaveData();
@@ -614,7 +628,11 @@ namespace AIROG_SkillWeb
             obj.transform.SetParent(_nodeContainer, false);
             var rect = obj.GetComponent<RectTransform>();
             rect.anchoredPosition = node.position;
-            rect.sizeDelta        = new Vector2(160, 90); // matches PassiveSkillRing aspect ratio
+            float nodeSize = node.nodeType == NodeType.Keystone ? 140f :
+                             node.nodeType == NodeType.Notable  ? 110f : 90f;
+            float iconSize = nodeSize * 0.60f;
+            float halfSize = nodeSize * 0.5f;
+            rect.sizeDelta = new Vector2(nodeSize, nodeSize);
 
             var tree     = _data.GetTree(node.treeId);
             Color col    = GetTreeColor(tree);
@@ -624,7 +642,7 @@ namespace AIROG_SkillWeb
             // Icon (inside ring)
             var iconObj = new GameObject("Icon", typeof(RectTransform), typeof(RawImage));
             iconObj.transform.SetParent(obj.transform, false);
-            iconObj.GetComponent<RectTransform>().sizeDelta = new Vector2(58, 58);
+            iconObj.GetComponent<RectTransform>().sizeDelta = new Vector2(iconSize, iconSize);
             var rawImg = iconObj.GetComponent<RawImage>();
             if (!string.IsNullOrEmpty(node.imageUuid))
                 TryLoadNodeImage(node.imageUuid, rawImg);
@@ -638,11 +656,13 @@ namespace AIROG_SkillWeb
             frameRect.anchorMin = Vector2.zero; frameRect.anchorMax = Vector2.one;
             frameRect.offsetMin = Vector2.zero; frameRect.offsetMax = Vector2.zero;
             var frameImg = frameObj.GetComponent<Image>();
-            if (_nodeFrameSprite != null)
+            Sprite frameSprite = node.nodeType == NodeType.Keystone ? _spriteKeystone :
+                                 node.nodeType == NodeType.Notable  ? _spriteNotable  : _spriteBasic;
+            if (frameSprite != null)
             {
-                frameImg.sprite          = _nodeFrameSprite;
-                frameImg.type            = Image.Type.Simple;
-                frameImg.preserveAspect  = true;
+                frameImg.sprite         = frameSprite;
+                frameImg.type           = Image.Type.Simple;
+                frameImg.preserveAspect = true;
             }
 
             // Color by state
@@ -666,7 +686,7 @@ namespace AIROG_SkillWeb
                     var pip = new GameObject("Pip" + t, typeof(RectTransform), typeof(Image));
                     pip.transform.SetParent(obj.transform, false);
                     var pr = pip.GetComponent<RectTransform>();
-                    pr.anchoredPosition = new Vector2((t - (node.tier - 1) * 0.5f) * 12f, -52f);
+                    pr.anchoredPosition = new Vector2((t - (node.tier - 1) * 0.5f) * 12f, -(halfSize + 7f));
                     pr.sizeDelta        = new Vector2(8, 8);
                     pip.GetComponent<Image>().color =
                         node.tier >= 3 ? new Color(1f, 0.85f, 0.15f) : col;
@@ -676,11 +696,11 @@ namespace AIROG_SkillWeb
             // Name label
             var lbl = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
             lbl.transform.SetParent(obj.transform, false);
-            lbl.GetComponent<RectTransform>().anchoredPosition = new Vector2(0, -58f);
-            lbl.GetComponent<RectTransform>().sizeDelta        = new Vector2(170, 28);
+            lbl.GetComponent<RectTransform>().anchoredPosition = new Vector2(0, -(halfSize + 13f));
+            lbl.GetComponent<RectTransform>().sizeDelta        = new Vector2(nodeSize + 30f, 28);
             var lText = lbl.GetComponent<TextMeshProUGUI>();
             lText.text      = node.name;
-            lText.fontSize  = 11;
+            lText.fontSize  = node.nodeType == NodeType.Keystone ? 13 : 11;
             lText.alignment = TextAlignmentOptions.Center;
             lText.color     = node.isUnlocked ? Color.white : new Color(0.55f, 0.55f, 0.55f);
 
@@ -739,8 +759,8 @@ namespace AIROG_SkillWeb
         async void AddLoreNodeAction()
         {
             if (_isGenerating) return;
-            int cost = SkillWebPlugin.Instance.SkillConfig.NodeCost;
-            if (_data.skillPoints < cost) { SetStatus("Need " + cost + " Skill Points!"); return; }
+            int cost = SkillWebPlugin.Instance.SkillConfig.NodeCost * 2; // Notable costs 2×
+            if (_data.skillPoints < cost) { SetStatus("Need " + cost + " Skill Points for a Notable!"); return; }
 
             if (_data.nodes.Count == 0)
             {
@@ -770,6 +790,41 @@ namespace AIROG_SkillWeb
             else
             {
                 SetStatus("Generation failed. Try again.");
+            }
+
+            Refresh();
+            _isGenerating = false;
+        }
+
+        async void AddKeystoneNodeAction()
+        {
+            if (_isGenerating) return;
+            int cost = SkillWebPlugin.Instance.SkillConfig.NodeCost * 4; // Keystone costs 4×
+            if (_data.skillPoints < cost) { SetStatus("Need " + cost + " Skill Points for a Keystone!"); return; }
+            if (_data.nodes.Count == 0) { SetStatus("Build starting nodes first."); return; }
+
+            _isGenerating = true;
+            SetStatus("Forging Keystone...");
+
+            SkillNode parent  = _selectedNode ?? FindBestParent();
+            Vector2   pos     = FindFreePosition(parent, 300f, 420f);
+            var       tree    = _data.GetTree(parent?.treeId);
+            var       newNode = await SkillWebGenerator.GenerateKeystoneNode(_manager, parent, pos, tree);
+
+            if (newNode != null)
+            {
+                newNode.treeId = parent?.treeId;
+                if (_data.TryAddNode(newNode))
+                {
+                    if (parent != null) _data.AddConnection(parent.id, newNode.id);
+                    _data.skillPoints -= cost;
+                    SkillWebPlugin.Instance.SaveData();
+                    SetStatus("⬡ Keystone: " + newNode.name + " forged!");
+                }
+            }
+            else
+            {
+                SetStatus("Keystone generation failed. Try again.");
             }
 
             Refresh();
@@ -971,16 +1026,22 @@ namespace AIROG_SkillWeb
             target.texture = tex;
         }
 
-        void LoadNodeFrame()
+        void LoadNodeFrames()
         {
-            if (_nodeFrameSprite != null) return;
-            string path = Path.Combine(Application.streamingAssetsPath, "SkillWeb", "PassiveSkillRing.png");
+            _spriteBasic    = LoadSprite("SkillRingBasic.png");
+            _spriteNotable  = LoadSprite("PassiveSkillRingNotable.png");
+            _spriteKeystone = LoadSprite("SkillRingKeystone.png");
+        }
+
+        Sprite LoadSprite(string filename)
+        {
+            string path = Path.Combine(Application.streamingAssetsPath, "SkillWeb", filename);
             if (!File.Exists(path))
-                path = Path.Combine(Path.GetDirectoryName(typeof(SkillWebUI).Assembly.Location), "Assets", "PassiveSkillRing.png");
-            if (!File.Exists(path)) return;
+                path = Path.Combine(Path.GetDirectoryName(typeof(SkillWebUI).Assembly.Location), "Assets", filename);
+            if (!File.Exists(path)) return null;
             var tex = new Texture2D(2, 2);
             ImageConversion.LoadImage(tex, File.ReadAllBytes(path));
-            _nodeFrameSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+            return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
         }
 
         // ── Spatial helpers ───────────────────────────────────────────────────────

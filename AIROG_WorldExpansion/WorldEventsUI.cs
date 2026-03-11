@@ -198,6 +198,33 @@ namespace AIROG_WorldExpansion
                 CreateSeparator();
             }
 
+            // ── Notable Diplomatic Relations (non-neutral, non-war) ───────────────
+            var notableRels = new List<DiplomaticRelation>();
+            foreach (var rel in state.DiplomaticRelations.Values)
+            {
+                var t = (DiplomaticTier)rel.Tier;
+                if (t == DiplomaticTier.Neutral || t == DiplomaticTier.War) continue;
+                if (string.IsNullOrEmpty(rel.FactionAName) || string.IsNullOrEmpty(rel.FactionBName)) continue;
+                notableRels.Add(rel);
+            }
+            // Sort: most recently changed first, cap at 6
+            notableRels.Sort((a, b) => b.TierChangedTurn.CompareTo(a.TierChangedTurn));
+            if (notableRels.Count > 6) notableRels.RemoveRange(6, notableRels.Count - 6);
+
+            if (notableRels.Count > 0)
+            {
+                CreateTextEntry("<b>Diplomatic Relations</b>", 26, new Color(0.7f, 0.8f, 1f));
+                foreach (var rel in notableRels)
+                {
+                    DiplomaticTier dt  = (DiplomaticTier)rel.Tier;
+                    string icon        = WorldData.GetTierIcon(dt);
+                    string label       = WorldData.GetTierLabel(dt);
+                    Color  tc          = DiplomacyTierColor(dt);
+                    CreateTextEntry($"  {icon} {rel.FactionAName} ↔ {rel.FactionBName}  [{label}]", 21, tc);
+                }
+                CreateSeparator();
+            }
+
             // ── Faction Leaderboard ───────────────────────────────────────────────
             var factionList = state.Factions.Values
                 .Where(f => !string.IsNullOrEmpty(f.Name))
@@ -215,10 +242,11 @@ namespace AIROG_WorldExpansion
                     string uuid = state.Factions.FirstOrDefault(kv => kv.Value == f).Key;
                     bool eliminated = !string.IsNullOrEmpty(uuid) && state.EliminatedFactions.Contains(uuid);
                     string nameStr = eliminated ? $"<s>{f.Name}</s> [FALLEN]" : f.Name;
-                    string tag = f.Tag != "Neutral" ? $" [{f.Tag}]" : "";
+                    string tag     = f.Tag != "Neutral" ? $" [{f.Tag}]" : "";
                     string regions = f.ClaimedPlaceUuids.Count > 0 ? $" | {f.ClaimedPlaceUuids.Count}r" : "";
+                    string popStr  = f.Population > 0 ? $" | {FormatPop(f.Population)} pop ({f.PopState})" : "";
                     Color rowColor = eliminated ? new Color(0.4f, 0.4f, 0.4f) : new Color(0.7f, 0.9f, 0.7f);
-                    CreateTextEntry($"  {rank}. {nameStr}{tag}  —  {f.Resources} res{regions}", 21, rowColor);
+                    CreateTextEntry($"  {rank}. {nameStr}{tag}  —  {f.Resources} res{popStr}{regions}", 21, rowColor);
                     rank++;
                 }
                 CreateSeparator();
@@ -260,7 +288,7 @@ namespace AIROG_WorldExpansion
         // ─── Filter Bar ───────────────────────────────────────────────────────────
         private static void CreateFilterBar()
         {
-            string[] filters = { "All", "MAJOR", "WAR", "TRADE", "ECONOMY", "RUMOR", "SEASON" };
+            string[] filters = { "All", "MAJOR", "WAR", "TRADE", "ECONOMY", "DIPLOMACY", "POPULATION", "RUMOR", "SEASON" };
 
             GameObject barObj = new GameObject("FilterBar", typeof(RectTransform));
             barObj.transform.SetParent(_contentObj.transform, false);
@@ -341,14 +369,35 @@ namespace AIROG_WorldExpansion
         {
             switch (type)
             {
-                case "MAJOR":   return new Color(1f, 0.8f, 0f);
-                case "WAR":     return new Color(1f, 0.4f, 0.4f);
-                case "TRADE":   return new Color(0.4f, 1f, 0.6f);
-                case "ECONOMY": return new Color(0.6f, 1f, 1f);
-                case "RUMOR":   return new Color(0.8f, 0.8f, 1f);
-                case "SEASON":  return new Color(0.4f, 0.9f, 0.9f);
-                default:        return Color.white;
+                case "MAJOR":      return new Color(1f,    0.8f,  0f);
+                case "WAR":        return new Color(1f,    0.4f,  0.4f);
+                case "TRADE":      return new Color(0.4f,  1f,    0.6f);
+                case "ECONOMY":    return new Color(0.6f,  1f,    1f);
+                case "DIPLOMACY":  return new Color(0.7f,  0.6f,  1f);
+                case "POPULATION": return new Color(0.6f,  1f,    0.8f);
+                case "RUMOR":      return new Color(0.8f,  0.8f,  1f);
+                case "SEASON":     return new Color(0.4f,  0.9f,  0.9f);
+                default:           return Color.white;
             }
+        }
+
+        private static Color DiplomacyTierColor(DiplomaticTier tier)
+        {
+            switch (tier)
+            {
+                case DiplomaticTier.Hostile:       return new Color(1f,   0.5f, 0.5f);
+                case DiplomaticTier.ColdWar:       return new Color(0.6f, 0.8f, 1f);
+                case DiplomaticTier.NonAggression: return new Color(0.9f, 0.9f, 0.9f);
+                case DiplomaticTier.TradePact:     return new Color(0.4f, 1f,   0.6f);
+                case DiplomaticTier.Alliance:      return new Color(1f,   0.9f, 0.3f);
+                default:                           return Color.white;
+            }
+        }
+
+        private static string FormatPop(int pop)
+        {
+            if (pop >= 1000) return $"{pop / 1000}.{(pop % 1000) / 100}k";
+            return pop.ToString();
         }
 
         private static Color EconColor(string condition)

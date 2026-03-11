@@ -7,6 +7,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+using AIROG_Multiplayer.Combat;
 using AIROG_Multiplayer.Inventory;
 using AIROG_Multiplayer.Network;
 using AIROG_Multiplayer.Patches;
@@ -53,6 +54,12 @@ namespace AIROG_Multiplayer
 
         // Local client's display character name (set before connecting)
         public static string LocalCharacterName { get; set; } = "Player";
+
+        /// <summary>
+        /// Full character info for the local client (set before connecting).
+        /// Clients update this when they edit their HP and send CharacterUpdate packets.
+        /// </summary>
+        public static RemoteCharacterInfo LocalCharacterInfo { get; set; }
 
         private Harmony _harmony;
         private bool _applicationQuitting = false;
@@ -156,8 +163,8 @@ namespace AIROG_Multiplayer
             if (!IsHost || Server == null) return false;
             if (!(Instance?.WaitForParty?.Value ?? true)) return false;
 
-            var clients = Server.GetClients();
-            if (clients.Count == 0) return false; // No clients, no wait
+            var clients = Server.GetClients().Where(c => !c.IsSpectator).ToList();
+            if (clients.Count == 0) return false; // No non-spectator clients, no wait
 
             // Find clients that haven't checked in yet
             var notReady = clients.Where(c => !c.IsTurnReady).ToList();
@@ -189,9 +196,10 @@ namespace AIROG_Multiplayer
         {
             if (!_waitingForParty) return;
 
-            var clients = Server?.GetClients();
-            if (clients == null) return;
+            var allClients = Server?.GetClients();
+            if (allClients == null) return;
 
+            var clients = allClients.Where(c => !c.IsSpectator).ToList();
             int readyCount = clients.Count(c => c.IsTurnReady);
             int totalCount = clients.Count;
 
@@ -405,9 +413,17 @@ namespace AIROG_Multiplayer
                 Server.OnActionReceived += (client, action) => OnClientActionReceived(client, action);
                 Server.OnChatReceived += (client, chat) => OnChatReceived_Host(client, chat);
                 Server.OnTurnReady += (client) => OnClientTurnReady(client);
+                Server.OnCharacterUpdateReceived += (client, info) => OnClientCharacterUpdated(client, info);
+                Server.OnItemTransferReceived += (client, transfer) => OnItemTransferReceived_Host(client, transfer);
+                Server.OnClientReconnected += (client, reconnPayload) => OnClientReconnectedHandler(client, reconnPayload);
+                Server.OnPrivateActionReceived += (client, action) => OnPrivateActionReceived_Host(client, action);
+                Server.OnCombatActionReceived += (client, action) => OnCombatActionReceived_Host(client, action);
 
                 Server.Start(port);
                 onSuccess?.Invoke();
+
+                // Show the host's own co-op overlay
+                CoopStatusOverlay.ShowForHost(port);
 
                 Instance.Log.LogInfo($"[Host] Server started on port {port}.");
             }
@@ -450,11 +466,17 @@ namespace AIROG_Multiplayer
             // Initialize inventory database in the client's save directory
             MPInventoryManager.Initialize(SaveTopLvlDir, "mp_client");
 
+            LocalCharacterInfo = character;
+
             Client = new AIROGClient();
 
             Client.OnConnected += (welcome) =>
             {
                 Instance.Log.LogInfo($"[Client] Connected to {host}:{port}. Host location: {welcome.CurrentLocation}");
+                // Save PlayerId for reconnection
+                PlayerPrefs.SetString("MP_LastPlayerId", Client.AssignedPlayerId ?? "");
+                PlayerPrefs.SetString("MP_LastHost", host);
+                PlayerPrefs.SetInt("MP_LastPort", port);
                 onConnected?.Invoke(welcome);
             };
             Client.OnDisconnected += (reason) =>
@@ -489,55 +511,27 @@ namespace AIROG_Multiplayer
                 try
                 {
                     if (!IsClientMode) return;
-                    var manager = SS.I?.hackyManager;
-                    if (manager == null) return;
-
-                    // Extract UUID from filename (e.g. "abc123.png" → "abc123")
                     string uuid = System.IO.Path.GetFileNameWithoutExtension(img?.FileName ?? "");
                     if (string.IsNullOrEmpty(uuid)) return;
 
-                    // Look up the IllustratedStoryTurn by UUID in the global entity map
-                    GameEntity entity = null;
-                    SS.I.uuidToGameEntityMap?.TryGetValue(uuid, out entity);
-                    var illu = entity as IllustratedStoryTurn;
+                    UnityEngine.Debug.Log($"[MP-DIAG] OnStoryImageReceived: uuid='{uuid}'");
 
-                    if (illu == null)
+                    // Try immediate lookup. If the entity map isn't populated yet (save reload
+                    // still in progress), kick off a coroutine that retries for up to 10 seconds.
+                    if (!TryApplyClientImage(uuid))
                     {
-                        // Fallback: use whatever the last FINISHED illustrated turn is.
-                        // This covers the case where the entity deserialized as IN_PROGRESS.
-                        var pc = manager.playerCharacter?.pcGameEntity;
-                        illu = pc?.lastIlluStoryTurns?.FindLast(
-                            il => il != null && il.uuid == uuid);
-                    }
-
-                    if (illu != null)
-                    {
-                        illu.imgGenInfo.imgGenState = GameEntity.ImgGenState.FINISHED;
-                        illu.imgGenInfo.imageDirtyBit = true;
-                        _ = manager.mainImg.UpdateMainImageWithXfade(illu);
-                        Instance?.Log.LogInfo($"[Client] Refreshed story image: {uuid}");
-                    }
-                    else
-                    {
-                        // Last resort: call UpdateMainImage on whatever turn is currently FINISHED.
-                        // The save may not yet have the new IllustratedStoryTurn deserialized.
-                        var lastFinished = manager.playerCharacter?.pcGameEntity?.GetLastFinishedIlluStoryTurn();
-                        if (lastFinished != null)
-                        {
-                            lastFinished.imgGenInfo.imageDirtyBit = true;
-                            _ = manager.mainImg.UpdateMainImageWithXfade(lastFinished);
-                        }
-                        Instance?.Log.LogWarning($"[Client] OnStoryImageReceived: UUID {uuid} not in entity map — used fallback.");
+                        Instance?.Log.LogInfo($"[Client] Image {uuid} not in entity map yet — will retry.");
+                        Instance?.StartCoroutine(RetryApplyClientImage(uuid));
                     }
                 }
                 catch (Exception ex)
                 {
-                    Instance?.Log.LogError($"[Client] OnStoryImageReceived display error: {ex.Message}");
+                    Instance?.Log.LogError($"[Client] OnStoryImageReceived error: {ex.Message}");
                 }
             };
 
-            // Location updates are visible in the game UI — no overlay action needed
-            Client.OnLocationUpdated += (_) => { };
+            // Location updates feed the map overlay
+            Client.OnLocationUpdated += (loc) => MPMapOverlay.Instance?.UpdateLocation(loc);
 
             // Inventory sync: update the local DB and refresh the UI panel
             Client.OnInventoryReceived += (inv) =>
@@ -552,6 +546,38 @@ namespace AIROG_Multiplayer
                 {
                     Instance?.Log.LogError($"[Client] OnInventoryReceived error: {ex.Message}");
                 }
+            };
+
+            // Quest sync: update the quest UI panel
+            Client.OnQuestSyncReceived += (qs) =>
+            {
+                MPQuestUI.Instance?.UpdateQuests(qs?.Quests);
+            };
+
+            // Private action results
+            Client.OnPrivateResultReceived += (pr) =>
+            {
+                CoopStatusOverlay.Instance?.ShowPrivateResult(pr?.ResultText ?? "");
+            };
+
+            // Combat events
+            Client.OnCombatBegin += (cb) =>
+            {
+                CombatManager.BeginCombat(cb.TurnOrder, cb.EnemyNames, cb.TurnOrder?.Length ?? 0);
+                CoopStatusOverlay.Instance?.AddChat("Combat", $"<color=#FF6666>⚔ Combat! Enemies: {string.Join(", ", cb.EnemyNames ?? new string[0])}</color>", isSystem: true);
+            };
+            Client.OnCombatTurnNotify += (ct) =>
+            {
+                CoopStatusOverlay.Instance?.SetStatus($"⚔ Round {ct.RoundNumber} — Submit your action!");
+            };
+            Client.OnCombatResult += (cr) =>
+            {
+                CoopStatusOverlay.Instance?.AddChat("Combat", $"<color=#FFAA66>{cr.NarrativeText}</color>", isSystem: true);
+            };
+            Client.OnCombatEnd += () =>
+            {
+                CombatManager.EndCombat();
+                CoopStatusOverlay.Instance?.AddChat("Combat", "<color=#66CC66>⚔ Combat has ended.</color>", isSystem: true);
             };
 
             // Relay story turns into the game's own log view when in-game,
@@ -572,6 +598,27 @@ namespace AIROG_Multiplayer
                 }
             };
 
+            // Reconnection: replay catch-up story turns when reconnect succeeds
+            Client.OnReconnected += (result) =>
+            {
+                Instance.Log.LogInfo($"[Client] Reconnected! PlayerId restored: {result.AssignedPlayerId}");
+                PlayerPrefs.SetString("MP_LastPlayerId", result.AssignedPlayerId ?? "");
+
+                // Replay missed story turns
+                if (result.CatchUpTurns != null)
+                {
+                    foreach (var turn in result.CatchUpTurns)
+                    {
+                        var logView = SS.I?.hackyManager?.gameLogView;
+                        if (logView != null)
+                            logView.QueueLogText(turn.Text);
+                        else
+                            CoopStatusOverlay.Instance?.AddChat(turn.AuthorName ?? "Narrator", turn.Text);
+                    }
+                    Instance.Log.LogInfo($"[Client] Replayed {result.CatchUpTurns.Length} catch-up story turn(s).");
+                }
+            };
+
             Client.Connect(host, port, character);
         }
 
@@ -583,6 +630,151 @@ namespace AIROG_Multiplayer
             UnityEngine.Debug.Log("[MP-DIAG] IsClientMode = false (StopClient)");
             IsClientMode = false;
             Instance?.Log.LogInfo("[Client] Disconnected.");
+        }
+
+        /// <summary>
+        /// Reconnects to a host using a previously saved PlayerId.
+        /// Reuses the same event wiring as StartClient but sends a Reconnect packet instead of Hello.
+        /// </summary>
+        public static void StartClientReconnect(string host, int port, string previousPlayerId,
+            RemoteCharacterInfo character,
+            Action<ReconnectResultPayload> onReconnected = null,
+            Action<string> onDisconnected = null)
+        {
+            if (IsClient) return;
+
+            IsClientMode = true;
+            SaveTopLvlDir = SS.I?.saveTopLvlDir
+                ?? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "AppData", "LocalLow", "MaxLoh", "AI Roguelite", "save");
+
+            MPInventoryManager.Initialize(SaveTopLvlDir, "mp_client");
+            LocalCharacterInfo = character;
+
+            Client = new AIROGClient();
+
+            Client.OnReconnected += (result) =>
+            {
+                Instance.Log.LogInfo($"[Client] Reconnected! PlayerId: {result.AssignedPlayerId}");
+                PlayerPrefs.SetString("MP_LastPlayerId", result.AssignedPlayerId ?? "");
+
+                // Replay missed story turns
+                if (result.CatchUpTurns != null)
+                {
+                    foreach (var turn in result.CatchUpTurns)
+                    {
+                        var logView = SS.I?.hackyManager?.gameLogView;
+                        if (logView != null)
+                            logView.QueueLogText(turn.Text);
+                        else
+                            CoopStatusOverlay.Instance?.AddChat(turn.AuthorName ?? "Narrator", turn.Text);
+                    }
+                    Instance.Log.LogInfo($"[Client] Replayed {result.CatchUpTurns.Length} catch-up turn(s).");
+                }
+
+                onReconnected?.Invoke(result);
+            };
+
+            Client.OnDisconnected += (reason) =>
+            {
+                Instance?.Log.LogWarning($"[Client] Disconnected: {reason}");
+                Client = null;
+                IsClientMode = false;
+                onDisconnected?.Invoke(reason);
+                CoopStatusOverlay.Instance?.SetStatus($"Disconnected: {reason}", connected: false);
+            };
+
+            // Wire the same events as StartClient
+            Client.OnPartyUpdated += (party) => CoopStatusOverlay.Instance?.UpdateParty(party.Members);
+            Client.OnChatReceived += (chat) => CoopStatusOverlay.Instance?.AddChat(chat.SenderName, chat.Message, chat.IsSystem);
+            Client.OnWaitingForParty += (w) => CoopStatusOverlay.Instance?.SetStatus($"⏳ {w.ReadyCount}/{w.TotalCount} ready");
+            Client.OnTurnBegin += () => CoopStatusOverlay.Instance?.SetStatus("⚔ Your turn — submit an action!");
+
+            Client.OnSaveDataReceived += (save) =>
+            {
+                if (!string.IsNullOrEmpty(save.CurrentPlaceName))
+                    CoopStatusOverlay.Instance?.SetStatus($"📍 {save.CurrentPlaceName}");
+            };
+
+            Client.OnStoryImageReceived += (img) =>
+            {
+                try
+                {
+                    if (!IsClientMode) return;
+                    string uuid = System.IO.Path.GetFileNameWithoutExtension(img?.FileName ?? "");
+                    if (string.IsNullOrEmpty(uuid)) return;
+                    if (!TryApplyClientImage(uuid))
+                        Instance?.StartCoroutine(RetryApplyClientImage(uuid));
+                }
+                catch (Exception ex)
+                {
+                    Instance?.Log.LogError($"[Client] OnStoryImageReceived error: {ex.Message}");
+                }
+            };
+
+            Client.OnLocationUpdated += (loc) => MPMapOverlay.Instance?.UpdateLocation(loc);
+
+            Client.OnInventoryReceived += (inv) =>
+            {
+                try
+                {
+                    MPInventoryManager.LoadFromJson(inv?.InventoryJson);
+                    MPInventoryManager.Save();
+                    MPInventoryUI.Instance?.Refresh();
+                }
+                catch (Exception ex)
+                {
+                    Instance?.Log.LogError($"[Client] OnInventoryReceived error: {ex.Message}");
+                }
+            };
+
+            Client.OnQuestSyncReceived += (qs) =>
+            {
+                MPQuestUI.Instance?.UpdateQuests(qs?.Quests);
+            };
+
+            Client.OnPrivateResultReceived += (pr) =>
+            {
+                CoopStatusOverlay.Instance?.ShowPrivateResult(pr?.ResultText ?? "");
+            };
+
+            Client.OnCombatBegin += (cb) =>
+            {
+                CombatManager.BeginCombat(cb.TurnOrder, cb.EnemyNames, cb.TurnOrder?.Length ?? 0);
+                CoopStatusOverlay.Instance?.AddChat("Combat", $"<color=#FF6666>⚔ Combat! Enemies: {string.Join(", ", cb.EnemyNames ?? new string[0])}</color>", isSystem: true);
+            };
+            Client.OnCombatTurnNotify += (ct) =>
+            {
+                CoopStatusOverlay.Instance?.SetStatus($"⚔ Round {ct.RoundNumber} — Submit your action!");
+            };
+            Client.OnCombatResult += (cr) =>
+            {
+                CoopStatusOverlay.Instance?.AddChat("Combat", $"<color=#FFAA66>{cr.NarrativeText}</color>", isSystem: true);
+            };
+            Client.OnCombatEnd += () =>
+            {
+                CombatManager.EndCombat();
+                CoopStatusOverlay.Instance?.AddChat("Combat", "<color=#66CC66>⚔ Combat has ended.</color>", isSystem: true);
+            };
+
+            Client.OnStoryTurnReceived += (entry) =>
+            {
+                try
+                {
+                    var logView = SS.I?.hackyManager?.gameLogView;
+                    if (logView != null)
+                        logView.QueueLogText(entry.Text);
+                    else
+                        CoopStatusOverlay.Instance?.AddChat(entry.AuthorName ?? "Narrator", entry.Text);
+                }
+                catch (Exception ex)
+                {
+                    Instance?.Log.LogError($"[Client] OnStoryTurnReceived error: {ex.Message}");
+                }
+            };
+
+            Client.ConnectReconnect(host, port, previousPlayerId, character);
         }
 
         // --- Server event handlers (main thread) ---
@@ -614,10 +806,13 @@ namespace AIROG_Multiplayer
             // Ensure this client has an inventory entry, then send the current database
             MPInventoryManager.GetOrCreate(client.PlayerId, charName);
             Server.SendInventoryTo(client, MPInventoryManager.SerializeToJson());
+            Server.SendQuestSyncTo(client, ExtractQuestState(manager));
 
-            Server.BroadcastChat("Server", $"{charName} has joined the session!", isSystem: true);
+            string joinVerb = hello.IsSpectator ? "is spectating" : "has joined";
+            Server.BroadcastChat("Server", $"{charName} {joinVerb} the session!", isSystem: true);
             SendPartyUpdate(manager);
-            manager?.toast?.ShowToast($"⚔ {charName} joined the co-op session!");
+            string toastIcon = hello.IsSpectator ? "👁" : "⚔";
+            manager?.toast?.ShowToast($"{toastIcon} {charName} {joinVerb} the co-op session!");
 
             Instance.Log.LogInfo($"[Host] Sent Welcome + save snapshot to {charName}.");
         }
@@ -644,6 +839,8 @@ namespace AIROG_Multiplayer
 
         private static void OnClientActionReceived(ConnectedClient client, ActionRequestPayload action)
         {
+            if (client.IsSpectator) return; // Spectators cannot submit actions
+
             string charName = client.CharacterInfo?.CharacterName ?? client.PlayerName;
             Instance.Log.LogInfo($"[Host] Action from {charName}: {action.ActionText}");
 
@@ -672,6 +869,226 @@ namespace AIROG_Multiplayer
         {
             var manager = FindObjectOfType<GameplayManager>();
             manager?.gameLogView?.LogText($"[OOC] {chat.SenderName}: {chat.Message}");
+            // Relay OOC chat to the host's overlay as well
+            CoopStatusOverlay.Instance?.AddChat(chat.SenderName, chat.Message);
+        }
+
+        private static void OnClientCharacterUpdated(ConnectedClient client, RemoteCharacterInfo info)
+        {
+            // CharacterInfo was already updated by the server before this fires
+            Instance?.Log.LogInfo($"[Host] CharacterUpdate from {client.PlayerName}: HP={info.Health}/{info.MaxHealth}");
+            var manager = FindObjectOfType<GameplayManager>();
+            SendPartyUpdate(manager);
+        }
+
+        private static void OnClientReconnectedHandler(ConnectedClient client, ReconnectPayload reconnPayload)
+        {
+            string charName = client.CharacterInfo?.CharacterName ?? client.PlayerName;
+            Instance.Log.LogInfo($"[Host] {charName} reconnected (ID: {client.PlayerId}).");
+
+            // Send current save snapshot
+            var manager = FindObjectOfType<GameplayManager>();
+            SendSaveSnapshot(client, manager);
+
+            // Send inventory and quest state
+            Server.SendInventoryTo(client, MPInventoryManager.SerializeToJson());
+            Server.SendQuestSyncTo(client, ExtractQuestState(manager));
+
+            Server.BroadcastChat("Server", $"{charName} has reconnected!", isSystem: true);
+            SendPartyUpdate(manager);
+            manager?.toast?.ShowToast($"⚔ {charName} reconnected!");
+        }
+
+        private static void OnItemTransferReceived_Host(ConnectedClient client, ItemTransferPayload transfer)
+        {
+            string fromId = transfer.FromPlayerId; // Set to client.PlayerId server-side
+            string toId = transfer.ToPlayerId;
+            string itemName = transfer.ItemName;
+
+            Instance?.Log.LogInfo($"[Host] ItemTransfer: '{itemName}' from {fromId} → {toId}");
+
+            bool ok = MPInventoryManager.TransferItem(fromId, toId, itemName);
+            if (ok)
+            {
+                MPInventoryManager.Save();
+                BroadcastInventory();
+                string fromName = client.CharacterInfo?.CharacterName ?? client.PlayerName;
+                var toClient = Server?.GetClients().Find(c => c.PlayerId == toId);
+                string toName = toClient?.CharacterInfo?.CharacterName ?? toId;
+                Server?.BroadcastChat("Server", $"{fromName} gifted '{itemName}' to {toName}!", isSystem: true);
+            }
+            else
+            {
+                Instance?.Log.LogWarning($"[Host] ItemTransfer failed: '{itemName}' not found in {fromId}'s inventory.");
+            }
+        }
+
+        /// <summary>
+        /// Handles a private/whisper action from a client.
+        /// Makes a separate AI call with the private action and sends the result only to the originating player.
+        /// Other players see a generic "takes a secretive action" message.
+        /// </summary>
+        private static async void OnPrivateActionReceived_Host(ConnectedClient client, PrivateActionPayload action)
+        {
+            string charName = action.CharacterName ?? client.CharacterInfo?.CharacterName ?? client.PlayerName;
+            Instance?.Log.LogInfo($"[Host] Private action from {charName}: {action.ActionText}");
+
+            // Broadcast a generic message to other players
+            Server?.BroadcastChat("Narrator", $"{charName} takes a secretive action...", isSystem: true);
+
+            // Make a separate AI call for the private action
+            try
+            {
+                var manager = FindObjectOfType<GameplayManager>();
+                if (manager == null)
+                {
+                    Server?.SendPrivateResult(client, "[Private action failed — no active game session.]");
+                    return;
+                }
+
+                string prompt = $"[PRIVATE ACTION]\nThe player character '{charName}' secretly attempts: {action.ActionText}\n\nDescribe the outcome of this secret action in 2-3 sentences. Only {charName} can see this result. Keep it concise.";
+                string result = await AIAsker.GenerateTxtNoTryStrStyle(
+                    AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER, prompt,
+                    AIAsker.ChatGptPostprocessingType.NONE, forceConcise: true);
+
+                if (string.IsNullOrEmpty(result))
+                    result = "The secretive action yields no clear outcome.";
+
+                Server?.SendPrivateResult(client, result);
+                Instance?.Log.LogInfo($"[Host] Private result sent to {charName}: {result.Substring(0, Math.Min(100, result.Length))}...");
+            }
+            catch (Exception ex)
+            {
+                Instance?.Log.LogError($"[Host] Private action AI error: {ex.Message}");
+                Server?.SendPrivateResult(client, $"[Private action failed: {ex.Message}]");
+            }
+        }
+
+        /// <summary>
+        /// Handles a combat action from a client. Collects it and resolves when all players have acted.
+        /// </summary>
+        private static void OnCombatActionReceived_Host(ConnectedClient client, CombatActionPayload action)
+        {
+            string charName = action.CharacterName ?? client.CharacterInfo?.CharacterName ?? client.PlayerName;
+            Instance?.Log.LogInfo($"[Host] Combat action from {charName}: {action.ActionText}");
+
+            if (!CombatManager.IsCombatActive)
+            {
+                Instance?.Log.LogWarning("[Host] Received combat action but no combat is active.");
+                return;
+            }
+
+            bool allReady = CombatManager.SubmitAction(client.PlayerId, charName, action.ActionText);
+
+            // Broadcast waiting status
+            Server?.BroadcastAll(Packet.Create(PacketType.WaitingForParty, new WaitingForPartyPayload
+            {
+                ReadyCount = CombatManager.GetSubmittedCount(),
+                TotalCount = CombatManager.GetExpectedCount()
+            }));
+
+            if (allReady)
+            {
+                ResolveCombatRound();
+            }
+        }
+
+        /// <summary>
+        /// Starts a combat encounter. Called when the host detects enemies in the current location.
+        /// </summary>
+        public static void StartCombat(string[] enemyNames)
+        {
+            if (!IsHost || CombatManager.IsCombatActive) return;
+
+            var manager = FindObjectOfType<GameplayManager>();
+            var clients = Server?.GetClients();
+            if (clients == null) return;
+
+            // Build turn order: host first, then clients (excluding spectators)
+            var turnOrder = new List<string>();
+            string hostName = manager?.playerCharacter?.pcGameEntity?.name ?? "Host";
+            turnOrder.Add(hostName);
+            foreach (var c in clients.Where(c => !c.IsSpectator))
+                turnOrder.Add(c.CharacterInfo?.CharacterName ?? c.PlayerName);
+
+            int playerCount = turnOrder.Count;
+            CombatManager.BeginCombat(turnOrder.ToArray(), enemyNames, playerCount);
+
+            // Broadcast CombatBegin to all clients
+            Server?.BroadcastAll(Packet.Create(PacketType.CombatBegin, new CombatBeginPayload
+            {
+                TurnOrder = turnOrder.ToArray(),
+                EnemyNames = enemyNames,
+                RoundNumber = 1
+            }));
+
+            Server?.BroadcastChat("Server", $"⚔ Combat started! Enemies: {string.Join(", ", enemyNames)}", isSystem: true);
+            Instance?.Log.LogInfo($"[Host] Combat started: {string.Join(", ", enemyNames)} — {playerCount} players");
+        }
+
+        /// <summary>
+        /// Resolves the current combat round by building a combined prompt and calling the AI.
+        /// </summary>
+        private static async void ResolveCombatRound()
+        {
+            try
+            {
+                string combatPrompt = CombatManager.BuildCombatPrompt();
+                Instance?.Log.LogInfo($"[Host] Resolving combat round {CombatManager.RoundNumber}...");
+
+                string result = await AIAsker.GenerateTxtNoTryStrStyle(
+                    AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER,
+                    combatPrompt,
+                    AIAsker.ChatGptPostprocessingType.NONE);
+
+                if (string.IsNullOrEmpty(result))
+                    result = "The combat round concludes with no clear outcome.";
+
+                // Broadcast the result to all players
+                Server?.BroadcastAll(Packet.Create(PacketType.CombatResult, new CombatResultPayload
+                {
+                    NarrativeText = result,
+                    RoundNumber = CombatManager.RoundNumber
+                }));
+
+                // Also add to story feed
+                Server?.BroadcastStoryTurn(new StoryEntry
+                {
+                    Text = result,
+                    AuthorName = "Combat",
+                    IsPlayerAction = false,
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                });
+
+                Instance?.Log.LogInfo($"[Host] Combat round {CombatManager.RoundNumber} resolved.");
+
+                // Advance to next round (or end combat if host chooses)
+                CombatManager.NextRound();
+
+                Server?.BroadcastAll(Packet.Create(PacketType.CombatTurnNotify, new CombatTurnNotifyPayload
+                {
+                    ActiveCharacterName = "",
+                    RoundNumber = CombatManager.RoundNumber
+                }));
+            }
+            catch (Exception ex)
+            {
+                Instance?.Log.LogError($"[Host] Combat resolution error: {ex.Message}");
+                Server?.BroadcastChat("Server", "Combat resolution failed — ending combat.", isSystem: true);
+                EndCombat();
+            }
+        }
+
+        /// <summary>
+        /// Ends the current combat encounter and notifies all players.
+        /// </summary>
+        public static void EndCombat()
+        {
+            if (!CombatManager.IsCombatActive) return;
+            CombatManager.EndCombat();
+            Server?.BroadcastAll(Packet.Create(PacketType.CombatEnd));
+            Server?.BroadcastChat("Server", "⚔ Combat has ended.", isSystem: true);
+            Instance?.Log.LogInfo("[Host] Combat ended.");
         }
 
         // --- Helpers ---
@@ -711,6 +1128,119 @@ namespace AIROG_Multiplayer
             }
         }
 
+        /// <summary>
+        /// Extracts quest info from the game's QuestLogV4 into lightweight MPQuestInfo[] for network sync.
+        /// </summary>
+        public static MPQuestInfo[] ExtractQuestState(GameplayManager manager)
+        {
+            var quests = new List<MPQuestInfo>();
+            try
+            {
+                var questLog = manager?.playerCharacter?.pcGameEntity?.questLogV4;
+                if (questLog == null) return quests.ToArray();
+
+                // Main quest chain
+                if (questLog.mainQuestChain?.questEles != null)
+                {
+                    foreach (var ele in questLog.mainQuestChain.questEles)
+                    {
+                        quests.Add(new MPQuestInfo
+                        {
+                            Id = ele.uuid ?? "",
+                            Title = ele.questTitle ?? "Main Quest",
+                            Objective = (ele as QuestEleV4)?.objectiveStr ?? "",
+                            Status = "Active",
+                            QuestType = "Main"
+                        });
+                    }
+                }
+
+                // Active side quests
+                if (questLog.sideQuestChains != null)
+                {
+                    foreach (var chain in questLog.sideQuestChains)
+                    {
+                        if (chain?.questEles == null) continue;
+                        foreach (var ele in chain.questEles)
+                        {
+                            quests.Add(new MPQuestInfo
+                            {
+                                Id = ele.uuid ?? "",
+                                Title = ele.questTitle ?? "Side Quest",
+                                Objective = (ele as QuestEleV4)?.objectiveStr ?? "",
+                                Status = "Active",
+                                QuestType = "Side"
+                            });
+                        }
+                    }
+                }
+
+                // Completed quests
+                if (questLog.completedQuests != null)
+                {
+                    foreach (var chain in questLog.completedQuests)
+                    {
+                        if (chain?.questEles == null) continue;
+                        foreach (var ele in chain.questEles)
+                        {
+                            quests.Add(new MPQuestInfo
+                            {
+                                Id = ele.uuid ?? "",
+                                Title = ele.questTitle ?? "Quest",
+                                Objective = (ele as QuestEleV4)?.objectiveStr ?? "",
+                                Status = "Completed",
+                                QuestType = "Side"
+                            });
+                        }
+                    }
+                }
+
+                // Failed quests
+                if (questLog.failedQuests != null)
+                {
+                    foreach (var chain in questLog.failedQuests)
+                    {
+                        if (chain?.questEles == null) continue;
+                        foreach (var ele in chain.questEles)
+                        {
+                            quests.Add(new MPQuestInfo
+                            {
+                                Id = ele.uuid ?? "",
+                                Title = ele.questTitle ?? "Quest",
+                                Objective = (ele as QuestEleV4)?.objectiveStr ?? "",
+                                Status = "Failed",
+                                QuestType = "Side"
+                            });
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance?.Log.LogError($"[Host] ExtractQuestState error: {ex.Message}");
+            }
+            return quests.ToArray();
+        }
+
+        /// <summary>
+        /// Broadcasts current quest state to all connected clients.
+        /// </summary>
+        public static void BroadcastQuestSync()
+        {
+            if (!IsHost || Server == null) return;
+            try
+            {
+                var manager = FindObjectOfType<GameplayManager>();
+                var quests = ExtractQuestState(manager);
+                Server.BroadcastQuestSync(quests);
+                Instance?.Log.LogInfo($"[Host] BroadcastQuestSync: {quests.Length} quest(s).");
+            }
+            catch (Exception ex)
+            {
+                Instance?.Log.LogError($"[Host] BroadcastQuestSync error: {ex.Message}");
+            }
+        }
+
         public static void BroadcastLocation(string locationName, string locationDescription = "")
         {
             if (!IsHost) return;
@@ -720,6 +1250,16 @@ namespace AIROG_Multiplayer
                 LocationDescription = locationDescription
             }));
             Instance?.Log.LogInfo($"[Host] Broadcast location update: {locationName}");
+        }
+
+        /// <summary>
+        /// Broadcasts a full LocationUpdatePayload with extended map data.
+        /// </summary>
+        public static void BroadcastLocationPayload(LocationUpdatePayload payload)
+        {
+            if (!IsHost) return;
+            Server?.BroadcastAll(Packet.Create(PacketType.LocationUpdate, payload));
+            Instance?.Log.LogInfo($"[Host] Broadcast location: {payload.LocationName} (NPCs: {payload.NPCNames?.Length ?? 0}, Enemies: {payload.EnemyNames?.Length ?? 0})");
         }
 
         private static void SendSaveSnapshot(ConnectedClient client, GameplayManager manager)
@@ -788,13 +1328,98 @@ namespace AIROG_Multiplayer
             foreach (var c in Server.GetClients())
                 if (c.CharacterInfo != null) members.Add(c.CharacterInfo);
 
-            Server.BroadcastPartyUpdate(new PartyUpdatePayload { Members = members.ToArray() });
+            var payload = new PartyUpdatePayload { Members = members.ToArray() };
+            Server.BroadcastPartyUpdate(payload);
+
+            // Also update the host's own overlay (it doesn't receive broadcast packets)
+            CoopStatusOverlay.Instance?.UpdateParty(payload.Members);
         }
 
         private static string TruncateForToast(string s, int maxLen = 60)
         {
             if (s == null) return "";
             return s.Length <= maxLen ? s : s.Substring(0, maxLen) + "...";
+        }
+
+        // -----------------------------------------------------------------------
+        // Client-side image application helpers
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Looks up the IllustratedStoryTurn by UUID, marks it finished, and calls
+        /// UpdateMainImageWithXfade. Returns true if the entity was found and applied.
+        /// Safe to call from main thread only.
+        /// </summary>
+        private static bool TryApplyClientImage(string uuid)
+        {
+            try
+            {
+                var manager = SS.I?.hackyManager;
+                if (manager == null) return false;
+
+                // Primary: entity map lookup (populated after save reload)
+                GameEntity entity = null;
+                SS.I.uuidToGameEntityMap?.TryGetValue(uuid, out entity);
+                var illu = entity as IllustratedStoryTurn;
+
+                // Secondary: scan lastIlluStoryTurns (covers the entity-map deserialization lag)
+                if (illu == null)
+                {
+                    var pc = manager.playerCharacter?.pcGameEntity;
+                    illu = pc?.lastIlluStoryTurns?.FindLast(il => il != null && il.uuid == uuid);
+                }
+
+                if (illu == null) return false;
+
+                illu.imgGenInfo.imgGenState = GameEntity.ImgGenState.FINISHED;
+                illu.imgGenInfo.imageDirtyBit = true;
+                _ = manager.mainImg.UpdateMainImageWithXfade(illu);
+                Instance?.Log.LogInfo($"[Client] Applied story image: {uuid}");
+                UnityEngine.Debug.Log($"[MP-DIAG] TryApplyClientImage success: {uuid}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Instance?.Log.LogError($"[Client] TryApplyClientImage error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Retries TryApplyClientImage every second for up to 10 seconds.
+        /// Used when the StoryImage packet arrives before the save reload completes
+        /// (entity map not yet populated).
+        /// </summary>
+        private static System.Collections.IEnumerator RetryApplyClientImage(string uuid)
+        {
+            for (int attempt = 0; attempt < 10; attempt++)
+            {
+                yield return new UnityEngine.WaitForSeconds(1f);
+
+                if (!IsClientMode) yield break; // Disconnected
+
+                if (TryApplyClientImage(uuid))
+                    yield break;
+
+                UnityEngine.Debug.Log($"[MP-DIAG] RetryApplyClientImage attempt {attempt + 1}/10 for {uuid}");
+            }
+
+            // Final fallback: display whatever the last finished turn is
+            Instance?.Log.LogWarning($"[Client] UUID {uuid} not found after 10 retries — using last finished turn.");
+            try
+            {
+                var manager = SS.I?.hackyManager;
+                var lastFinished = manager?.playerCharacter?.pcGameEntity?.GetLastFinishedIlluStoryTurn();
+                if (lastFinished != null)
+                {
+                    lastFinished.imgGenInfo.imageDirtyBit = true;
+                    _ = manager.mainImg.UpdateMainImageWithXfade(lastFinished);
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance?.Log.LogError($"[Client] RetryApplyClientImage fallback error: {ex.Message}");
+            }
         }
     }
 }

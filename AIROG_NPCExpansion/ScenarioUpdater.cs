@@ -10,13 +10,16 @@ namespace AIROG_NPCExpansion
     {
         // ─── Counters ──────────────────────────────────────────────────────────────
         private static int _globalTurn        = 0;
-        private static int _turnCounter       = 0;
         private static int _autonomyCounter   = 0;
         private static int _barkCounter       = 0;
         private static int _rumorCounter      = 0;
         private static int _memoryCounter     = 0;
 
-        private const int TURNS_PER_UPDATE          = 1;
+        // Per-NPC scenario update scheduling: each NPC gets a random 2-5 turn cooldown
+        // after each update so they stagger naturally instead of all firing together.
+        private static readonly Dictionary<string, int> _npcNextUpdateTurn = new Dictionary<string, int>();
+        private const int SCENARIO_MIN_INTERVAL     = 2;
+        private const int SCENARIO_MAX_INTERVAL     = 5;
         private const int AUTONOMY_TURNS_PER_UPDATE = 3;
         private const int BARK_INTERVAL             = 5;
         private const int RUMOR_INTERVAL            = 3;
@@ -31,14 +34,13 @@ namespace AIROG_NPCExpansion
         public static void OnTurnHappened(int numTurns, long secs)
         {
             _globalTurn      += numTurns;
-            _turnCounter     += numTurns;
             _autonomyCounter += numTurns;
             _barkCounter     += numTurns;
             _rumorCounter    += numTurns;
             _memoryCounter   += numTurns;
 
             Debug.Log($"[AIROG_NPCExpansion] OnTurnHappened: {numTurns} turns (global={_globalTurn}). " +
-                      $"Scenario={_turnCounter}/{TURNS_PER_UPDATE}, Auto={_autonomyCounter}/{AUTONOMY_TURNS_PER_UPDATE}, " +
+                      $"Auto={_autonomyCounter}/{AUTONOMY_TURNS_PER_UPDATE}, " +
                       $"Bark={_barkCounter}/{BARK_INTERVAL}, Rumor={_rumorCounter}/{RUMOR_INTERVAL}, " +
                       $"Mem={_memoryCounter}/{MEMORY_INTERVAL}");
 
@@ -60,18 +62,30 @@ namespace AIROG_NPCExpansion
                 }
             }
 
-            // ── Scenario update (every 1 turn) ────────────────────────────────────
-            if (_turnCounter >= TURNS_PER_UPDATE)
+            // ── Scenario update (per-NPC staggered, random 2-5 turn cooldown) ────
+            if (nearbyNpcs != null && nearbyNpcs.Count > 0)
             {
-                _turnCounter = 0;
-                if (nearbyNpcs == null || nearbyNpcs.Count == 0)
+                var dueNpcs = nearbyNpcs.Where(npc =>
                 {
-                    Debug.Log("[AIROG_NPCExpansion] No nearby NPCs to update.");
-                    return;
+                    if (!_npcNextUpdateTurn.TryGetValue(npc.uuid, out int nextTurn))
+                    {
+                        // First time seeing this NPC — stagger initial update randomly
+                        _npcNextUpdateTurn[npc.uuid] = _globalTurn + UnityEngine.Random.Range(SCENARIO_MIN_INTERVAL, SCENARIO_MAX_INTERVAL + 1);
+                        return false;
+                    }
+                    return _globalTurn >= nextTurn;
+                }).ToList();
+
+                if (dueNpcs.Count > 0)
+                {
+                    // Assign next update times before the async task so they don't re-fire
+                    foreach (var npc in dueNpcs)
+                        _npcNextUpdateTurn[npc.uuid] = _globalTurn + UnityEngine.Random.Range(SCENARIO_MIN_INTERVAL, SCENARIO_MAX_INTERVAL + 1);
+
+                    string context = manager.GetContextForQuickActions();
+                    Debug.Log($"[AIROG_NPCExpansion] Triggering scenario update for {dueNpcs.Count}/{nearbyNpcs.Count} NPCs (staggered).");
+                    _ = UpdateNpcsTask(dueNpcs, context);
                 }
-                string context = manager.GetContextForQuickActions();
-                Debug.Log($"[AIROG_NPCExpansion] Triggering scenario update for {nearbyNpcs.Count} NPCs.");
-                _ = UpdateNpcsTask(nearbyNpcs, context);
             }
 
             // ── NPC Barks (every 5 turns) ─────────────────────────────────────────

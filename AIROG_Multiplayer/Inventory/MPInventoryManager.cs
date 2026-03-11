@@ -143,6 +143,30 @@ namespace AIROG_Multiplayer.Inventory
             inv.LastUpdated = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
 
+        /// <summary>
+        /// Moves the first item matching itemName from fromPlayerId's inventory to toPlayerId's.
+        /// Returns true if the item was found and transferred.
+        /// </summary>
+        public static bool TransferItem(string fromPlayerId, string toPlayerId, string itemName)
+        {
+            if (!_db.Players.TryGetValue(fromPlayerId, out var fromInv)) return false;
+            int idx = fromInv.Items.FindIndex(i =>
+                string.Equals(i.Name, itemName, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0) return false;
+
+            var item = fromInv.Items[idx];
+            fromInv.Items.RemoveAt(idx);
+            fromInv.LastUpdated = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            item.IsEquipped = false; // Transferred items arrive unequipped
+            var toInv = GetOrCreate(toPlayerId);
+            toInv.Items.Add(item);
+            toInv.LastUpdated = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            Log?.LogInfo($"[Inventory] Transferred '{itemName}' from {fromPlayerId} to {toPlayerId}.");
+            return true;
+        }
+
         // -----------------------------------------------------------------------
         // Host → Game sync
         // -----------------------------------------------------------------------

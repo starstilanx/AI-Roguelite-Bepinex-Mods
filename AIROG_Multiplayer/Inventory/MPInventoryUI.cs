@@ -26,6 +26,9 @@ namespace AIROG_Multiplayer
         private ScrollRect _scrollRect;
         private bool _isVisible;
 
+        private MPPaperDollUI _paperDollUI;
+        private MPGiftUI _giftUI;
+
         // ---- Factory ----
 
         public static MPInventoryUI GetOrCreate(GameObject canvasRoot)
@@ -195,6 +198,20 @@ namespace AIROG_Multiplayer
                     }
                 }
                 Refresh();
+            });
+
+            MakeSmallButton(footerRow.transform, "👤 Doll", new Color(0.35f, 0.18f, 0.55f), () =>
+            {
+                if (_paperDollUI == null)
+                    _paperDollUI = MPPaperDollUI.GetOrCreate(gameObject);
+                _paperDollUI.Toggle();
+            });
+
+            MakeSmallButton(footerRow.transform, "🎁 Gift", new Color(0.55f, 0.3f, 0.08f), () =>
+            {
+                if (_giftUI == null)
+                    _giftUI = MPGiftUI.GetOrCreate(gameObject);
+                _giftUI.Toggle();
             });
 
             _panel.SetActive(false);

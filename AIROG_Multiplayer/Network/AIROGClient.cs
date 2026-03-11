@@ -65,6 +65,21 @@ namespace AIROG_Multiplayer
         // Inventory
         public event Action<InventorySyncPayload> OnInventoryReceived;
 
+        // Reconnection
+        public event Action<ReconnectResultPayload> OnReconnected;
+
+        // Quests
+        public event Action<QuestSyncPayload> OnQuestSyncReceived;
+
+        // Private actions
+        public event Action<PrivateResultPayload> OnPrivateResultReceived;
+
+        // Combat
+        public event Action<CombatBeginPayload> OnCombatBegin;
+        public event Action<CombatTurnNotifyPayload> OnCombatTurnNotify;
+        public event Action<CombatResultPayload> OnCombatResult;
+        public event Action OnCombatEnd;
+
         /// <summary>
         /// Attempts to connect to the host. Fires OnConnected or OnDisconnected on the main thread.
         /// </summary>
@@ -127,6 +142,79 @@ namespace AIROG_Multiplayer
             connectThread.Start();
         }
 
+        /// <summary>
+        /// Attempts to reconnect to the host using a previously assigned PlayerId.
+        /// Falls back to OnDisconnected if the server rejects the reconnect.
+        /// </summary>
+        public void ConnectReconnect(string host, int port, string previousPlayerId, RemoteCharacterInfo myCharacter)
+        {
+            HostAddress = host;
+            Port = port;
+            _running = true;
+            _inGameSession = false;
+
+            Thread connectThread = new Thread(() =>
+            {
+                try
+                {
+                    _tcp = new TcpClient();
+                    _tcp.NoDelay = true;
+                    _tcp.Connect(host, port);
+                    _stream = _tcp.GetStream();
+
+                    // Send Reconnect instead of Hello
+                    var reconnPkt = Packet.Create(PacketType.Reconnect, new ReconnectPayload
+                    {
+                        PluginVersion = MultiplayerPlugin.VERSION,
+                        PreviousPlayerId = previousPlayerId,
+                        Character = myCharacter
+                    });
+                    SendInternal(reconnPkt);
+
+                    // Wait for ReconnectResult
+                    Packet response = Packet.ReadFrom(_stream);
+                    if (response == null)
+                    {
+                        Cleanup("Connection lost during reconnect handshake.");
+                        return;
+                    }
+
+                    if (response.Type == PacketType.ReconnectResult)
+                    {
+                        var result = response.GetPayload<ReconnectResultPayload>();
+                        if (!result.Success)
+                        {
+                            Cleanup(result.Reason ?? "Reconnect rejected.");
+                            return;
+                        }
+
+                        AssignedPlayerId = result.AssignedPlayerId;
+                        MainThreadQueue.Enqueue(() => OnReconnected?.Invoke(result));
+                    }
+                    else if (response.Type == PacketType.Rejected)
+                    {
+                        Cleanup("Host rejected reconnection.");
+                        return;
+                    }
+                    else
+                    {
+                        Cleanup("Unexpected response from host during reconnect.");
+                        return;
+                    }
+
+                    _readThread = new Thread(ReadLoop) { IsBackground = true, Name = "AIROG-Client-Read" };
+                    _readThread.Start();
+                }
+                catch (Exception ex)
+                {
+                    Cleanup($"Failed to reconnect: {ex.Message}");
+                }
+            })
+            { IsBackground = true, Name = "AIROG-Client-Reconnect" };
+
+            connectThread.Start();
+        }
+
         public void Disconnect(string reason = "Player disconnected.")
         {
             try
@@ -152,6 +240,42 @@ namespace AIROG_Multiplayer
         public void SendTurnReady()
         {
             Send(Packet.Create(PacketType.TurnReady));
+        }
+
+        /// <summary>Sends updated character stats (HP, etc.) to the host.</summary>
+        public void SendCharacterUpdate(RemoteCharacterInfo info)
+        {
+            Send(Packet.Create(PacketType.CharacterUpdate, info));
+        }
+
+        /// <summary>Requests the host to transfer an item from this client's inventory to another player.</summary>
+        public void SendItemTransfer(string toPlayerId, string itemName)
+        {
+            Send(Packet.Create(PacketType.ItemTransfer, new ItemTransferPayload
+            {
+                ToPlayerId = toPlayerId,
+                ItemName = itemName
+            }));
+        }
+
+        /// <summary>Sends a private/whisper action that only the AI and this player see.</summary>
+        public void SendPrivateAction(string actionText)
+        {
+            Send(Packet.Create(PacketType.PrivateAction, new PrivateActionPayload
+            {
+                CharacterName = MultiplayerPlugin.LocalCharacterName,
+                ActionText = actionText
+            }));
+        }
+
+        /// <summary>Sends a combat action during the combat initiative phase.</summary>
+        public void SendCombatAction(string actionText)
+        {
+            Send(Packet.Create(PacketType.CombatAction, new CombatActionPayload
+            {
+                CharacterName = MultiplayerPlugin.LocalCharacterName,
+                ActionText = actionText
+            }));
         }
 
         /// <summary>Sends an out-of-character chat message to the host.</summary>
@@ -267,6 +391,35 @@ namespace AIROG_Multiplayer
                 case PacketType.InventorySync:
                     var invPayload = pkt.GetPayload<InventorySyncPayload>();
                     MainThreadQueue.Enqueue(() => OnInventoryReceived?.Invoke(invPayload));
+                    break;
+
+                case PacketType.QuestSync:
+                    var quests = pkt.GetPayload<QuestSyncPayload>();
+                    MainThreadQueue.Enqueue(() => OnQuestSyncReceived?.Invoke(quests));
+                    break;
+
+                case PacketType.PrivateResult:
+                    var privResult = pkt.GetPayload<PrivateResultPayload>();
+                    MainThreadQueue.Enqueue(() => OnPrivateResultReceived?.Invoke(privResult));
+                    break;
+
+                case PacketType.CombatBegin:
+                    var combatBegin = pkt.GetPayload<CombatBeginPayload>();
+                    MainThreadQueue.Enqueue(() => OnCombatBegin?.Invoke(combatBegin));
+                    break;
+
+                case PacketType.CombatTurnNotify:
+                    var combatTurn = pkt.GetPayload<CombatTurnNotifyPayload>();
+                    MainThreadQueue.Enqueue(() => OnCombatTurnNotify?.Invoke(combatTurn));
+                    break;
+
+                case PacketType.CombatResult:
+                    var combatRes = pkt.GetPayload<CombatResultPayload>();
+                    MainThreadQueue.Enqueue(() => OnCombatResult?.Invoke(combatRes));
+                    break;
+
+                case PacketType.CombatEnd:
+                    MainThreadQueue.Enqueue(() => OnCombatEnd?.Invoke());
                     break;
 
                 case PacketType.Ping:

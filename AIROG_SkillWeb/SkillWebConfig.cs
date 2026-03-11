@@ -17,8 +17,11 @@ namespace AIROG_SkillWeb
         /// <summary>Whether unlocked-node stat bonuses are applied to the player.</summary>
         public bool AllowStatBonuses = true;
 
-        /// <summary>How many locked frontier nodes to auto-generate when a node is unlocked.</summary>
-        public int FrontierNodesPerUnlock = 2;
+        /// <summary>Minimum locked frontier nodes to auto-generate when a node is unlocked.</summary>
+        public int FrontierNodesMin = 1;
+
+        /// <summary>Maximum locked frontier nodes to auto-generate when a node is unlocked.</summary>
+        public int FrontierNodesMax = 4;
 
         /// <summary>If false, frontier generation is disabled (manual-only expansion).</summary>
         public bool AutoGenerateFrontier = true;
