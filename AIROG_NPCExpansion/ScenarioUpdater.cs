@@ -102,11 +102,15 @@ namespace AIROG_NPCExpansion
                 }
             }
 
-            // ── Rumor propagation (every 3 turns) ─────────────────────────────────
+            // ── Rumor + Gossip propagation (every 3 turns) ────────────────────────
             if (_rumorCounter >= RUMOR_INTERVAL)
             {
                 _rumorCounter = 0;
-                if (nearbyNpcs != null) RumorNetwork.PropagateInPlace(nearbyNpcs);
+                if (nearbyNpcs != null)
+                {
+                    RumorNetwork.PropagateInPlace(nearbyNpcs);
+                    WorldGossipSystem.ProcessGossipInPlace(nearbyNpcs);
+                }
             }
 
             // ── Memory Synthesis + Quest Deadlines (every 10 turns) ───────────────

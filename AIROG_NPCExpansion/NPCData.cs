@@ -62,11 +62,25 @@ namespace AIROG_NPCExpansion
         public bool IsDeceased = false;
         public string DeathInfo = "";
         public string Epitaph = "";
+
+        // Secret System
+        public List<NPCSecret> Secrets = new List<NPCSecret>();
+
+        // Relationship Arc
+        public List<string> ArcMilestones = new List<string>();
         
         // Stats & Skills
         public Dictionary<SS.PlayerAttribute, long> Attributes = new Dictionary<SS.PlayerAttribute, long>();
         public Dictionary<string, PlayerSkill> Skills = new Dictionary<string, PlayerSkill>();
         
+        [Serializable]
+        public class NPCSecret
+        {
+            public string Category = "Unknown"; // Crime, Allegiance, Relationship, Ability, Past
+            public string Text = "";
+            public bool IsRevealed = false;
+        }
+
         [Serializable]
         public struct AbilityData
         {
@@ -137,13 +151,15 @@ namespace AIROG_NPCExpansion
                 if (InteractionHistory.Count > 5) InteractionHistory.RemoveAt(5);
             }
 
-            // Update status based on affinity
-            if (Affinity >= 80) RelationshipStatus = "Soulmate";
-            else if (Affinity >= 50) RelationshipStatus = "Close Friend";
-            else if (Affinity >= 20) RelationshipStatus = "Friend";
+            // Update status based on affinity — aligned with RelationshipArcSystem stages
+            if (Affinity >= 90) RelationshipStatus = "Sworn Companion";
+            else if (Affinity >= 75) RelationshipStatus = "Confidant";
+            else if (Affinity >= 60) RelationshipStatus = "Ally";
+            else if (Affinity >= 40) RelationshipStatus = "Friend";
+            else if (Affinity >= 20) RelationshipStatus = "Acquaintance";
             else if (Affinity > -20) RelationshipStatus = "Stranger";
-            else if (Affinity > -50) RelationshipStatus = "Disliked";
-            else if (Affinity > -80) RelationshipStatus = "Enemy";
+            else if (Affinity > -40) RelationshipStatus = "Disliked";
+            else if (Affinity > -60) RelationshipStatus = "Enemy";
             else RelationshipStatus = "Nemesis";
         }
 

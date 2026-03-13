@@ -20,7 +20,7 @@ namespace AIROG_NPCExpansion
     {
         public const string PLUGIN_GUID = "com.airog.npcexpansion";
         public const string PLUGIN_NAME = "NPC Expansion";
-        public const string PLUGIN_VERSION = "2.0.0";
+        public const string PLUGIN_VERSION = "3.0.0";
 
         public static NPCExpansionPlugin Instance { get; private set; }
         public static string NPCDataPath => Path.Combine(Paths.PluginPath, "AIROG_NPCExpansion", "NPCData");
@@ -206,6 +206,7 @@ namespace AIROG_NPCExpansion
                 NPCData.SaveSessionLore(saveDir);
                 QuestManager.SaveQuests();
                 NPCDeathTracker.SaveMemorial();
+                NPCTeachingSystem.SavePlayerSkills();
             }
         }
 
@@ -218,12 +219,23 @@ namespace AIROG_NPCExpansion
                 string saveDir = Path.Combine(SS.I.saveTopLvlDir, saveSubDir);
                 NPCData.LoadSessionLore(saveDir);
                 QuestManager.LoadQuests(saveDir);
+                NPCTeachingSystem.LoadPlayerSkills(saveDir);
                 NPCUI.RefreshAll();
 
                 // Sync all loaded affinities into game sentiment values
                 foreach (var kvp in NPCData.LoreCache)
                     SyncAffinityToGame(kvp.Key, kvp.Value);
             }
+        }
+
+        // ─── Inject NPC-taught skills into the player status string the AI sees ──
+        [HarmonyPatch(typeof(PcGameEntity), "GetPlayerStatusStrToAppendNoSpace")]
+        [HarmonyPostfix]
+        public static void Postfix_GetPlayerStatusStrToAppendNoSpace(ref string __result)
+        {
+            string taught = NPCTeachingSystem.BuildTaughtSkillsContext();
+            if (!string.IsNullOrEmpty(taught))
+                __result += "\n" + taught;
         }
 
         [HarmonyPatch(typeof(InventoryAndAbilitySelectionPrompter), "SellItem")]
@@ -254,6 +266,7 @@ namespace AIROG_NPCExpansion
                 if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
 
                 var interType = interactionInfo.interacterInfo.interacterType;
+                int oldAffinity = data.Affinity; // capture before ChangeAffinity
                 int affinityDelta = 0;
 
                 if (interType == InteracterInfo.InteracterType.OFFER_ITEM)
@@ -276,12 +289,17 @@ namespace AIROG_NPCExpansion
                 NPCData.Save(npc.uuid, data);
                 SyncAffinityToGame(npc.uuid, data);
 
-                // Social Ripple: cascade the affinity change to bystanders who care about this NPC
+                // Social Ripple + Gossip + Arc Advancement + Secret Auto-Reveal
                 if (affinityDelta != 0)
                 {
                     var manager = GameObject.FindObjectOfType<GameplayManager>();
                     if (manager != null)
+                    {
                         SocialRippleSystem.Process(npc.uuid, npc.GetPrettyName(), affinityDelta, manager);
+                        WorldGossipSystem.SeedPlayerGossip(npc.uuid, npc.GetPrettyName(), affinityDelta);
+                        RelationshipArcSystem.CheckArcAdvancement(npc, data, manager, oldAffinity);
+                        NPCSecretSystem.CheckAutoReveal(npc, data, manager);
+                    }
                 }
 
                 // Death Detection: if the NPC just died (corpseState changed to non-NONE)
@@ -523,6 +541,14 @@ namespace AIROG_NPCExpansion
                 QuestUI.Open(__instance);
                 return Task.CompletedTask;
             }));
+
+            // Relationship Arc actions (Ask Secret, Teach Me — threshold-gated)
+            if (npcData != null && !string.IsNullOrEmpty(npcData.Personality))
+            {
+                var arcActions = RelationshipArcSystem.GetAvailableArcActions(npc, npcData, __instance);
+                foreach (var arcAction in arcActions)
+                    __result.Add(arcAction);
+            }
 
             if (NPCData.LoreCache.Values.Any(d => d != null && d.IsDeceased))
             {

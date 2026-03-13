@@ -19,5 +19,10 @@ namespace AIROG_NPCExpansion
         public int TurnGiven;
         public int TurnDeadline = -1;       // -1 = no deadline
         public string CompletionNotes = "";
+
+        // Quest Chain
+        public string ChainId = "";         // Non-empty if part of a chain; first quest's Id used as ChainId
+        public int ChainStep = 0;           // 0 = standalone / first in chain
+        public bool IsChainFinal = false;   // True on the last quest in the chain
     }
 }

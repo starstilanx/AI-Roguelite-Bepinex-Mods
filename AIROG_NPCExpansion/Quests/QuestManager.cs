@@ -178,6 +178,18 @@ namespace AIROG_NPCExpansion
             _ = manager.gameLogView.LogTextCompat(
                 $"<color=#ffd700>[QUEST COMPLETE] {quest.GiverName}: {quest.ObjectiveText}{goldPart}</color>");
 
+            // Chain finale: record an arc milestone for completing the full chain
+            if (quest.IsChainFinal && !string.IsNullOrEmpty(quest.GiverId))
+            {
+                var chainData = NPCData.Load(quest.GiverId);
+                if (chainData != null)
+                    RelationshipArcSystem.RecordMilestone(quest.GiverId, chainData,
+                        $"Completed full quest chain: {quest.ObjectiveText}");
+            }
+
+            // Try to spawn a follow-up chain quest (40% chance, max 3 steps)
+            _ = QuestChainManager.TryOfferChainQuest(quest, manager);
+
             Debug.Log($"[QuestManager] Quest completed: {quest.ObjectiveText}");
             await Task.CompletedTask;
         }
