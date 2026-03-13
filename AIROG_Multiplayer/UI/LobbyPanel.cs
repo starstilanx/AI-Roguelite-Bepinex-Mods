@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using AIROG_Multiplayer.Network;
+using AIROG_Multiplayer.Persona;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -210,6 +211,11 @@ namespace AIROG_Multiplayer
             _closeBtn = CreateButton(dlg, "CloseBtn", "✕",
                 new Vector2(225, 360), new Vector2(32, 32),
                 new Color(0.55f, 0.15f, 0.15f), () => Hide());
+
+            // Persona selector button — bottom-left of dialog
+            CreateButton(dlg, "PersonaBtn", "👤 Personas",
+                new Vector2(-120, y - 92), new Vector2(150, 32),
+                new Color(0.38f, 0.28f, 0.55f), OnPersonasClicked);
 
             RefreshButtonStates();
         }
@@ -449,6 +455,24 @@ namespace AIROG_Multiplayer
                     RefreshButtonStates();
                 }
             );
+        }
+
+        private void OnPersonasClicked()
+        {
+            PersonaUI.Show(ApplyPersona);
+        }
+
+        public void ApplyPersona(PersonaData persona)
+        {
+            _charNameInput.text        = persona.CharacterName;
+            _charClassInput.text       = persona.CharacterClass;
+            _charBgInput.text          = persona.Background;
+            _charPersonalityInput.text = persona.Personality;
+            _charAppearanceInput.text  = persona.PhysicalAppearance;
+            _charHpInput.text          = persona.DefaultHp.ToString();
+            _charMaxHpInput.text       = persona.DefaultMaxHp.ToString();
+            _charLevelInput.text       = persona.DefaultLevel.ToString();
+            SetStatus($"Applied persona: {persona.PersonaName}", new Color(0.5f, 0.9f, 1f));
         }
 
         private void SetStatus(string msg, Color color)
