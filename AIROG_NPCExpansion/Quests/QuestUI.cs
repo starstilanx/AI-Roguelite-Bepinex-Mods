@@ -45,7 +45,22 @@ namespace AIROG_NPCExpansion
         private void Show(GameplayManager manager)
         {
             _manager = manager;
-            if (_window == null) CreateUI();
+
+            // Rebuild UI if stale (e.g. scene reload destroyed scroll content but not the window)
+            if (_window == null || _scrollContent == null)
+            {
+                if (_window != null) { Destroy(_window); _window = null; }
+                if (_modalBlocker != null) { Destroy(_modalBlocker); _modalBlocker = null; }
+                _scrollContent = null;
+                CreateUI();
+            }
+            else
+            {
+                // Re-parent to the current manager's canvas (handles manager changes between opens)
+                _window.transform.SetParent(manager.canvasTransform, false);
+                if (_modalBlocker != null) _modalBlocker.transform.SetParent(manager.canvasTransform, false);
+            }
+
             if (_modalBlocker != null) _modalBlocker.SetActive(true);
             _window.SetActive(true);
             _window.transform.SetAsLastSibling();
@@ -182,6 +197,10 @@ namespace AIROG_NPCExpansion
                 AddSectionHeader("── Failed ──");
                 foreach (var q in failed) AddQuestEntry(q);
             }
+
+            // Force immediate layout recalculation so entries are visible on first open
+            UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(
+                _scrollContent.GetComponent<RectTransform>());
         }
 
         private void AddSectionHeader(string text)

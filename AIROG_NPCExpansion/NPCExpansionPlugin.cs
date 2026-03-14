@@ -124,49 +124,56 @@ namespace AIROG_NPCExpansion
              }
         }
 
+        // Prevents the merchant restock cycle from firing on non-merchant NPCs.
+        // TurnHappened() wipes npc.items and resets merchantGenerationState=NOT_STARTED for ALL
+        // characters every 2-8 turns (no isMerchant guard in the base game). For non-merchants this
+        // destroys player-gifted gear and causes GenerateItems() to fire if the player opens trade.
+        [HarmonyPatch(typeof(GameCharacter), "NeedsRestock")]
+        [HarmonyPrefix]
+        public static bool Prefix_NeedsRestock(GameCharacter __instance, ref bool __result)
+        {
+            if (!__instance.isMerchant)
+            {
+                __result = false;
+                return false; // skip original — non-merchants never restock
+            }
+            return true; // actual merchants: run original logic
+        }
+
+        // Safety net for actual merchant NPCs that have received player-gifted items (INVENTORY state).
+        // When a merchant restocks, we preserve those items so they survive the new stock generation.
         [HarmonyPatch(typeof(GameCharacter), "TurnHappened")]
         [HarmonyPrefix]
         public static void Prefix_TurnHappened(GameCharacter __instance, out List<GameItem> __state)
         {
             __state = null;
-            // General protection for ALL NPCs: Save "INVENTORY" items (personal gear) from being wiped.
-            // This fixes issues where Companions (former merchants?) lose gear on restock timers.
-            if (__instance.items != null)
-            {
-                var personalItems = __instance.items.Where(i => i.itemState == GameItem.ItemState.INVENTORY).ToList();
-                if (personalItems.Count > 0)
-                {
-                    __state = personalItems;
-                    // Debug.Log($"[AIROG_NPCExpansion] Tracking {__state.Count} personal items for {__instance.GetPrettyName()} during turn.");
-                }
-            }
+            if (!__instance.isMerchant) return; // non-merchants are guarded by Prefix_NeedsRestock
+            if (__instance.items == null) return;
+
+            var giftedItems = __instance.items.Where(i => i.itemState == GameItem.ItemState.INVENTORY).ToList();
+            if (giftedItems.Count > 0)
+                __state = giftedItems;
         }
 
         [HarmonyPatch(typeof(GameCharacter), "TurnHappened")]
         [HarmonyPostfix]
         public static void Postfix_TurnHappened(GameCharacter __instance, List<GameItem> __state)
         {
-            if (__state != null && __state.Count > 0)
+            if (__state == null || __state.Count == 0) return;
+
+            int restored = 0;
+            foreach (var item in __state)
             {
-                int restored = 0;
-                foreach (var item in __state)
+                if (!__instance.items.Contains(item))
                 {
-                    if (!__instance.items.Contains(item))
-                    {
-                        __instance.items.Add(item);
-                        // Also ensure personal gear has correct state
-                        if (item.itemState == GameItem.ItemState.MERCHANT) 
-                            item.itemState = GameItem.ItemState.INVENTORY;
-                        
-                        restored++;
-                    }
-                }
-                
-                if (restored > 0)
-                {
-                    Debug.Log($"[AIROG_NPCExpansion] SAVED {restored} personal items for {__instance.GetPrettyName()} from potential wipe.");
+                    item.itemState = GameItem.ItemState.INVENTORY;
+                    __instance.items.Add(item);
+                    restored++;
                 }
             }
+
+            if (restored > 0)
+                Debug.Log($"[AIROG_NPCExpansion] Preserved {restored} gifted item(s) for merchant {__instance.GetPrettyName()} across restock.");
         }
 
 
