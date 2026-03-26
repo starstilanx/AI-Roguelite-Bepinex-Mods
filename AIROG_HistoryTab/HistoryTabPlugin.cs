@@ -31,13 +31,25 @@ namespace AIROG_HistoryTab
                 var harmony = new Harmony(PLUGIN_GUID);
                 Logger.LogInfo("Harmony instance created.");
                 
-                // 1. BuildPromptString
+                // 1. BuildPromptString — postfix is disabled (logic lives in GenContext now),
+                // but we still resolve the method so the patch call doesn't error-log.
                 Logger.LogInfo("Attempting to find BuildPromptString...");
-                var buildPromptMethod = AccessTools.Method(typeof(GameplayManager), "BuildPromptString", new Type[] { 
-                    typeof(string).MakeByRefType(), typeof(bool), typeof(bool), typeof(InteractionInfo), 
-                    typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld), 
-                    typeof(List<Faction>), typeof(List<string>) 
-                });
+                var buildPromptMethod =
+                    AccessTools.Method(typeof(GameplayManager), "BuildPromptString", new Type[] {
+                        typeof(string).MakeByRefType(), typeof(bool), typeof(bool), typeof(InteractionInfo),
+                        typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld),
+                        typeof(List<Faction>), typeof(List<string>), typeof(bool), typeof(bool) // current (12 params)
+                    }) ??
+                    AccessTools.Method(typeof(GameplayManager), "BuildPromptString", new Type[] {
+                        typeof(string).MakeByRefType(), typeof(bool), typeof(bool), typeof(InteractionInfo),
+                        typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld),
+                        typeof(List<Faction>), typeof(List<string>), typeof(bool) // alpha (11 params)
+                    }) ??
+                    AccessTools.Method(typeof(GameplayManager), "BuildPromptString", new Type[] {
+                        typeof(string).MakeByRefType(), typeof(bool), typeof(bool), typeof(InteractionInfo),
+                        typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld),
+                        typeof(List<Faction>), typeof(List<string>) // stable (10 params)
+                    });
 
                 if (buildPromptMethod != null)
                 {

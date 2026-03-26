@@ -151,6 +151,8 @@ namespace AIROG_GenContext.DMNotes
         {
             try
             {
+                CurrentState = new DmNotesState();
+                _uiDirty = true;
                 if (SS.I == null || string.IsNullOrEmpty(saveSubDir)) return;
                 string path = Path.Combine(SS.I.saveTopLvlDir, saveSubDir, "dm_notes_state.json");
                 if (File.Exists(path))

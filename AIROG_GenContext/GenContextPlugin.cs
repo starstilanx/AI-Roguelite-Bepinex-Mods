@@ -30,8 +30,14 @@ namespace AIROG_GenContext
             Harmony.CreateAndPatchAll(typeof(GenContextPlugin));
 
             // Patch BuildPromptString with version-aware fallback:
-            // Alpha has 11 params (includes isForUnifiedReq), stable has 10.
+            // Current has 12 params (isForUnifiedReqDeprecated + isForStoryPipeline),
+            // alpha had 11 (isForUnifiedReq only), stable had 10.
             var buildPromptMethod =
+                AccessTools.Method(typeof(GameplayManager), "BuildPromptString", new Type[] {
+                    typeof(string).MakeByRefType(), typeof(bool), typeof(bool), typeof(InteractionInfo),
+                    typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld),
+                    typeof(List<Faction>), typeof(List<string>), typeof(bool), typeof(bool) // current (12 params)
+                }) ??
                 AccessTools.Method(typeof(GameplayManager), "BuildPromptString", new Type[] {
                     typeof(string).MakeByRefType(), typeof(bool), typeof(bool), typeof(InteractionInfo),
                     typeof(GameCharacter), typeof(Place), typeof(bool), typeof(VoronoiWorld),

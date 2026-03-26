@@ -44,6 +44,16 @@ namespace AIROG_GenContext
 
         public static List<IContextProvider> GetProviders() => _providers;
 
+        /// <summary>Called by external mods to register their own context providers.</summary>
+        public static void RegisterProvider(IContextProvider provider)
+        {
+            for (int i = 0; i < _providers.Count; i++)
+                if (_providers[i].Name == provider.Name) return; // prevent double-registration
+            _providers.Add(provider);
+            _providers.Sort((a, b) => b.Priority.CompareTo(a.Priority));
+            Debug.Log($"[GenContext] External provider registered: {provider.Name} (priority {provider.Priority})");
+        }
+
         public static bool IsProviderEnabled(string name)
         {
             if (_enabledProviders.ContainsKey(name)) return _enabledProviders[name];
