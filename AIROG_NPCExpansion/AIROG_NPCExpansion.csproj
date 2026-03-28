@@ -7,7 +7,7 @@
     <Version>1.0.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
-    <OutputPath>..\AIROG_GenContext\bin\Debug\net472\</OutputPath>
+    <OutputPath>bin\Debug\net472\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 

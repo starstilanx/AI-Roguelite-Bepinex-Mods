@@ -125,9 +125,9 @@ namespace AIROG_NPCExpansion
         }
 
         // Prevents the merchant restock cycle from firing on non-merchant NPCs.
-        // TurnHappened() wipes npc.items and resets merchantGenerationState=NOT_STARTED for ALL
-        // characters every 2-8 turns (no isMerchant guard in the base game). For non-merchants this
-        // destroys player-gifted gear and causes GenerateItems() to fire if the player opens trade.
+        // First line of defence: NeedsRestock() is patched to always return false for non-merchants.
+        // NOTE: This may not fire if NeedsRestock() is JIT-inlined into TurnHappened; the
+        // Prefix/Postfix static-dictionary approach below acts as a belt-and-suspenders safety net.
         [HarmonyPatch(typeof(GameCharacter), "NeedsRestock")]
         [HarmonyPrefix]
         public static bool Prefix_NeedsRestock(GameCharacter __instance, ref bool __result)
@@ -140,29 +140,46 @@ namespace AIROG_NPCExpansion
             return true; // actual merchants: run original logic
         }
 
-        // Safety net for actual merchant NPCs that have received player-gifted items (INVENTORY state).
-        // When a merchant restocks, we preserve those items so they survive the new stock generation.
+        // Static dictionary used to pass saved items from Prefix to Postfix.
+        // Using a static field is more reliable than Harmony's __state mechanism when Prefix and
+        // Postfix are registered as separate attribute-patched methods (Harmony may not correctly
+        // thread __state across separately-registered patches).
+        private static readonly Dictionary<string, List<GameItem>> _restockSavedItems =
+            new Dictionary<string, List<GameItem>>();
+
+        // Before each TurnHappened: snapshot items that must survive a potential restock wipe.
+        //   • Merchants  → save only player-gifted INVENTORY items (merchant stock may legitimately wipe)
+        //   • Non-merchants → save ALL items (they should never be wiped; this guards against inlining)
         [HarmonyPatch(typeof(GameCharacter), "TurnHappened")]
         [HarmonyPrefix]
-        public static void Prefix_TurnHappened(GameCharacter __instance, out List<GameItem> __state)
+        public static void Prefix_TurnHappened(GameCharacter __instance)
         {
-            __state = null;
-            if (!__instance.isMerchant) return; // non-merchants are guarded by Prefix_NeedsRestock
-            if (__instance.items == null) return;
+            if (string.IsNullOrEmpty(__instance.uuid)) return;
+            _restockSavedItems.Remove(__instance.uuid);
+            if (__instance.items == null || __instance.items.Count == 0) return;
 
-            var giftedItems = __instance.items.Where(i => i.itemState == GameItem.ItemState.INVENTORY).ToList();
-            if (giftedItems.Count > 0)
-                __state = giftedItems;
+            List<GameItem> toSave = __instance.isMerchant
+                ? __instance.items.Where(i => i.itemState == GameItem.ItemState.INVENTORY).ToList()
+                : __instance.items.ToList(); // non-merchants: preserve everything
+
+            if (toSave.Count > 0)
+                _restockSavedItems[__instance.uuid] = toSave;
         }
 
+        // After each TurnHappened: restore any items that were wiped by the restock logic.
+        // If no wipe occurred (the common case), all items are still present and nothing is added.
         [HarmonyPatch(typeof(GameCharacter), "TurnHappened")]
         [HarmonyPostfix]
-        public static void Postfix_TurnHappened(GameCharacter __instance, List<GameItem> __state)
+        public static void Postfix_TurnHappened(GameCharacter __instance)
         {
-            if (__state == null || __state.Count == 0) return;
+            if (string.IsNullOrEmpty(__instance.uuid)) return;
+            if (!_restockSavedItems.TryGetValue(__instance.uuid, out var saved)) return;
+            _restockSavedItems.Remove(__instance.uuid);
+            if (saved == null || saved.Count == 0) return;
+            if (__instance.items == null) __instance.items = new List<GameItem>();
 
             int restored = 0;
-            foreach (var item in __state)
+            foreach (var item in saved)
             {
                 if (!__instance.items.Contains(item))
                 {
@@ -173,7 +190,15 @@ namespace AIROG_NPCExpansion
             }
 
             if (restored > 0)
-                Debug.Log($"[AIROG_NPCExpansion] Preserved {restored} gifted item(s) for merchant {__instance.GetPrettyName()} across restock.");
+            {
+                // For non-merchants whose items were wiped by an inlined NeedsRestock call,
+                // set state to FINISHED so "Trade" doesn't trigger spurious GenerateItems().
+                if (!__instance.isMerchant)
+                    __instance.merchantGenerationState = GameCharacter.MerchantGenerationState.FINISHED;
+
+                string ctx = __instance.isMerchant ? "merchant" : "non-merchant NPC";
+                Debug.Log($"[AIROG_NPCExpansion] Preserved {restored} item(s) for {ctx} {__instance.GetPrettyName()} across restock.");
+            }
         }
 
 
