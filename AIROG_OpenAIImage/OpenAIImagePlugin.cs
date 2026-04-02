@@ -19,21 +19,38 @@ namespace AIROG_OpenAIImage
     {
         public static OpenAIImagePlugin Instance;
         public static BepInEx.Logging.ManualLogSource Log;
-        
+
         public const string PREF_KEY_OPENAI_API_KEY = "PREF_KEY_OPENAI_IMG_GEN_API_KEY";
 
-        public string OpenAIApiKey => PlayerPrefs.HasKey(PREF_KEY_OPENAI_API_KEY) 
-            ? PlayerPrefs.GetString(PREF_KEY_OPENAI_API_KEY) 
-            : Config.Bind("General", "OpenAIApiKey", "", "API Key for OpenAI Image Generation").Value;
-            
-        public string OpenAIBaseUrl => Config.Bind("General", "OpenAIBaseUrl", "https://api.openai.com/v1", "Base URL for OpenAI Image Generation API").Value;
-            
-        public string OpenAIModel => Config.Bind("General", "OpenAIModel", "dall-e-3", "Model ID to use for OpenAI Image Generation").Value;
+        private BepInEx.Configuration.ConfigEntry<string> _cfgApiKey;
+        private BepInEx.Configuration.ConfigEntry<string> _cfgBaseUrl;
+        private BepInEx.Configuration.ConfigEntry<string> _cfgModel;
+        private BepInEx.Configuration.ConfigEntry<string> _cfgModeration;
+        private BepInEx.Configuration.ConfigEntry<string> _cfgOutputFormat;
+        private BepInEx.Configuration.ConfigEntry<string> _cfgSize;
+
+        public string OpenAIApiKey => PlayerPrefs.HasKey(PREF_KEY_OPENAI_API_KEY)
+            ? PlayerPrefs.GetString(PREF_KEY_OPENAI_API_KEY)
+            : _cfgApiKey.Value;
+        public string OpenAIBaseUrl => _cfgBaseUrl.Value;
+        public string OpenAIModel => _cfgModel.Value;
+        public string OpenAIModeration => _cfgModeration.Value;
+        public string OpenAIOutputFormat => _cfgOutputFormat.Value;
+        public string OpenAISize => _cfgSize.Value;
 
         private void Awake()
         {
             Instance = this;
             Log = Logger;
+
+            // Bind all config entries at startup so they appear in the cfg file immediately
+            _cfgApiKey      = Config.Bind("General", "OpenAIApiKey",  "",                          "API Key for OpenAI Image Generation (also settable via in-game options)");
+            _cfgBaseUrl     = Config.Bind("General", "OpenAIBaseUrl", "https://api.openai.com/v1", "Base URL for OpenAI-compatible image API (e.g. https://api.venice.ai/api/v1)");
+            _cfgModel       = Config.Bind("General", "OpenAIModel",   "dall-e-3",                  "Model ID to use for image generation");
+            _cfgModeration  = Config.Bind("Venice",  "Moderation",    "",                          "Venice AI moderation level: 'auto' (default, blurs NSFW) or 'low' (disables blurring). Leave empty to omit.");
+            _cfgOutputFormat= Config.Bind("Venice",  "OutputFormat",  "",                          "Image output format: jpeg, png, or webp. Leave empty for API default (png).");
+            _cfgSize        = Config.Bind("Venice",  "ImageSize",     "",                          "Image size override: 256x256, 512x512, 1024x1024, 1536x1024, 1024x1536, 1792x1024, 1024x1792. Leave empty for default (1024x1024).");
+
             var harmony = new Harmony("com.airog.openaiimage");
             harmony.PatchAll();
             Logger.LogInfo("OpenAIImage loaded! Ready to generate some images.");
@@ -53,12 +70,20 @@ namespace AIROG_OpenAIImage
                 if (!url.EndsWith("/")) url += "/";
                 url += "images/generations";
 
+                string moderation = OpenAIModeration;
+                string outputFormat = OpenAIOutputFormat;
+                string sizeOverride = OpenAISize;
+
                 JObject body = new JObject();
                 body["model"] = model;
                 body["prompt"] = prompt;
                 body["n"] = 1;
-                body["size"] = "1024x1024";
+                body["size"] = !string.IsNullOrEmpty(sizeOverride) ? sizeOverride : "1024x1024";
                 body["response_format"] = "b64_json"; // Request base64 directly to avoid secondary download
+                if (!string.IsNullOrEmpty(moderation))
+                    body["moderation"] = moderation;
+                if (!string.IsNullOrEmpty(outputFormat))
+                    body["output_format"] = outputFormat;
 
                 Logger.LogInfo($"OpenAIImage: Sending request to {url} for {geArg.name} with model {model}");
 
