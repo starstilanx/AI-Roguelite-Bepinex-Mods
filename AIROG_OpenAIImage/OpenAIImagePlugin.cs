@@ -242,50 +242,64 @@ namespace AIROG_OpenAIImage
 
         public static void Postfix(MainMenu __instance)
         {
-            int ind = __instance.imageGenerationDropdown.value;
-            bool isOpenAI = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count && 
-                            __instance.imageGenerationDropdown.options[ind].text == "OpenAI Consistent";
-
-            var labelComponent = __instance.customerKeyTxtInputForImgGenTrans.GetComponentsInChildren<TMP_Text>(true)
-                .FirstOrDefault(t => t.name.ToLower().Contains("label") || t.text.ToLower().Contains("key") || t.text.ToLower().Contains("customer"));
-
-            if (isOpenAI)
+            try
             {
-                if (_originalKeyLabel == null && labelComponent != null) _originalKeyLabel = labelComponent.text;
+                int ind = __instance.imageGenerationDropdown.value;
+                bool isOpenAI = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
+                                __instance.imageGenerationDropdown.options[ind].text == "OpenAI Consistent";
 
-                __instance.imgGenExplanation.SetText("Generates images using an OpenAI-compatible API. \n\n<color=#00FF00>Note:</color> Enter your API Key below. Base URL and Model can be configured in BepInEx.", true);
-                
-                __instance.customerKeyTxtInputForImgGenTrans.gameObject.SetActive(true);
-                if (labelComponent != null) labelComponent.text = "OpenAI API Key";
-
-                string currentKey = PlayerPrefs.GetString(OpenAIImagePlugin.PREF_KEY_OPENAI_API_KEY, OpenAIImagePlugin.Instance.OpenAIApiKey);
-                __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(currentKey);
-
-                __instance.womboStyleHolder.gameObject.SetActive(false);
-                __instance.naiModelTransform.gameObject.SetActive(false);
-                __instance.stableHordeKeyTransform.gameObject.SetActive(false);
-                
-                __instance.imgGenTweakHolder.gameObject.SetActive(true);
-                __instance.exportImportImgGenSettingsTrans.gameObject.SetActive(true);
-                
-                if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
-            }
-            else
-            {
-                if (_originalKeyLabel != null && labelComponent != null)
+                TMP_Text labelComponent = null;
+                if (__instance.customerKeyTxtInputForImgGenTrans != null)
                 {
-                    labelComponent.text = _originalKeyLabel;
+                    labelComponent = __instance.customerKeyTxtInputForImgGenTrans.GetComponentsInChildren<TMP_Text>(true)
+                        .FirstOrDefault(t => t.name.ToLower().Contains("label") || t.text.ToLower().Contains("key") || t.text.ToLower().Contains("customer"));
                 }
 
-                var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (method != null)
+                if (isOpenAI)
                 {
-                    SS.ImageGenerationMode selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
-                    if (selectedMode == SS.ImageGenerationMode.SAPPHIRE)
+                    if (_originalKeyLabel == null && labelComponent != null) _originalKeyLabel = labelComponent.text;
+
+                    if (__instance.imgGenExplanation != null)
+                        __instance.imgGenExplanation.SetText("Generates images using an OpenAI-compatible API. \n\n<color=#00FF00>Note:</color> Enter your API Key below. Base URL and Model can be configured in BepInEx.", true);
+
+                    if (__instance.customerKeyTxtInputForImgGenTrans != null)
+                        __instance.customerKeyTxtInputForImgGenTrans.gameObject.SetActive(true);
+                    if (labelComponent != null) labelComponent.text = "OpenAI API Key";
+
+                    string currentKey = PlayerPrefs.GetString(OpenAIImagePlugin.PREF_KEY_OPENAI_API_KEY, OpenAIImagePlugin.Instance.OpenAIApiKey);
+                    if (__instance.customerKeyTxtInputForImgGen != null)
+                        __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(currentKey);
+
+                    if (__instance.womboStyleHolder != null) __instance.womboStyleHolder.gameObject.SetActive(false);
+                    if (__instance.naiModelTransform != null) __instance.naiModelTransform.gameObject.SetActive(false);
+                    if (__instance.stableHordeKeyTransform != null) __instance.stableHordeKeyTransform.gameObject.SetActive(false);
+
+                    if (__instance.imgGenTweakHolder != null) __instance.imgGenTweakHolder.gameObject.SetActive(true);
+                    if (__instance.exportImportImgGenSettingsTrans != null) __instance.exportImportImgGenSettingsTrans.gameObject.SetActive(true);
+
+                    if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
+                }
+                else
+                {
+                    if (_originalKeyLabel != null && labelComponent != null)
                     {
-                        __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
+                        labelComponent.text = _originalKeyLabel;
+                    }
+
+                    var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (method != null)
+                    {
+                        SS.ImageGenerationMode selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
+                        if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeyTxtInputForImgGen != null)
+                        {
+                            __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
+                        }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                OpenAIImagePlugin.Log.LogError($"[OpenAIImage] OnImageGenerationDropdownChanged postfix failed (alpha compat): {ex.Message}");
             }
         }
     }

@@ -35,7 +35,23 @@ namespace AIROG_NPCExpansion
                 Directory.CreateDirectory(NPCDataPath);
             }
 
-            Harmony.CreateAndPatchAll(typeof(NPCExpansionPlugin));
+            var harmony = new Harmony(PLUGIN_GUID);
+            harmony.PatchAll(typeof(NPCExpansionPlugin));
+
+            // Manually patch PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace —
+            // Harmony's attribute-based resolver fails for this newly-added class at runtime.
+            var statusMethod = AccessTools.Method(typeof(PlayableCharacterData), "GetPlayerStatusStrToAppendNoSpace");
+            if (statusMethod != null)
+            {
+                harmony.Patch(statusMethod,
+                    postfix: new HarmonyMethod(typeof(NPCExpansionPlugin),
+                        nameof(Postfix_GetPlayerStatusStrToAppendNoSpace)));
+                Logger.LogInfo("[NPCExpansion] Patched PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace manually.");
+            }
+            else
+            {
+                Logger.LogWarning("[NPCExpansion] Could not find PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace — NPC skill context will not be injected.");
+            }
 
             // Initialize UI logic
             NPCUI.Init();
@@ -261,8 +277,7 @@ namespace AIROG_NPCExpansion
         }
 
         // ─── Inject NPC-taught skills into the player status string the AI sees ──
-        [HarmonyPatch(typeof(PcGameEntity), "GetPlayerStatusStrToAppendNoSpace")]
-        [HarmonyPostfix]
+        // NOTE: patched manually via AccessTools in Awake() — attributes removed to avoid double-patch.
         public static void Postfix_GetPlayerStatusStrToAppendNoSpace(ref string __result)
         {
             string taught = NPCTeachingSystem.BuildTaughtSkillsContext();

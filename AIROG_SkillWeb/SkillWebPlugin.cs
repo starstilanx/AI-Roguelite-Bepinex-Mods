@@ -211,7 +211,7 @@ namespace AIROG_SkillWeb
             }
         }
 
-        [HarmonyPatch(typeof(PcGameEntity), "GetPlayerStatusStrToAppendNoSpace")]
+        [HarmonyPatch(typeof(PlayableCharacterData), "GetPlayerStatusStrToAppendNoSpace")]
         [HarmonyPostfix]
         public static void PcGameEntity_GetPlayerStatusStrToAppendNoSpace_Postfix(ref string __result)
         {

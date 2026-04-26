@@ -19,6 +19,9 @@ namespace AIROG_NanoBanana
     {
         public static NanoBananaPlugin Instance;
         public static BepInEx.Logging.ManualLogSource Log;
+        // Suppresses ApplyUiState during Options() body to avoid the spurious
+        // OnImageGenerationDropdownChanged(0) call the game fires internally.
+        internal static bool _optionsOpenInProgress = false;
         
         public const string PREF_KEY_GEMINI_API_KEY = "PREF_KEY_GEMINI_IMG_GEN_API_KEY";
         public const string PREF_KEY_GEMINI_MODEL = "PREF_KEY_GEMINI_IMG_GEN_MODEL";
@@ -156,36 +159,51 @@ namespace AIROG_NanoBanana
         }
     }
 
-    // --- Harmony Patches ---
-
     [HarmonyPatch(typeof(MainMenu), "Options")]
     public static class Patch_MainMenu_Options
     {
+        [HarmonyPrefix]
+        public static void Prefix(MainMenu __instance)
+        {
+            NanoBananaPlugin._optionsOpenInProgress = true;
+            bool isGemini = PlayerPrefs.GetInt("PREF_KEY_NANO_BANANA_ACTIVE", 0) == 1
+                         || SS.I.imageGenerationMode == (SS.ImageGenerationMode)99;
+            NanoBananaPlugin.Log.LogInfo($"[NanoBanana] Options Prefix: isGemini={isGemini}, mode={SS.I.imageGenerationMode}, activeFlag={PlayerPrefs.GetInt("PREF_KEY_NANO_BANANA_ACTIVE",0)}");
+            if (!isGemini || __instance.imageGenerationDropdown == null) return;
+
+            // Protect the pref from being reset by PopulateSsPrefsWithPlayerPrefs guard
+            PlayerPrefs.SetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 99);
+            PlayerPrefs.SetInt("PREF_KEY_NANO_BANANA_ACTIVE", 1);
+            SS.I.imageGenerationMode = (SS.ImageGenerationMode)99;
+        }
+
+        [HarmonyPostfix]
         public static void Postfix(MainMenu __instance)
         {
-            // Inject "Gemini (Nano Banana)" into the image generation dropdown options
+            // Always inject the Gemini option (it was wiped by ClearOptions inside Options())
             List<TMP_Dropdown.OptionData> options = __instance.imageGenerationDropdown.options;
             if (!options.Any(o => o.text == "Gemini (Nano Banana)"))
-            {
                 options.Add(new TMP_Dropdown.OptionData("Gemini (Nano Banana)"));
-            }
 
-            // Sync the dropdown value from prefs
-            int savedMode = PlayerPrefs.GetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 8);
-            if (savedMode == 99)
+            // Two-signal check: new flag OR mode already set to 99 by our other patches
+            bool wasGemini = PlayerPrefs.GetInt("PREF_KEY_NANO_BANANA_ACTIVE", 0) == 1
+                          || SS.I.imageGenerationMode == (SS.ImageGenerationMode)99;
+            NanoBananaPlugin.Log.LogInfo($"[NanoBanana] Options Postfix: wasGemini={wasGemini}, dropdownCount={options.Count}");
+
+            if (wasGemini)
             {
                 int geminiIndex = options.FindIndex(o => o.text == "Gemini (Nano Banana)");
+                NanoBananaPlugin.Log.LogInfo($"[NanoBanana] Options Postfix: geminiIndex={geminiIndex}");
                 if (geminiIndex != -1)
-                {
-                    // Use SetValueWithoutNotify to set the index, then manually fire our UI update
                     __instance.imageGenerationDropdown.SetValueWithoutNotify(geminiIndex);
-                }
-                
+
+                SS.I.imageGenerationMode = (SS.ImageGenerationMode)99;
+                PlayerPrefs.SetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 99);
+                PlayerPrefs.SetInt("PREF_KEY_NANO_BANANA_ACTIVE", 1);
                 if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
             }
 
-            // Always fire the dropdown postfix logic to ensure UI is consistent with current selection
-            // This handles the case where we load Options with Gemini already selected
+            NanoBananaPlugin._optionsOpenInProgress = false;
             Patch_OnImageGenerationDropdownChanged.ApplyUiState(__instance);
         }
     }
@@ -195,13 +213,19 @@ namespace AIROG_NanoBanana
     {
         public static void Postfix(MainMenu __instance)
         {
+            // Guard: dropdown may be null if SaveCurrentPrefs is called outside the Options screen
+            if (__instance == null || __instance.imageGenerationDropdown == null) return;
+
             // Save Gemini key if it's currently selected in the dropdown
             int ind = __instance.imageGenerationDropdown.value;
-            bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count && 
+            bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
                             __instance.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
             
             if (isGemini)
             {
+                // Guard: the API key input field may also be null outside the Options screen
+                if (__instance.customerKeyTxtInputForImgGen == null || __instance.imgGenPresetDropdown == null) return;
+
                 string val = __instance.customerKeyTxtInputForImgGen.text;
                 PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, val);
 
@@ -209,6 +233,15 @@ namespace AIROG_NanoBanana
                 string model = presetInd == 1 ? "gemini-3-pro-image-preview" : "gemini-2.5-flash-image";
                 PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_MODEL, model);
 
+                // Persist mode 99 so PopulateSsPrefsWithPlayerPrefs can restore it
+                PlayerPrefs.SetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 99);
+                PlayerPrefs.SetInt("PREF_KEY_NANO_BANANA_ACTIVE", 1);
+                PlayerPrefs.Save();
+            }
+            else
+            {
+                // User switched away from Gemini — clear the active flag
+                PlayerPrefs.SetInt("PREF_KEY_NANO_BANANA_ACTIVE", 0);
                 PlayerPrefs.Save();
             }
         }
@@ -239,90 +272,128 @@ namespace AIROG_NanoBanana
     public static class Patch_OnImageGenerationDropdownChanged
     {
         private static string _originalKeyLabel = null;
-        // Track which elements we've hidden so we can restore them
         private static bool _hidWomboStyle = false;
         private static bool _hidNaiModel = false;
         private static bool _hidStableHordeKey = false;
 
-        // Public method so Patch_MainMenu_Options can call it directly
         public static void ApplyUiState(MainMenu __instance)
         {
-            int ind = __instance.imageGenerationDropdown.value;
-            bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
-                            __instance.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
-
-            // Find label component for the imgGen key field
-            var labelComponent = __instance.customerKeyTxtInputForImgGenTrans.GetComponentsInChildren<TMP_Text>(true)
-                .FirstOrDefault(t => t.name.ToLower().Contains("label") || t.text.ToLower().Contains("key") || t.text.ToLower().Contains("customer") || t.text == "Gemini API Key");
-
-            if (isGemini)
+            try
             {
-                // Store original label if we haven't yet
-                if (_originalKeyLabel == null && labelComponent != null) _originalKeyLabel = labelComponent.text;
+                int ind = __instance.imageGenerationDropdown.value;
+                bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
+                                __instance.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
 
-                __instance.imgGenExplanation.SetText("Generates images using Google Gemini.\n\n<color=#00FF00>Note:</color> Enter your Gemini API Key below. Select the model from the preset dropdown.", true);
-                
-                // Repurpose the Sapphire Key field
-                __instance.customerKeyTxtInputForImgGenTrans.gameObject.SetActive(true);
-                if (labelComponent != null) labelComponent.text = "Gemini API Key";
-
-                // Load our key
-                string currentKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, NanoBananaPlugin.Instance.GeminiApiKey);
-                __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(currentKey);
-
-                // Hide irrelevant elements (and track what we hid so we can restore them)
-                if (__instance.womboStyleHolder.gameObject.activeSelf) { __instance.womboStyleHolder.gameObject.SetActive(false); _hidWomboStyle = true; }
-                if (__instance.naiModelTransform.gameObject.activeSelf) { __instance.naiModelTransform.gameObject.SetActive(false); _hidNaiModel = true; }
-                if (__instance.stableHordeKeyTransform.gameObject.activeSelf) { __instance.stableHordeKeyTransform.gameObject.SetActive(false); _hidStableHordeKey = true; }
-                
-                // Show standard stuff
-                __instance.imgGenTweakHolder.gameObject.SetActive(true);
-                __instance.exportImportImgGenSettingsTrans.gameObject.SetActive(true);
-
-                if (__instance.imgGenPresetDropdown != null)
+                // Find label component for the imgGen key field
+                TMP_Text labelComponent = null;
+                if (__instance.customerKeyTxtInputForImgGenTrans != null)
                 {
-                    __instance.imgGenPresetDropdown.gameObject.SetActive(true);
-                    if (__instance.imgGenPresetDropdown.transform.parent != null)
-                    {
-                        __instance.imgGenPresetDropdown.transform.parent.gameObject.SetActive(true);
-                    }
-                    var populateMethod = __instance.GetType().GetMethod("PopulateImageGenPresetDropdown", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    populateMethod?.Invoke(__instance, null);
+                    labelComponent = __instance.customerKeyTxtInputForImgGenTrans.GetComponentsInChildren<TMP_Text>(true)
+                        .FirstOrDefault(t => t.name.ToLower().Contains("label") || t.text.ToLower().Contains("key") || t.text.ToLower().Contains("customer") || t.text == "Gemini API Key");
                 }
-                
-                // Ensure settingsPojo is not null for this mode
-                if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
+
+                if (isGemini)
+                {
+                    // Store original label if we haven't yet
+                    if (_originalKeyLabel == null && labelComponent != null) _originalKeyLabel = labelComponent.text;
+
+                    if (__instance.imgGenExplanation != null)
+                        __instance.imgGenExplanation.SetText("Generates images using Google Gemini.\n\n<color=#00FF00>Note:</color> Enter your Gemini API Key below. Select the model from the preset dropdown.", true);
+
+                    // Repurpose the Sapphire Key field
+                    if (__instance.customerKeyTxtInputForImgGenTrans != null)
+                        __instance.customerKeyTxtInputForImgGenTrans.gameObject.SetActive(true);
+                    if (labelComponent != null) labelComponent.text = "Gemini API Key";
+
+                    // Load our key
+                    string currentKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, NanoBananaPlugin.Instance.GeminiApiKey);
+                    if (__instance.customerKeyTxtInputForImgGen != null)
+                        __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(currentKey);
+
+                    // Hide irrelevant elements (and track what we hid so we can restore them)
+                    if (__instance.womboStyleHolder != null && __instance.womboStyleHolder.gameObject.activeSelf) { __instance.womboStyleHolder.gameObject.SetActive(false); _hidWomboStyle = true; }
+                    if (__instance.naiModelTransform != null && __instance.naiModelTransform.gameObject.activeSelf) { __instance.naiModelTransform.gameObject.SetActive(false); _hidNaiModel = true; }
+                    if (__instance.stableHordeKeyTransform != null && __instance.stableHordeKeyTransform.gameObject.activeSelf) { __instance.stableHordeKeyTransform.gameObject.SetActive(false); _hidStableHordeKey = true; }
+
+                    // Show standard stuff
+                    if (__instance.imgGenTweakHolder != null) __instance.imgGenTweakHolder.gameObject.SetActive(true);
+                    if (__instance.exportImportImgGenSettingsTrans != null) __instance.exportImportImgGenSettingsTrans.gameObject.SetActive(true);
+
+                    if (__instance.imgGenPresetDropdown != null)
+                    {
+                        __instance.imgGenPresetDropdown.gameObject.SetActive(true);
+                        if (__instance.imgGenPresetDropdown.transform.parent != null)
+                        {
+                            __instance.imgGenPresetDropdown.transform.parent.gameObject.SetActive(true);
+                        }
+                        var populateMethod = __instance.GetType().GetMethod("PopulateImageGenPresetDropdown", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                        populateMethod?.Invoke(__instance, null);
+                    }
+
+                    // Ensure settingsPojo is not null for this mode
+                    if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
+                }
+                else
+                {
+                    // Restore label if we changed it
+                    if (_originalKeyLabel != null && labelComponent != null)
+                    {
+                        labelComponent.text = _originalKeyLabel;
+                    }
+
+                    // Restore visibility of elements we previously hid
+                    if (_hidWomboStyle && __instance.womboStyleHolder != null) { __instance.womboStyleHolder.gameObject.SetActive(true); _hidWomboStyle = false; }
+                    if (_hidNaiModel && __instance.naiModelTransform != null) { __instance.naiModelTransform.gameObject.SetActive(true); _hidNaiModel = false; }
+                    if (_hidStableHordeKey && __instance.stableHordeKeyTransform != null) { __instance.stableHordeKeyTransform.gameObject.SetActive(true); _hidStableHordeKey = false; }
+
+                    // Restore original value for shared field if switching back TO sapphire mode
+                    var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (method != null)
+                    {
+                        SS.ImageGenerationMode selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
+                        if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeyTxtInputForImgGen != null)
+                        {
+                            __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
+                        }
+                    }
+                }
             }
-            else
+            catch (Exception ex)
             {
-                // Restore label if we changed it
-                if (_originalKeyLabel != null && labelComponent != null)
-                {
-                    labelComponent.text = _originalKeyLabel;
-                }
-
-                // Restore visibility of elements we previously hid
-                // The original OnImageGenerationDropdownChanged manages these but only for its own modes;
-                // since we forced them hidden, we need to explicitly undo that.
-                if (_hidWomboStyle) { __instance.womboStyleHolder.gameObject.SetActive(true); _hidWomboStyle = false; }
-                if (_hidNaiModel) { __instance.naiModelTransform.gameObject.SetActive(true); _hidNaiModel = false; }
-                if (_hidStableHordeKey) { __instance.stableHordeKeyTransform.gameObject.SetActive(true); _hidStableHordeKey = false; }
-
-                // Restore original value for shared field if switching back TO sapphire mode
-                var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (method != null)
-                {
-                    SS.ImageGenerationMode selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
-                    if (selectedMode == SS.ImageGenerationMode.SAPPHIRE)
-                    {
-                        __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
-                    }
-                }
+                NanoBananaPlugin.Log.LogError($"[NanoBanana] ApplyUiState failed (alpha compat): {ex.Message}");
             }
         }
 
         public static void Postfix(MainMenu __instance)
         {
+            // Suppress during Options() body — Patch_MainMenu_Options.Postfix calls ApplyUiState directly
+            if (NanoBananaPlugin._optionsOpenInProgress) return;
+
+            // If the user just selected Gemini from the dropdown, write the pref NOW (don't wait for Back/SaveCurrentPrefs).
+            // This is the bootstrap fix: without this, PREF_KEY_IMAGE_GENERATION_MODE2 never gets set to 99
+            // and PopulateSsPrefsWithPlayerPrefs can never detect Gemini on the next session.
+            int ind = __instance.imageGenerationDropdown.value;
+            bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
+                            __instance.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
+            if (isGemini)
+            {
+                NanoBananaPlugin.Log.LogInfo("[NanoBanana] User selected Gemini — writing pref 99 immediately.");
+                PlayerPrefs.SetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 99);
+                PlayerPrefs.SetInt("PREF_KEY_NANO_BANANA_ACTIVE", 1);
+                SS.I.imageGenerationMode = (SS.ImageGenerationMode)99;
+                PlayerPrefs.Save();
+            }
+            else
+            {
+                // User switched away — clear the active flag
+                if (PlayerPrefs.GetInt("PREF_KEY_NANO_BANANA_ACTIVE", 0) == 1)
+                {
+                    NanoBananaPlugin.Log.LogInfo("[NanoBanana] User deselected Gemini — clearing active flag.");
+                    PlayerPrefs.SetInt("PREF_KEY_NANO_BANANA_ACTIVE", 0);
+                    PlayerPrefs.Save();
+                }
+            }
+
             ApplyUiState(__instance);
         }
     }
@@ -330,15 +401,33 @@ namespace AIROG_NanoBanana
     [HarmonyPatch(typeof(MainMenu), "PopulateSsPrefsWithPlayerPrefs")]
     public static class Patch_PopulateSsPrefsWithPlayerPrefs
     {
+        // Carries "was mode 99 saved" from Prefix → Postfix without relying on a pref
+        private static bool _wasGeminiSaved = false;
+
+        [HarmonyPrefix]
+        public static void Prefix()
+        {
+            int saved = PlayerPrefs.GetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 8);
+            _wasGeminiSaved = (saved == 99);
+            NanoBananaPlugin.Log.LogInfo($"[NanoBanana] PopulateSsPrefs Prefix: saved={saved}, wasGemini={_wasGeminiSaved}");
+            if (_wasGeminiSaved)
+            {
+                // Temporarily swap to AIRL_FREE so the game's validation guard doesn't reset us
+                PlayerPrefs.SetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 8);
+            }
+        }
+
+        [HarmonyPostfix]
         public static void Postfix()
         {
-            // Ensure settingsPojo is initialized if we start the game in Gemini mode
-            if (SS.I.imageGenerationMode == (SS.ImageGenerationMode)99)
+            NanoBananaPlugin.Log.LogInfo($"[NanoBanana] PopulateSsPrefs Postfix: _wasGeminiSaved={_wasGeminiSaved}");
+            if (_wasGeminiSaved)
             {
+                PlayerPrefs.SetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 99);
+                PlayerPrefs.SetInt("PREF_KEY_NANO_BANANA_ACTIVE", 1);
+                SS.I.imageGenerationMode = (SS.ImageGenerationMode)99;
                 if (SS.I.settingsPojo == null)
-                {
                     SS.I.settingsPojo = SS.I.defaultWomboSettings ?? SS.I.defaultStableDiffusionSettings;
-                }
             }
         }
     }

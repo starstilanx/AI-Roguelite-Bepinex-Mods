@@ -24,21 +24,12 @@ namespace AIROG_GenContext.DMNotes
                 if (!string.IsNullOrEmpty(entry.EngagementAnalysis))
                     CurrentState.EngagementAnalysis = entry.EngagementAnalysis;
 
-                // Accumulate plot threads (no duplicates)
-                foreach (var thread in entry.PlotThreads)
-                {
-                    if (!string.IsNullOrWhiteSpace(thread) &&
-                        !CurrentState.PlotThreads.Any(t => t.Equals(thread, StringComparison.OrdinalIgnoreCase)))
-                        CurrentState.PlotThreads.Add(thread);
-                }
-
-                // Accumulate preferences (no duplicates)
-                foreach (var pref in entry.PreferenceNotes)
-                {
-                    if (!string.IsNullOrWhiteSpace(pref) &&
-                        !CurrentState.PreferenceNotes.Any(p => p.Equals(pref, StringComparison.OrdinalIgnoreCase)))
-                        CurrentState.PreferenceNotes.Add(pref);
-                }
+                // Replace lists — AI outputs the full canonical list each turn, handling consolidation itself.
+                // Only replace if AI returned items; empty/none means no change (parse failure safety).
+                if (entry.PlotThreads.Count > 0)
+                    CurrentState.PlotThreads = entry.PlotThreads.Take(8).ToList();
+                if (entry.PreferenceNotes.Count > 0)
+                    CurrentState.PreferenceNotes = entry.PreferenceNotes.Take(6).ToList();
 
                 CurrentState.History.Add(entry);
                 // Keep history capped to last 50 entries

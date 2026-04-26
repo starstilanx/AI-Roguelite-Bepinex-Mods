@@ -17,16 +17,6 @@ namespace AIROG_GenContext.DMNotes
             var sb = new StringBuilder();
 
             sb.AppendLine("[DM DIRECTOR]");
-            sb.AppendLine("At the very START of your response, output a <DM_NOTES> block (it will be hidden from the player).");
-            sb.AppendLine("Format it exactly like this:");
-            sb.AppendLine("<DM_NOTES>");
-            sb.AppendLine("player_state: [Engaged/Neutral/Impatient — based on the length and tone of the player's last input]");
-            sb.AppendLine("pacing: [Fast/Medium/Slow — how much narrative detail to use this turn]");
-            sb.AppendLine("engagement: [One sentence summarising what the player seems most interested in]");
-            sb.AppendLine("plot_threads: [Any new hooks or consequences to track; use semicolons to separate multiple items; or write 'none']");
-            sb.AppendLine("preferences: [New observations about player preferences; semicolon-separated; or 'none']");
-            sb.AppendLine("</DM_NOTES>");
-            sb.AppendLine("After </DM_NOTES>, write your normal story response.");
 
             bool hasState = state.PlayerState != "Unknown"
                             || state.PlotThreads.Count > 0
@@ -34,16 +24,25 @@ namespace AIROG_GenContext.DMNotes
 
             if (hasState)
             {
-                sb.AppendLine("\n[CURRENT DM STATE]");
+                sb.AppendLine("[CURRENT DM STATE — apply this, then rewrite it]");
                 if (state.PlayerState != "Unknown")
-                    sb.AppendLine($"Player engagement: {state.PlayerState}. Preferred pacing: {state.PacingDecision}.");
+                    sb.AppendLine($"Engagement: {state.PlayerState} | Pacing: {state.PacingDecision} (Fast=brief, Medium=standard, Slow=rich detail)");
                 if (!string.IsNullOrEmpty(state.EngagementAnalysis))
-                    sb.AppendLine($"Last analysis: {state.EngagementAnalysis}");
+                    sb.AppendLine($"Analysis: {state.EngagementAnalysis}");
                 if (state.PlotThreads.Count > 0)
-                    sb.AppendLine("Active plot threads: " + string.Join("; ", state.PlotThreads.Take(5)));
+                    sb.AppendLine("Plot threads (weave these into your response): " + string.Join("; ", state.PlotThreads));
                 if (state.PreferenceNotes.Count > 0)
-                    sb.AppendLine("Player preferences: " + string.Join("; ", state.PreferenceNotes.Take(4)));
+                    sb.AppendLine("Player preferences (tailor your writing to these): " + string.Join("; ", state.PreferenceNotes));
             }
+
+            sb.AppendLine("Output a hidden <DM_NOTES> block at the START of your response:");
+            sb.AppendLine("<DM_NOTES>");
+            sb.AppendLine("player_state: [Engaged/Neutral/Impatient]");
+            sb.AppendLine("pacing: [Fast/Medium/Slow]");
+            sb.AppendLine("engagement: [one sentence]");
+            sb.AppendLine("plot_threads: [FULL updated list — drop resolved, merge similar, add new; max 8; semicolons; or 'none']");
+            sb.AppendLine("preferences: [FULL updated list — consolidate similar; max 6; semicolons; or 'none']");
+            sb.AppendLine("</DM_NOTES>");
 
             return sb.ToString();
         }

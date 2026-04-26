@@ -27,6 +27,7 @@ namespace AIROG_GenContext
             _providers.Add(new ContextProviders.WorldContextProvider());
             _providers.Add(new ContextProviders.SettlementProvider());
             _providers.Add(new ContextProviders.SkillWebProvider());
+            _providers.Add(new ContextProviders.InsightProvider());
             
             // Sort by priority (Higher first)
             _providers.Sort((a, b) => b.Priority.CompareTo(a.Priority));

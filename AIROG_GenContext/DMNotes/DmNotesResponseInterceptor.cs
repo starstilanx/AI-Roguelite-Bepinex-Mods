@@ -29,6 +29,7 @@ namespace AIROG_GenContext.DMNotes
                     int end   = text.IndexOf("</DM_NOTES>", StringComparison.OrdinalIgnoreCase);
                     if (start >= 0 && end > start)
                     {
+                        // Full well-formed block: extract, process, strip.
                         string block = text.Substring(start + 10, end - start - 10).Trim();
                         // In UNIFIED mode the response is raw JSON; newlines inside string values
                         // are encoded as the two-char sequence \n rather than real newlines.
@@ -37,6 +38,17 @@ namespace AIROG_GenContext.DMNotes
                         DmNotesManager.ProcessNotes(block);
                         string after = text.Substring(end + 11).TrimStart('\n', '\r', ' ');
                         text = text.Substring(0, start) + after;
+                    }
+                    else if (start >= 0)
+                    {
+                        // Partial/unclosed block — AI returned bare <DM_NOTES> with no closing tag.
+                        // Strip from the tag to end-of-line (or end-of-string) to prevent the
+                        // JSON parser from choking on the raw XML-like tag.
+                        UnityEngine.Debug.LogWarning("[GenContext] DmNotes: found <DM_NOTES> without closing tag — stripping.");
+                        int lineEnd = text.IndexOf('\n', start);
+                        text = text.Substring(0, start) +
+                               (lineEnd > start ? text.Substring(lineEnd + 1) : "");
+                        text = text.TrimStart('\n', '\r', ' ');
                     }
                 }
                 catch (Exception ex)
