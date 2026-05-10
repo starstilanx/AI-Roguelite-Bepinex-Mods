@@ -272,9 +272,12 @@ namespace AIROG_NanoBanana
     public static class Patch_OnImageGenerationDropdownChanged
     {
         private static string _originalKeyLabel = null;
+        private static string _originalPlaceholder = null;
         private static bool _hidWomboStyle = false;
         private static bool _hidNaiModel = false;
         private static bool _hidStableHordeKey = false;
+        private static bool _hidSubStatusRow = false;
+        private static bool _hidAirlImgGenStyle = false;
 
         public static void ApplyUiState(MainMenu __instance)
         {
@@ -284,38 +287,84 @@ namespace AIROG_NanoBanana
                 bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
                                 __instance.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
 
-                // Find label component for the imgGen key field
-                TMP_Text labelComponent = null;
-                if (__instance.customerKeyTxtInputForImgGenTrans != null)
-                {
-                    labelComponent = __instance.customerKeyTxtInputForImgGenTrans.GetComponentsInChildren<TMP_Text>(true)
-                        .FirstOrDefault(t => t.name.ToLower().Contains("label") || t.text.ToLower().Contains("key") || t.text.ToLower().Contains("customer") || t.text == "Gemini API Key");
-                }
-
                 if (isGemini)
                 {
-                    // Store original label if we haven't yet
-                    if (_originalKeyLabel == null && labelComponent != null) _originalKeyLabel = labelComponent.text;
-
                     if (__instance.imgGenExplanation != null)
                         __instance.imgGenExplanation.SetText("Generates images using Google Gemini.\n\n<color=#00FF00>Note:</color> Enter your Gemini API Key below. Select the model from the preset dropdown.", true);
 
-                    // Repurpose the Sapphire Key field
-                    if (__instance.customerKeyTxtInputForImgGenTrans != null)
-                        __instance.customerKeyTxtInputForImgGenTrans.gameObject.SetActive(true);
-                    if (labelComponent != null) labelComponent.text = "Gemini API Key";
+                    // Re-activate the customer key slot (game hides it for unknown modes),
+                    // then hide only the subscription status sub-row inside it.
+                    if (__instance.customerKeySlotForImgGen != null)
+                    {
+                        __instance.customerKeySlotForImgGen.gameObject.SetActive(true);
 
-                    // Load our key
-                    string currentKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, NanoBananaPlugin.Instance.GeminiApiKey);
+                        var subStatus = __instance.customerKeySlotForImgGen.subStatusTxt;
+                        if (subStatus != null && !_hidSubStatusRow)
+                        {
+                            Transform rowParent = subStatus.transform.parent;
+                            bool inSubRow = rowParent != null && rowParent != __instance.customerKeySlotForImgGen.transform;
+                            GameObject rowToHide = inSubRow ? rowParent.gameObject : subStatus.gameObject;
+                            rowToHide.SetActive(false);
+                            _hidSubStatusRow = true;
+
+                            // Flat layout fallback: also hide the "Subscription status" label sibling
+                            if (!inSubRow)
+                            {
+                                foreach (Transform child in __instance.customerKeySlotForImgGen.transform)
+                                {
+                                    var t = child.GetComponent<TMP_Text>();
+                                    if (t != null && t != subStatus && t.text.ToLower().Contains("subscription"))
+                                    {
+                                        t.gameObject.SetActive(false);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Hide AIRL/Obsidian-only image style dropdown (activated by SAPPHIRE init path)
+                    if (__instance.airlImgGenStyleTrans != null && __instance.airlImgGenStyleTrans.gameObject.activeSelf && !_hidAirlImgGenStyle)
+                    {
+                        __instance.airlImgGenStyleTrans.gameObject.SetActive(false);
+                        _hidAirlImgGenStyle = true;
+                    }
+
+                    // Update placeholder and load our key
                     if (__instance.customerKeyTxtInputForImgGen != null)
+                    {
+                        var placeholder = __instance.customerKeyTxtInputForImgGen.placeholder as TMP_Text;
+                        if (placeholder != null)
+                        {
+                            if (_originalPlaceholder == null) _originalPlaceholder = placeholder.text;
+                            placeholder.text = "Enter your Gemini API Key";
+                        }
+                        string currentKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, "");
                         __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(currentKey);
+                    }
 
-                    // Hide irrelevant elements (and track what we hid so we can restore them)
+                    // Change the row label from "Customer key" to "Gemini API Key".
+                    // customerKeyTxtInputForImgGenTrans is the row container; its label TMP_Text
+                    // is any child that is NOT inside the InputField's own subtree.
+                    if (__instance.customerKeyTxtInputForImgGenTrans != null && __instance.customerKeyTxtInputForImgGen != null)
+                    {
+                        Transform inputFieldTf = __instance.customerKeyTxtInputForImgGen.transform;
+                        TMP_Text labelComponent = __instance.customerKeyTxtInputForImgGenTrans
+                            .GetComponentsInChildren<TMP_Text>(true)
+                            .FirstOrDefault(t => !t.transform.IsChildOf(inputFieldTf));
+                        if (labelComponent != null)
+                        {
+                            if (_originalKeyLabel == null) _originalKeyLabel = labelComponent.text;
+                            labelComponent.text = "Gemini API Key";
+                        }
+                    }
+
+                    // Hide irrelevant elements
                     if (__instance.womboStyleHolder != null && __instance.womboStyleHolder.gameObject.activeSelf) { __instance.womboStyleHolder.gameObject.SetActive(false); _hidWomboStyle = true; }
                     if (__instance.naiModelTransform != null && __instance.naiModelTransform.gameObject.activeSelf) { __instance.naiModelTransform.gameObject.SetActive(false); _hidNaiModel = true; }
                     if (__instance.stableHordeKeyTransform != null && __instance.stableHordeKeyTransform.gameObject.activeSelf) { __instance.stableHordeKeyTransform.gameObject.SetActive(false); _hidStableHordeKey = true; }
 
-                    // Show standard stuff
+                    // Show standard elements
                     if (__instance.imgGenTweakHolder != null) __instance.imgGenTweakHolder.gameObject.SetActive(true);
                     if (__instance.exportImportImgGenSettingsTrans != null) __instance.exportImportImgGenSettingsTrans.gameObject.SetActive(true);
 
@@ -323,22 +372,64 @@ namespace AIROG_NanoBanana
                     {
                         __instance.imgGenPresetDropdown.gameObject.SetActive(true);
                         if (__instance.imgGenPresetDropdown.transform.parent != null)
-                        {
                             __instance.imgGenPresetDropdown.transform.parent.gameObject.SetActive(true);
-                        }
                         var populateMethod = __instance.GetType().GetMethod("PopulateImageGenPresetDropdown", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                         populateMethod?.Invoke(__instance, null);
                     }
 
-                    // Ensure settingsPojo is not null for this mode
                     if (SS.I.settingsPojo == null) SS.I.settingsPojo = SS.I.defaultWomboSettings;
                 }
                 else
                 {
-                    // Restore label if we changed it
-                    if (_originalKeyLabel != null && labelComponent != null)
+                    // Restore subscription status row
+                    if (_hidSubStatusRow && __instance.customerKeySlotForImgGen?.subStatusTxt != null)
                     {
-                        labelComponent.text = _originalKeyLabel;
+                        var subStatus = __instance.customerKeySlotForImgGen.subStatusTxt;
+                        Transform rowParent = subStatus.transform.parent;
+                        bool inSubRow = rowParent != null && rowParent != __instance.customerKeySlotForImgGen.transform;
+                        (inSubRow ? rowParent.gameObject : subStatus.gameObject).SetActive(true);
+                        _hidSubStatusRow = false;
+
+                        if (!inSubRow)
+                        {
+                            foreach (Transform child in __instance.customerKeySlotForImgGen.transform)
+                            {
+                                var t = child.GetComponent<TMP_Text>();
+                                if (t != null && t != subStatus && t.text.ToLower().Contains("subscription"))
+                                {
+                                    t.gameObject.SetActive(true);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Restore AIRL image style dropdown
+                    if (_hidAirlImgGenStyle && __instance.airlImgGenStyleTrans != null)
+                    {
+                        __instance.airlImgGenStyleTrans.gameObject.SetActive(true);
+                        _hidAirlImgGenStyle = false;
+                    }
+
+                    // Restore placeholder
+                    if (_originalPlaceholder != null && __instance.customerKeyTxtInputForImgGen?.placeholder is TMP_Text ph)
+                    {
+                        ph.text = _originalPlaceholder;
+                        _originalPlaceholder = null;
+                    }
+
+                    // Restore label
+                    if (_originalKeyLabel != null && __instance.customerKeyTxtInputForImgGenTrans != null && __instance.customerKeyTxtInputForImgGen != null)
+                    {
+                        Transform inputFieldTf = __instance.customerKeyTxtInputForImgGen.transform;
+                        TMP_Text labelComponent = __instance.customerKeyTxtInputForImgGenTrans
+                            .GetComponentsInChildren<TMP_Text>(true)
+                            .FirstOrDefault(t => !t.transform.IsChildOf(inputFieldTf));
+                        if (labelComponent != null)
+                        {
+                            labelComponent.text = _originalKeyLabel;
+                            _originalKeyLabel = null;
+                        }
                     }
 
                     // Restore visibility of elements we previously hid
@@ -346,21 +437,19 @@ namespace AIROG_NanoBanana
                     if (_hidNaiModel && __instance.naiModelTransform != null) { __instance.naiModelTransform.gameObject.SetActive(true); _hidNaiModel = false; }
                     if (_hidStableHordeKey && __instance.stableHordeKeyTransform != null) { __instance.stableHordeKeyTransform.gameObject.SetActive(true); _hidStableHordeKey = false; }
 
-                    // Restore original value for shared field if switching back TO sapphire mode
+                    // Restore original customer key value if switching back to SAPPHIRE
                     var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                     if (method != null)
                     {
                         SS.ImageGenerationMode selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
                         if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeyTxtInputForImgGen != null)
-                        {
                             __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
-                        }
                     }
                 }
             }
             catch (Exception ex)
             {
-                NanoBananaPlugin.Log.LogError($"[NanoBanana] ApplyUiState failed (alpha compat): {ex.Message}");
+                NanoBananaPlugin.Log.LogError($"[NanoBanana] ApplyUiState failed: {ex.Message}");
             }
         }
 

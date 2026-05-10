@@ -38,6 +38,20 @@ namespace AIROG_NPCExpansion
             var harmony = new Harmony(PLUGIN_GUID);
             harmony.PatchAll(typeof(NPCExpansionPlugin));
 
+            // Manually patch GameplayManager.GetActions(GameCharacter) —
+            // HarmonyX DeclaredMethod resolution fails for this overload at runtime.
+            var getActionsMethod = AccessTools.Method(typeof(GameplayManager), "GetActions", new[] { typeof(GameCharacter) });
+            if (getActionsMethod != null)
+            {
+                harmony.Patch(getActionsMethod,
+                    postfix: new HarmonyMethod(typeof(NPCExpansionPlugin), nameof(Postfix_GetActions)));
+                Logger.LogInfo("[NPCExpansion] Patched GameplayManager.GetActions(GameCharacter) manually.");
+            }
+            else
+            {
+                Logger.LogWarning("[NPCExpansion] Could not find GameplayManager.GetActions(GameCharacter) — NPC action menu injection will not work.");
+            }
+
             // Manually patch PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace —
             // Harmony's attribute-based resolver fails for this newly-added class at runtime.
             var statusMethod = AccessTools.Method(typeof(PlayableCharacterData), "GetPlayerStatusStrToAppendNoSpace");
@@ -552,8 +566,6 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        [HarmonyPatch(typeof(GameplayManager), "GetActions", typeof(GameCharacter))]
-        [HarmonyPostfix]
         public static void Postfix_GetActions(GameCharacter npc, ref List<StrToAction> __result, GameplayManager __instance)
         {
             if (npc == null || npc.corpseState != GameCharacter.CorpseState.NONE) return;
