@@ -164,8 +164,10 @@ namespace AIROG_NPCExpansion
             new Dictionary<string, List<GameItem>>();
 
         // Before each TurnHappened: snapshot items that must survive a potential restock wipe.
-        //   • Merchants  → save only player-gifted INVENTORY items (merchant stock may legitimately wipe)
-        //   • Non-merchants → save ALL items (they should never be wiped; this guards against inlining)
+        //   • Merchants    → save only player-placed items (tracked by UUID in NPCData.PlayerPlacedItemUuids).
+        //                    This covers both Give-button items (itemState=INVENTORY) and Trade-sold items
+        //                    (itemState=MERCHANT), while excluding generated stock from being re-added after restock.
+        //   • Non-merchants → save ALL items (guards against NeedsRestock inlining wiping their inventory).
         [HarmonyPatch(typeof(GameCharacter), "TurnHappened")]
         [HarmonyPrefix]
         public static void Prefix_TurnHappened(GameCharacter __instance)
@@ -174,9 +176,17 @@ namespace AIROG_NPCExpansion
             _restockSavedItems.Remove(__instance.uuid);
             if (__instance.items == null || __instance.items.Count == 0) return;
 
-            List<GameItem> toSave = __instance.isMerchant
-                ? __instance.items.Where(i => i.itemState == GameItem.ItemState.INVENTORY).ToList()
-                : __instance.items.ToList(); // non-merchants: preserve everything
+            List<GameItem> toSave;
+            if (__instance.isMerchant)
+            {
+                var data = NPCData.Load(__instance.uuid);
+                var playerUuids = data?.PlayerPlacedItemUuids ?? new HashSet<string>();
+                toSave = __instance.items.Where(i => !string.IsNullOrEmpty(i.uuid) && playerUuids.Contains(i.uuid)).ToList();
+            }
+            else
+            {
+                toSave = __instance.items.ToList();
+            }
 
             if (toSave.Count > 0)
                 _restockSavedItems[__instance.uuid] = toSave;
@@ -296,6 +306,8 @@ namespace AIROG_NPCExpansion
                 if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
 
                 data.ChangeAffinity(3, $"Sold {item.GetPrettyName()} to them.");
+                if (!string.IsNullOrEmpty(item.uuid))
+                    data.PlayerPlacedItemUuids.Add(item.uuid);
                 NPCData.Save(npc.uuid, data);
                 SyncAffinityToGame(npc.uuid, data);
             }
@@ -680,6 +692,14 @@ namespace AIROG_NPCExpansion
             // 3. Add to NPC
             if (npc.items == null) npc.items = new List<GameItem>();
             npc.items.Add(item);
+
+            // Track as player-placed so it survives merchant restock wipes
+            if (!string.IsNullOrEmpty(item.uuid))
+            {
+                var npcData = NPCData.Load(npc.uuid) ?? NPCData.CreateDefault(npc.GetPrettyName());
+                npcData.PlayerPlacedItemUuids.Add(item.uuid);
+                NPCData.Save(npc.uuid, npcData);
+            }
 
             // 4. Force UI Refresh
             manager.inventory.RefreshInvDisplay();

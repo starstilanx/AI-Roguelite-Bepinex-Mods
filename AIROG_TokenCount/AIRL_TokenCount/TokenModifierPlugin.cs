@@ -57,28 +57,30 @@ namespace AIROG_TokenModifierPlugin
                     int currentMax = json["max_tokens"].Value<int>();
                     int newMax = currentMax;
 
-                    // Map hardcoded values to our config
-                    // 220 = Story Completer
-                    // 1090 = General Question (Chat) default
-                    // 550 = Event Checks
-                    // 15000 = High Cost Grd (Treat as Chat for now? Or ignore. Let's map to Chat if user wants control)
-                    // 160 = Char Desc
-                    // 16 = Obvious Question Short (keep small)
+                    // Map game values to config by range:
+                    //   Story Completer:       ~260 (was 220 in older game versions)
+                    //   Event Checks:          550
+                    //   Char Description:      160  — leave alone (too small to usefully boost)
+                    //   Short Q&A:              16  — leave alone
+                    //   General/Chat/Unified: 1090-1850+ (varied by version and prompt type)
+                    //   GRD (high-cost):      15000 — safety valve handles this
 
-                    if (currentMax == 220)
+                    if (currentMax >= 200 && currentMax <= 400)
                     {
+                        // Story Completer range (game uses 220 or 260 depending on version)
                         newMax = _maxTokensStory.Value;
                     }
-                    else if (currentMax == 1090 || currentMax == 15000)
+                    else if (currentMax >= 450 && currentMax <= 650)
                     {
-                        newMax = _maxTokensChat.Value;
-                    }
-                    else if (currentMax == 550)
-                    {
+                        // Event Checks range (550)
                         newMax = _maxTokensEvent.Value;
                     }
-                    // Optional: Map 160 to Chat or Story if desired, but 160 is specific for Char Desc.
-                    // Leaving others alone to avoid breaking specific logic.
+                    else if (currentMax >= 800)
+                    {
+                        // General Question / Chat / Unified range (1090, 1590, 1850, etc.)
+                        newMax = _maxTokensChat.Value;
+                    }
+                    // Values outside ranges (16, 160) are left alone.
 
                     if (newMax != currentMax)
                     {

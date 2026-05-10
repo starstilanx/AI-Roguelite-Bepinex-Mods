@@ -35,7 +35,7 @@ namespace AIROG_GenContext
 
             var img = _configButtonObj.GetComponent<Image>();
 
-            Sprite btnSprite = LoadSprite();
+            Sprite btnSprite = LoadSprite("ModButton.png");
             if (btnSprite != null)
             {
                 img.sprite = btnSprite;
@@ -82,33 +82,46 @@ namespace AIROG_GenContext
             {
                 var dmBtnObj = new GameObject("DmNotesToggleBtn", typeof(RectTransform), typeof(Image), typeof(Button));
                 dmBtnObj.transform.SetParent(layout.buttonsHolderHolder, false);
-                dmBtnObj.GetComponent<Image>().color = new Color(0.1f, 0.15f, 0.3f, 0.9f);
+
+                var dmImg = dmBtnObj.GetComponent<Image>();
+                Sprite dmSprite = LoadSprite("DMNotesButton.png");
+                if (dmSprite != null)
+                {
+                    dmImg.sprite = dmSprite;
+                    dmImg.color = Color.white;
+                    dmImg.preserveAspect = true;
+                }
+                else
+                {
+                    dmImg.color = new Color(0.1f, 0.15f, 0.3f, 0.9f);
+                    var dmLabel = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+                    dmLabel.transform.SetParent(dmBtnObj.transform, false);
+                    var dmTxt = dmLabel.GetComponent<TextMeshProUGUI>();
+                    dmTxt.text = "DM"; dmTxt.fontSize = 13; dmTxt.fontStyle = FontStyles.Bold;
+                    dmTxt.color = new Color(0.95f, 0.85f, 0.5f);
+                    dmTxt.alignment = TextAlignmentOptions.Center;
+                    var dmLabelRect = dmLabel.GetComponent<RectTransform>();
+                    dmLabelRect.anchorMin = Vector2.zero; dmLabelRect.anchorMax = Vector2.one;
+                    dmLabelRect.offsetMin = dmLabelRect.offsetMax = Vector2.zero;
+                }
 
                 var dmLe = dmBtnObj.AddComponent<LayoutElement>();
                 dmLe.preferredWidth = 60; dmLe.minWidth = 60;
                 dmLe.preferredHeight = 60; dmLe.minHeight = 60;
 
-                var dmLabel = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
-                dmLabel.transform.SetParent(dmBtnObj.transform, false);
-                var dmTxt = dmLabel.GetComponent<TextMeshProUGUI>();
-                dmTxt.text = "DM"; dmTxt.fontSize = 13; dmTxt.fontStyle = FontStyles.Bold;
-                dmTxt.color = new Color(0.95f, 0.85f, 0.5f);
-                dmTxt.alignment = TextAlignmentOptions.Center;
-                var dmLabelRect = dmLabel.GetComponent<RectTransform>();
-                dmLabelRect.anchorMin = Vector2.zero; dmLabelRect.anchorMax = Vector2.one;
-                dmLabelRect.offsetMin = dmLabelRect.offsetMax = Vector2.zero;
-
-                dmBtnObj.GetComponent<Button>().onClick.AddListener(() => DMNotes.DmNotesPanel.Toggle());
+                var dmBtn = dmBtnObj.GetComponent<Button>();
+                dmBtn.targetGraphic = dmImg;
+                dmBtn.onClick.AddListener(() => DMNotes.DmNotesPanel.Toggle());
                 dmBtnObj.transform.SetAsLastSibling();
                 Debug.Log("[GenContext] Injected DM Notes button.");
             }
         }
 
-        private static Sprite LoadSprite()
+        private static Sprite LoadSprite(string filename)
         {
             try
             {
-                string path = System.IO.Path.Combine(Application.streamingAssetsPath, "GenContext", "ModButton.png");
+                string path = System.IO.Path.Combine(Application.streamingAssetsPath, "GenContext", filename);
                 if (System.IO.File.Exists(path))
                 {
                     byte[] bytes = System.IO.File.ReadAllBytes(path);

@@ -4,7 +4,6 @@ using UnityEngine;
 using UnityEngine.UI;
 using System.Collections.Generic;
 using System.Linq;
-using BepInEx.Configuration;
 
 namespace AIROG_DeepgramTTS
 {
@@ -33,21 +32,15 @@ namespace AIROG_DeepgramTTS
             UpdateProviderDropdownValue();
             UpdateDeepgramVisibility();
             isInitializing = false;
-            
-            if (DeepgramTtsPlugin.UseDeepgramTts.Value)
-            {
-                Debug.Log("[DeepgramTTS] Refreshing voice dropdowns");
-                RefreshVoiceDropdowns(__instance);
-            }
         }
 
         private static void CreateUi(MainMenu __instance)
         {
-            Transform parent = __instance.ttsModeDropdown.transform.parent;
-            int index = __instance.ttsModeDropdown.transform.GetSiblingIndex();
+            Transform parent = __instance.ttsOptions.ttsModeDropdown.transform.parent;
+            int index = __instance.ttsOptions.ttsModeDropdown.transform.GetSiblingIndex();
 
-            // Create Provider Dropdown (following GeminiTTS pattern)
-            GameObject providerGo = Object.Instantiate(__instance.ttsModeDropdown.gameObject, parent);
+            // Create Provider Dropdown
+            GameObject providerGo = Object.Instantiate(__instance.ttsOptions.ttsModeDropdown.gameObject, parent);
             providerGo.name = "DeepgramTTS_Provider_Dropdown";
             providerGo.transform.SetSiblingIndex(index);
             
@@ -65,7 +58,6 @@ namespace AIROG_DeepgramTTS
                 DeepgramTtsPlugin.UseDeepgramTts.Value = (val == 1);
                 DeepgramTtsPlugin.Instance.Config.Save();
                 UpdateDeepgramVisibility();
-                RefreshVoiceDropdowns(__instance);
             });
 
             // Create API Key Input using the full transform (likely has label + input)
@@ -164,72 +156,6 @@ namespace AIROG_DeepgramTTS
             {
                 deepgramSettingsGroup.SetActive(DeepgramTtsPlugin.UseDeepgramTts.Value);
             }
-        }
-
-        private static void RefreshVoiceDropdowns(MainMenu __instance)
-        {
-            if (!DeepgramTtsPlugin.UseDeepgramTts.Value)
-            {
-                RestoreTikTokVoices(__instance);
-                return;
-            }
-
-            Dictionary<string, string> deepgramVoices = new Dictionary<string, string>
-            {
-                { "aura-2-thalia-en", "Deepgram: Thalia (Female)" },
-                { "aura-2-andromeda-en", "Deepgram: Andromeda (Female)" },
-                { "aura-2-helena-en", "Deepgram: Helena (Female)" },
-                { "aura-2-apollo-en", "Deepgram: Apollo (Male)" },
-                { "aura-2-arcas-en", "Deepgram: Arcas (Male)" },
-                { "aura-2-aries-en", "Deepgram: Aries (Male)" },
-                { "aura-2-atlas-en", "Deepgram: Atlas (Male)" },
-                { "aura-2-aurora-en", "Deepgram: Aurora (Female)" }
-            };
-
-            UpdateDropdown(__instance.ttsVoiceNarrationDropdown, deepgramVoices, DeepgramTtsPlugin.VoiceNarration);
-            UpdateDropdown(__instance.ttsVoiceMaleDropdown, deepgramVoices, DeepgramTtsPlugin.VoiceMale);
-            UpdateDropdown(__instance.ttsVoiceFemaleDropdown, deepgramVoices, DeepgramTtsPlugin.VoiceFemale);
-            UpdateDropdown(__instance.ttsVoiceMonsterDropdown, deepgramVoices, DeepgramTtsPlugin.VoiceMonster);
-            UpdateDropdown(__instance.ttsVoiceRoboticDropdown, deepgramVoices, DeepgramTtsPlugin.VoiceRobot);
-            UpdateDropdown(__instance.ttsVoiceEnemyDropdown, deepgramVoices, DeepgramTtsPlugin.VoiceEnemy);
-        }
-
-        private static void RestoreTikTokVoices(MainMenu __instance)
-        {
-            var dictField = AccessTools.Field(typeof(MainMenu), "tiktokVoiceNameToUiStringDict");
-            if (dictField == null) return;
-            var dict = (Dictionary<string, string>)dictField.GetValue(__instance);
-
-            PopulateTikTok(__instance, __instance.ttsVoiceNarrationDropdown, dict, "PREF_KEY_VOICE_TIKTOK_NARRATION", "en_male_ghosthost");
-            PopulateTikTok(__instance, __instance.ttsVoiceMaleDropdown, dict, "PREF_KEY_VOICE_TIKTOK_MALE", "en_uk_003");
-            PopulateTikTok(__instance, __instance.ttsVoiceFemaleDropdown, dict, "PREF_KEY_VOICE_TIKTOK_FEMALE", "en_female_emotional");
-            PopulateTikTok(__instance, __instance.ttsVoiceMonsterDropdown, dict, "PREF_KEY_VOICE_TIKTOK_MONSTER", "en_us_ghostface");
-            PopulateTikTok(__instance, __instance.ttsVoiceRoboticDropdown, dict, "PREF_KEY_VOICE_TIKTOK_ROBOTIC", "en_us_c3po");
-            PopulateTikTok(__instance, __instance.ttsVoiceEnemyDropdown, dict, "PREF_KEY_VOICE_TIKTOK_ENEMY", "en_us_ghostface");
-        }
-
-        private static void PopulateTikTok(MainMenu instance, TMP_Dropdown dropdown, Dictionary<string, string> dict, string prefKey, string fallback)
-        {
-            var method = AccessTools.Method(typeof(MainMenu), "PopulateVoiceDropdownOptions");
-            if (method == null) return;
-            method.Invoke(instance, new object[] { dropdown, dict, PlayerPrefs.GetString(prefKey, fallback), fallback });
-        }
-
-        private static void UpdateDropdown(TMP_Dropdown dropdown, Dictionary<string, string> voices, ConfigEntry<string> config)
-        {
-            if (dropdown == null) return;
-            dropdown.ClearOptions();
-            dropdown.AddOptions(voices.Values.ToList());
-            
-            int index = voices.Keys.ToList().IndexOf(config.Value);
-            if (index == -1) index = 0;
-            dropdown.SetValueWithoutNotify(index);
-
-            dropdown.onValueChanged.RemoveAllListeners();
-            dropdown.onValueChanged.AddListener(val => {
-                config.Value = voices.Keys.ToList()[val];
-                DeepgramTtsPlugin.Instance.Config.Save();
-            });
         }
 
         [HarmonyPrefix]

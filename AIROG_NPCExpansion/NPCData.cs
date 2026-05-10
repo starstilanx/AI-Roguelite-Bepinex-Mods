@@ -39,6 +39,9 @@ namespace AIROG_NPCExpansion
         // Equipment System
         public Dictionary<string, string> EquippedUuids = new Dictionary<string, string>();
 
+        // Items placed by the player (Give button or Trade UI); persisted so they survive merchant restock wipes.
+        public HashSet<string> PlayerPlacedItemUuids = new HashSet<string>();
+
         // Autonomy Settings
         public bool AllowAutoEquip = true;
         public bool AllowSelfPreservation = true;
@@ -128,6 +131,7 @@ namespace AIROG_NPCExpansion
             Extensions = new Dictionary<string, string>();
             InteractionHistory = new List<string>();
             EquippedUuids = new Dictionary<string, string>();
+            PlayerPlacedItemUuids = new HashSet<string>();
             Attributes = new Dictionary<SS.PlayerAttribute, long>();
             Skills = new Dictionary<string, PlayerSkill>();
             // Note: DetailedAbilities is initialized inline. Do NOT call Abilities setter here

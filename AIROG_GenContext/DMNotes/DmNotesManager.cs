@@ -117,6 +117,14 @@ namespace AIROG_GenContext.DMNotes
             Debug.Log("[GenContext] DM Notes state reset for new game.");
         }
 
+        public static void TrimHistory(int maxEntries = 30)
+        {
+            if (CurrentState.History.Count <= maxEntries) return;
+            CurrentState.History.RemoveRange(0, CurrentState.History.Count - maxEntries);
+            SaveState();
+            Debug.Log($"[GenContext] DM Notes history trimmed to {maxEntries} entries.");
+        }
+
         public static bool ConsumeUiDirty()
         {
             bool v = _uiDirty;

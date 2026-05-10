@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace AIROG_GenContext.DMNotes
 {
@@ -17,7 +18,7 @@ namespace AIROG_GenContext.DMNotes
     [Serializable]
     public class DmNotesEntry
     {
-        public string Raw;
+        [JsonIgnore] public string Raw;
         public string PlayerState;
         public string PacingDecision;
         public string EngagementAnalysis;

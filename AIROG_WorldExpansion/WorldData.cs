@@ -89,6 +89,7 @@ namespace AIROG_WorldExpansion
             if (s.EliminatedFactions == null)   s.EliminatedFactions   = new HashSet<string>();
             if (s.MajorEventHistory == null)    s.MajorEventHistory    = new List<string>();
             if (s.DiplomaticRelations == null)  s.DiplomaticRelations  = new Dictionary<string, DiplomaticRelation>();
+            if (s.PendingWorldEvents == null)   s.PendingWorldEvents   = new List<PendingWorldEvent>();
 
             // Migrate legacy FactionRelationships → DiplomaticRelations for old saves
             foreach (var kvp in s.FactionRelationships)
@@ -144,6 +145,18 @@ namespace AIROG_WorldExpansion
 
         public static int GetGrievance(string pairKey) =>
             CurrentState.GrievanceCounts.TryGetValue(pairKey, out int v) ? v : 0;
+
+        public static void QueuePlayerEvent(string description, string type)
+        {
+            CurrentState.PendingWorldEvents.Add(new PendingWorldEvent
+            {
+                Description = description,
+                Type        = type,
+                TurnAdded   = CurrentState.CurrentTurn,
+            });
+            while (CurrentState.PendingWorldEvents.Count > 10)
+                CurrentState.PendingWorldEvents.RemoveAt(0);
+        }
 
         public static void AddGrievance(string pairKey, int amount = 1)
         {
@@ -240,12 +253,14 @@ namespace AIROG_WorldExpansion
             };
             SetTier(key, DiplomaticTier.War, "war declared", CurrentState.CurrentTurn, actorName, targetName);
             LogEvent($"{actorName} has formally declared war on {targetName}! Casus belli: {casusBelli}.", "WAR");
+            QueuePlayerEvent($"{actorName} has declared war on {targetName} ({casusBelli}).", "WAR_DECLARED");
         }
 
         public static void EndWar(string key, string reason)
         {
             if (!CurrentState.ActiveWars.TryGetValue(key, out var war)) return;
             LogEvent($"The war between {war.ActorName} and {war.TargetName} has ended — {reason}.", "WAR");
+            QueuePlayerEvent($"The war between {war.ActorName} and {war.TargetName} has ended — {reason}.", "WAR_ENDED");
             CurrentState.ActiveWars.Remove(key);
             if (CurrentState.GrievanceCounts.ContainsKey(key))
                 CurrentState.GrievanceCounts[key] = 0;
@@ -277,6 +292,9 @@ namespace AIROG_WorldExpansion
 
         // Legacy: kept for save-file backward compatibility only; new code writes DiplomaticRelations
         public Dictionary<string, string> FactionRelationships = new Dictionary<string, string>();
+
+        // Short-lived events that the AI should acknowledge in the next few turns
+        public List<PendingWorldEvent> PendingWorldEvents = new List<PendingWorldEvent>();
     }
 
     [Serializable]
@@ -328,5 +346,14 @@ namespace AIROG_WorldExpansion
         public long   Timestamp = DateTime.Now.Ticks;
 
         public string GetFormatted() => $"Turn {Turn}: {Description}";
+    }
+
+    [Serializable]
+    public class PendingWorldEvent
+    {
+        public string Description;
+        public string Type;     // WAR_DECLARED, WAR_ENDED, FACTION_FALL, MAJOR_EVENT
+        public int    TurnAdded;
+        public int    TtlTurns = 5;
     }
 }

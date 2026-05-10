@@ -3,75 +3,41 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Linq;
 using UnityEngine;
-using System;
 
 namespace AIROG_GeminiTTS
 {
-    [HarmonyPatch(typeof(TiktokTtsClient))]
-    public static class TiktokTtsClientPatches
+    [HarmonyPatch(typeof(TtsClient), "GenerateAndQueueTts")]
+    public static class TtsClientPatches
     {
         [HarmonyPrefix]
-        [HarmonyPatch("GenerateMultipleTtsForTmp")]
-        public static bool GenerateMultipleTtsForTmpPrefix(TiktokTtsClient __instance, string strForTts, string voiceName, ref Task<List<string>> __result)
+        public static bool GenerateAndQueueTtsPrefix(GameplayManager manager, string turnTxt, bool clearQueue, ref Task __result)
         {
             if (!GeminiTtsPlugin.UseGeminiTts.Value)
-            {
                 return true;
-            }
-            __result = GenerateMultipleTtsForTmpAsync(strForTts, voiceName);
+            __result = GenerateAndQueueTtsAsync(manager, turnTxt, clearQueue);
             return false;
         }
 
-        private static async Task<List<string>> GenerateMultipleTtsForTmpAsync(string strForTts, string voiceName)
+        private static async Task GenerateAndQueueTtsAsync(GameplayManager manager, string turnTxt, bool clearQueue)
         {
-            List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
-            List<Task<string>> tasks = new List<Task<string>>();
-            
-            SS.VoiceType voiceType = voiceName.Contains("female") ? SS.VoiceType.FEMALE : SS.VoiceType.NARRATION;
+            List<TtsHelper.TtsSegment> segments = await TtsHelper.GenerateTtsSegments(manager, turnTxt);
+            if (segments.Count == 0) return;
 
-            foreach (var annotatedStr in list)
+            var tasks = new List<Task<string>>();
+            foreach (var seg in segments)
             {
-                tasks.Add(GeminiTtsClient.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), voiceType));
-            }
-
-            string[] uuids = await Task.WhenAll(tasks);
-            return uuids.Where(u => !string.IsNullOrEmpty(u)).ToList();
-        }
-
-        [HarmonyPrefix]
-        [HarmonyPatch("GenerateMultipleTtsAndUpdateQueue")]
-        public static bool GenerateMultipleTtsAndUpdateQueuePrefix(TiktokTtsClient __instance, GameplayManager manager, string strForTts, SS.VoiceType npcVoiceType, int tryStrLength, bool dialogueOnly, bool clearQueue, ref Task __result)
-        {
-            if (!GeminiTtsPlugin.UseGeminiTts.Value)
-            {
-                return true; // Continue to original TikTok TTS
-            }
-            __result = GenerateMultipleTtsAndUpdateQueueAsync(manager, strForTts, npcVoiceType, dialogueOnly, clearQueue);
-            return false; // Skip original
-        }
-
-        private static async Task GenerateMultipleTtsAndUpdateQueueAsync(GameplayManager manager, string strForTts, SS.VoiceType npcVoiceType, bool dialogueOnly, bool clearQueue)
-        {
-            List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
-            if (dialogueOnly)
-            {
-                list = list.Where((AnnotatedStrForTts an) => an.speakerType != AnnotatedStrForTts.SpeakerType.NARRATOR && an.speakerType != AnnotatedStrForTts.SpeakerType.UNKNOWN).ToList();
-            }
-
-            List<Task<string>> tasks = new List<Task<string>>();
-            foreach (var annotatedStr in list)
-            {
-                SS.VoiceType voiceType = GetVoiceType(annotatedStr, npcVoiceType, manager.playerCharacter.GetGender());
-                tasks.Add(GeminiTtsClient.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), voiceType));
+#pragma warning disable CS0618
+                SS.VoiceType voiceType = RoleToVoiceType(seg.role, manager.playerCharacter.GetGender());
+#pragma warning restore CS0618
+                string text = seg.text;
+                tasks.Add(GeminiTtsClient.Instance.GenerateTts(Utils.KeepWordishChars(text, true), voiceType));
             }
 
             string[] uuids = await Task.WhenAll(tasks);
             List<string> validUuids = uuids.Where(u => !string.IsNullOrEmpty(u)).ToList();
-
             if (validUuids.Count == 0) return;
 
             string finalUuid = await GeminiTtsClient.Instance.ConcatenateAudioFiles(validUuids);
-
             if (string.IsNullOrEmpty(finalUuid)) return;
 
             lock (manager.gameSpeechManager.currentSoundUuidQueue)
@@ -80,9 +46,7 @@ namespace AIROG_GeminiTTS
                 {
                     manager.gameSpeechManager.currentSoundUuidQueue.Clear();
                 }
-                
                 manager.gameSpeechManager.currentSoundUuidQueue.Enqueue(finalUuid);
-                
                 if (clearQueue)
                 {
                     manager.gameSpeechManager.soundQueueDirtyBit = true;
@@ -90,17 +54,13 @@ namespace AIROG_GeminiTTS
             }
         }
 
-        private static SS.VoiceType GetVoiceType(AnnotatedStrForTts annotatedStr, SS.VoiceType npcVoiceType, SS.Gender playerGender)
+#pragma warning disable CS0618
+        private static SS.VoiceType RoleToVoiceType(string role, SS.Gender playerGender)
         {
-            return annotatedStr.speakerType switch
-            {
-                AnnotatedStrForTts.SpeakerType.NARRATOR => SS.VoiceType.NARRATION,
-                AnnotatedStrForTts.SpeakerType.PLAYER => (playerGender == SS.Gender.MALE) ? SS.VoiceType.MALE : SS.VoiceType.FEMALE,
-                AnnotatedStrForTts.SpeakerType.NPC_MAN => SS.VoiceType.MALE,
-                AnnotatedStrForTts.SpeakerType.NPC_WOMAN => SS.VoiceType.FEMALE,
-                AnnotatedStrForTts.SpeakerType.NPC_NEUTRAL => npcVoiceType,
-                _ => SS.VoiceType.NARRATION,
-            };
+            if (role == "NARRATOR") return SS.VoiceType.NARRATION;
+            if (role == "PLAYER") return playerGender == SS.Gender.MALE ? SS.VoiceType.MALE : SS.VoiceType.FEMALE;
+            return SS.VoiceType.NARRATION;
         }
+#pragma warning restore CS0618
     }
 }

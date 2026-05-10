@@ -71,45 +71,41 @@ namespace AIROG_MusicExpansion
 
         private static IEnumerator LoadTracks(string folder, GameMusicManager manager, bool isAmbient)
         {
-            if (!Directory.Exists(folder))
-            {
-                yield break;
-            }
+            if (!Directory.Exists(folder)) yield break;
 
-            string[] files = Directory.GetFiles(folder);
-            bool addedAny = false;
-            foreach (string file in files)
+            var clips = new List<AudioClip>();
+
+            foreach (string file in Directory.GetFiles(folder))
             {
                 if (file.EndsWith(".meta")) continue;
-
-                string url = "file://" + file;
                 AudioType type = GetAudioType(file);
+                if (type == AudioType.UNKNOWN) continue;
 
-                using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(url, type))
+                using (var www = UnityWebRequestMultimedia.GetAudioClip("file://" + file, type))
                 {
                     yield return www.SendWebRequest();
 
-                    if (www.result == UnityWebRequest.Result.ConnectionError || www.result == UnityWebRequest.Result.ProtocolError)
+                    if (www.result != UnityWebRequest.Result.Success)
                     {
                         Debug.LogError($"[MusicExpansion] Error loading {file}: {www.error}");
+                        continue;
                     }
-                    else
+
+                    AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                    if (clip != null)
                     {
-                        AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
-                        if (clip != null)
-                        {
-                            clip.name = Path.GetFileNameWithoutExtension(file);
-                            AddTrackToManager(manager, clip, isAmbient);
-                            addedAny = true;
-                        }
+                        clip.name = Path.GetFileNameWithoutExtension(file);
+                        clips.Add(clip);
                     }
                 }
             }
 
-            if (addedAny)
-            {
-                ReshufflePlaylist(manager, isAmbient);
-            }
+            if (clips.Count == 0) yield break;
+
+            // Single batch insert — one array allocation, two reflection calls total
+            AddTracksToManager(manager, clips, isAmbient);
+            ReshufflePlaylist(manager, isAmbient);
+            Debug.Log($"[MusicExpansion] Loaded {clips.Count} {(isAmbient ? "ambient" : "encounter")} tracks.");
         }
 
         private static void ReshufflePlaylist(GameMusicManager manager, bool isAmbient)
@@ -152,46 +148,31 @@ namespace AIROG_MusicExpansion
             }
         }
 
-        private static void AddTrackToManager(GameMusicManager manager, AudioClip clip, bool isAmbient)
+        private static void AddTracksToManager(GameMusicManager manager, List<AudioClip> clips, bool isAmbient)
         {
-            // Update the public array (good for inspection or subsequent reloads)
-            if (isAmbient)
-            {
-                manager.ambientTracks = AddToArray(manager.ambientTracks, clip);
-            }
-            else
-            {
-                manager.combatTracks = AddToArray(manager.combatTracks, clip);
-            }
+            // Update public array once
+            AudioClip[] existing = isAmbient ? manager.ambientTracks : manager.combatTracks;
+            int offset = existing?.Length ?? 0;
+            AudioClip[] merged = new AudioClip[offset + clips.Count];
+            if (existing != null) Array.Copy(existing, merged, offset);
+            for (int i = 0; i < clips.Count; i++) merged[offset + i] = clips[i];
 
-            // Inject into the private active AudioPojo
+            if (isAmbient) manager.ambientTracks = merged;
+            else           manager.combatTracks  = merged;
+
+            // Inject into the private AudioPojo once (field lookups cached here, not per-clip)
             string fieldName = isAmbient ? "ambientAudioPojo" : "combatAudioPojo";
-            
-            // Access the private field 'ambientAudioPojo' / 'combatAudioPojo' in GameMusicManager
-            var pojoField = AccessTools.Field(typeof(GameMusicManager), fieldName);
-            object pojoInstance = pojoField.GetValue(manager);
+            var pojoField    = AccessTools.Field(typeof(GameMusicManager), fieldName);
+            object pojo      = pojoField.GetValue(manager);
+            if (pojo == null) return;
 
-            if (pojoInstance != null)
-            {
-                // Access the public 'tracks' field in the private AudioPojo class
-                // Since the class is private, we use AccessTools/Reflection to get the field
-                // Note: The field 'tracks' is public inside the private class, but since we don't have the type, we rely on AccessTools by name or type finding.
-                var tracksField = AccessTools.Field(pojoInstance.GetType(), "tracks");
-                
-                AudioClip[] currentTracks = (AudioClip[])tracksField.GetValue(pojoInstance);
-                AudioClip[] newTracks = AddToArray(currentTracks, clip);
-                
-                tracksField.SetValue(pojoInstance, newTracks);
-            }
-        }
-
-        private static T[] AddToArray<T>(T[] array, T item)
-        {
-            if (array == null) return new T[] { item };
-            T[] newArray = new T[array.Length + 1];
-            Array.Copy(array, newArray, array.Length);
-            newArray[array.Length] = item;
-            return newArray;
+            var tracksField      = AccessTools.Field(pojo.GetType(), "tracks");
+            AudioClip[] pojoExisting = (AudioClip[])tracksField.GetValue(pojo);
+            int pojoOffset       = pojoExisting?.Length ?? 0;
+            AudioClip[] pojoMerged = new AudioClip[pojoOffset + clips.Count];
+            if (pojoExisting != null) Array.Copy(pojoExisting, pojoMerged, pojoOffset);
+            for (int i = 0; i < clips.Count; i++) pojoMerged[pojoOffset + i] = clips[i];
+            tracksField.SetValue(pojo, pojoMerged);
         }
     }
 }

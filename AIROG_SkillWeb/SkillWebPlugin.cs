@@ -102,7 +102,7 @@ namespace AIROG_SkillWeb
         [HarmonyPrefix]
         public static void GainXp_Prefix(PlayerCharacter __instance, out int __state)
         {
-            __state = __instance.playerLevel;
+            __state = __instance.GetPlayerLevel();
         }
 
         [HarmonyPatch(typeof(PlayerCharacter), "GainXp")]
@@ -112,9 +112,9 @@ namespace AIROG_SkillWeb
             var data = SkillWebPlugin.Instance.Data;
             if (data == null) return;
 
-            if (__instance.playerLevel > __state)
+            if (__instance.GetPlayerLevel() > __state)
             {
-                int gained = __instance.playerLevel - __state;
+                int gained = __instance.GetPlayerLevel() - __state;
                 int pts = gained * SkillWebPlugin.Instance.SkillConfig.PointsPerLevel;
                 data.skillPoints += pts;
                 data.totalPointsEarned += pts;

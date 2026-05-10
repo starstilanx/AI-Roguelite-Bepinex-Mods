@@ -2,6 +2,7 @@ using BepInEx;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using System;
+using System.Reflection;
 
 namespace AIROG_GCHelper
 {
@@ -55,6 +56,23 @@ namespace AIROG_GCHelper
             long after = GC.GetTotalMemory(false) / (1024 * 1024);
 
             Logger.LogInfo($"[GCHelper] Collected ({reason}): {before} MB -> {after} MB (freed {before - after} MB)");
+
+            TrimDmNotesHistory();
+        }
+
+        private void TrimDmNotesHistory()
+        {
+            try
+            {
+                var type = Type.GetType("AIROG_GenContext.DMNotes.DmNotesManager, AIROG_GenContext");
+                if (type == null) return;
+                var method = type.GetMethod("TrimHistory", BindingFlags.Public | BindingFlags.Static);
+                method?.Invoke(null, new object[] { 30 });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[GCHelper] DmNotes trim skipped: {ex.Message}");
+            }
         }
     }
 }

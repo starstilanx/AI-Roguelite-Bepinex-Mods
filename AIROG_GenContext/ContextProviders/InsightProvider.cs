@@ -10,16 +10,21 @@ namespace AIROG_GenContext.ContextProviders
     {
         public int Priority => 150;
         public string Name => "Insight";
-        public string Description => "Injects hidden motives and insights about NPCs or Locations if the player has gained Insight on them.";
+        public string Description => "Injects hidden motives about NPCs when the player has gained Insight on them, and requests new insights after enough conversations.";
+
+        private const int InsightThreshold = 3; // Must match InsightData.InsightThreshold
+        private const string OpenTag = "<NPC_INSIGHT>";
+        private const string CloseTag = "</NPC_INSIGHT>";
 
         private class InsightDataStub
         {
             public Dictionary<string, string> NpcInsights;
             public Dictionary<string, string> PlaceInsights;
+            public Dictionary<string, int> ConversationCounts;
         }
 
         private InsightDataStub _insightCache = new InsightDataStub();
-        private float _lastLoadTime = 0;
+        private float _lastLoadTime = -999f;
         private const float CACHE_REFRESH_RATE = 5f;
 
         public string GetContext(string prompt, int maxTokens)
@@ -31,22 +36,44 @@ namespace AIROG_GenContext.ContextProviders
 
             string context = "";
 
-            // Check NPC Insight
-            if (manager.npcActionsHandler != null && manager.npcActionsHandler.currentNpc != null)
+            // ── NPC Insight ─────────────────────────────────────────────────────
+            var npc = manager.npcActionsHandler?.currentNpc;
+            if (npc != null)
             {
-                var npc = manager.npcActionsHandler.currentNpc;
-                if (_insightCache.NpcInsights != null && _insightCache.NpcInsights.TryGetValue(npc.uuid, out var insight))
+                string existingInsight = null;
+                bool hasInsight = _insightCache.NpcInsights != null &&
+                                  _insightCache.NpcInsights.TryGetValue(npc.uuid, out existingInsight);
+
+                if (hasInsight && !string.IsNullOrEmpty(existingInsight))
                 {
-                    context += $"\n[PLAYER INSIGHT (HIDDEN MOTIVE): {insight}]\n";
+                    // Already have an insight — inject it silently into the AI context
+                    context += $"\n[PLAYER INSIGHT — HIDDEN FROM NARRATIVE: {existingInsight}]\n";
+                }
+                else
+                {
+                    // Check if enough conversations have happened to earn an insight
+                    int convCount = 0;
+                    _insightCache.ConversationCounts?.TryGetValue(npc.uuid, out convCount);
+
+                    if (convCount >= InsightThreshold)
+                    {
+                        // Ask the AI to generate an insight this turn — InsightPlugin will extract and save it
+                        context += $"\n[INSIGHT DIRECTIVE — HIDDEN FROM PLAYER]\n" +
+                                   $"The player has spent significant time with this character. " +
+                                   $"Based on what has unfolded so far, output a hidden {OpenTag}one sentence revealing " +
+                                   $"their deepest hidden motive, secret, or true nature{CloseTag} " +
+                                   $"at the start of your response. This block is stripped before display.\n";
+                    }
                 }
             }
 
-            // Check Location Insight
+            // ── Location Insight ─────────────────────────────────────────────────
             if (manager.currentPlace != null)
             {
-                if (_insightCache.PlaceInsights != null && _insightCache.PlaceInsights.TryGetValue(manager.currentPlace.uuid, out var placeInsight))
+                if (_insightCache.PlaceInsights != null &&
+                    _insightCache.PlaceInsights.TryGetValue(manager.currentPlace.uuid, out var placeInsight))
                 {
-                    context += $"\n[LOCATION INSIGHT: {placeInsight}]\n";
+                    context += $"\n[LOCATION INSIGHT — HIDDEN FROM NARRATIVE: {placeInsight}]\n";
                 }
             }
 
@@ -72,10 +99,7 @@ namespace AIROG_GenContext.ContextProviders
             try
             {
                 var loaded = JsonConvert.DeserializeObject<InsightDataStub>(File.ReadAllText(path));
-                if (loaded != null)
-                {
-                    _insightCache = loaded;
-                }
+                if (loaded != null) _insightCache = loaded;
             }
             catch (Exception ex)
             {

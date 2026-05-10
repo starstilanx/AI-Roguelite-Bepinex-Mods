@@ -199,6 +199,7 @@ namespace AIROG_WorldExpansion
 
                 WorldData.LogEvent(desc, "MAJOR");
                 WorldData.CurrentState.MajorEventHistory.Add(desc);
+                WorldData.QueuePlayerEvent(desc, "MAJOR_EVENT");
 
                 // Apply economy feedback based on event content
                 ApplyEconomyFeedback(desc, manager);
@@ -652,6 +653,7 @@ namespace AIROG_WorldExpansion
             string desc = $"[FALL OF {loser.GetPrettyName().ToUpper()}] {loser.GetPrettyName()} has been utterly defeated and absorbed by {victor.GetPrettyName()}!";
             WorldData.LogEvent(desc, "MAJOR");
             WorldData.CurrentState.MajorEventHistory.Add(desc);
+            WorldData.QueuePlayerEvent($"{loser.GetPrettyName()} has fallen and been absorbed by {victor.GetPrettyName()}.", "FACTION_FALL");
 
             // End any active war between them
             string key = WorldData.GetRelationshipKey(loser.uuid, victor.uuid);

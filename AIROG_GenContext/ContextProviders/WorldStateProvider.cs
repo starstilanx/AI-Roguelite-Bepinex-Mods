@@ -27,6 +27,7 @@ namespace AIROG_GenContext.ContextProviders
             public Dictionary<string, WarDeclarationStub> ActiveWars;
             public Dictionary<string, int> GrievanceCounts;
             public List<string> EliminatedFactions; // HashSet serializes as array
+            public List<PendingWorldEventStub> PendingWorldEvents;
         }
 
         private class MarketStateStub
@@ -59,6 +60,14 @@ namespace AIROG_GenContext.ContextProviders
             public string CasusBelli;
             public int StartTurn;
         }
+
+        private class PendingWorldEventStub
+        {
+            public string Description;
+            public string Type;
+            public int    TurnAdded;
+            public int    TtlTurns;
+        }
 #pragma warning restore 0649
 
         private WorldStateStub _cache;
@@ -70,20 +79,19 @@ namespace AIROG_GenContext.ContextProviders
             RefreshCacheIfNeeded();
             if (_cache == null) return "";
 
-            string context = "";
+            string data = "";
 
-            // ── Season ────────────────────────────────────────────────────────────
-            if (!string.IsNullOrEmpty(_cache.CurrentSeason))
-                context += $"- Season: {_cache.CurrentSeason}\n";
-
-            // ── Economy ───────────────────────────────────────────────────────────
+            // ── Season + Economy ─────────────────────────────────────────────────
+            string seasonPart = !string.IsNullOrEmpty(_cache.CurrentSeason) ? _cache.CurrentSeason : "";
+            string econPart   = "";
             if (_cache.Market != null && !string.IsNullOrEmpty(_cache.Market.GlobalCondition))
             {
-                string econ = _cache.Market.GlobalCondition;
+                econPart = _cache.Market.GlobalCondition;
                 if (_cache.Market.PriceMultiplier != 1.0f || _cache.Market.SellMultiplier != 1.0f)
-                    econ += $" (buy ×{_cache.Market.PriceMultiplier:0.##}, sell ×{_cache.Market.SellMultiplier:0.##})";
-                context += $"- Economy: {econ}\n";
+                    econPart += $" (×{_cache.Market.PriceMultiplier:0.##} buy, ×{_cache.Market.SellMultiplier:0.##} sell)";
             }
+            if (!string.IsNullOrEmpty(seasonPart) || !string.IsNullOrEmpty(econPart))
+                data += $"Season: {seasonPart} | Economy: {econPart}\n";
 
             // ── Active Wars ───────────────────────────────────────────────────────
             if (_cache.ActiveWars != null && _cache.ActiveWars.Count > 0)
@@ -91,10 +99,9 @@ namespace AIROG_GenContext.ContextProviders
                 var warParts = _cache.ActiveWars.Values.Select(war =>
                 {
                     int duration = _cache.CurrentTurn - war.StartTurn;
-                    string dur = duration > 0 ? $", {duration}t" : "";
-                    return $"{war.ActorName} vs {war.TargetName} [{war.CasusBelli}{dur}]";
+                    return $"{war.ActorName} vs {war.TargetName} [{war.CasusBelli}, {duration}t]";
                 });
-                context += $"- Wars: {string.Join("; ", warParts)}\n";
+                data += $"Active Wars: {string.Join("; ", warParts)}\n";
             }
 
             // ── Factions ──────────────────────────────────────────────────────────
@@ -115,10 +122,10 @@ namespace AIROG_GenContext.ContextProviders
                         return $"{f.Name} [{f.Tag}{regions}]";
                     });
                 if (notable.Any())
-                    context += $"- Factions: {string.Join(", ", notable)}\n";
+                    data += $"Factions: {string.Join(", ", notable)}\n";
             }
 
-            // ── Recent Events (non-MAJOR, non-ECONOMY, non-SEASON) ────────────────
+            // ── Recent Events ─────────────────────────────────────────────────────
             if (_cache.Events != null && _cache.Events.Count > 0)
             {
                 var recent = _cache.Events
@@ -127,21 +134,76 @@ namespace AIROG_GenContext.ContextProviders
                     .Take(3)
                     .Select(e => e.Description);
                 if (recent.Any())
-                    context += $"- Events: {string.Join("; ", recent)}\n";
+                    data += $"Recent: {string.Join("; ", recent)}\n";
             }
 
-            // ── Major History (last 2) ────────────────────────────────────────────
+            // ── Major History ─────────────────────────────────────────────────────
             if (_cache.MajorEventHistory != null && _cache.MajorEventHistory.Count > 0)
             {
                 var majors = _cache.MajorEventHistory
                     .Skip(Math.Max(0, _cache.MajorEventHistory.Count - 2));
-                context += $"- History: {string.Join("; ", majors)}\n";
+                data += $"World Events: {string.Join(" | ", majors)}\n";
             }
 
-            if (string.IsNullOrEmpty(context)) return "";
+            // ── Narrative Directive ───────────────────────────────────────────────
+            var directives = new List<string>();
+
+            if (_cache.Market != null)
+            {
+                switch (_cache.Market.GlobalCondition)
+                {
+                    case "Shortage":   directives.Add("goods are scarce — merchants stressed, shelves thin"); break;
+                    case "Surplus":    directives.Add("markets overflow — traders jovial, deals easy to find"); break;
+                    case "Inflation":  directives.Add("coin flows but buys less — costs higher than expected"); break;
+                    case "Depression": directives.Add("economic collapse — poverty and desperation are visible"); break;
+                }
+            }
+
+            if (_cache.ActiveWars != null && _cache.ActiveWars.Count > 0)
+            {
+                string warNames = string.Join(", ", _cache.ActiveWars.Values.Select(w => $"{w.ActorName} vs {w.TargetName}"));
+                directives.Add($"ongoing war ({warNames}) — show conscription fear, refugees, battle anxiety in NPCs");
+            }
+
+            switch (_cache.CurrentSeason)
+            {
+                case "Winter": directives.Add("bitter winter — cold limits travel and comfort, shapes every scene"); break;
+                case "Autumn": directives.Add("harvest season — abundance tempered by looming winter"); break;
+                case "Summer": directives.Add("long summer days — easier travel, higher spirits overall"); break;
+            }
+
+            string guidance = "";
+            if (directives.Count > 0)
+            {
+                guidance = "\n[WORLD NARRATIVE GUIDANCE — weave into scene, show don't tell]\n";
+                foreach (var d in directives)
+                    guidance += $"• {d}\n";
+            }
+
+            // ── Pending World Alert ───────────────────────────────────────────────
+            string alert = "";
+            if (_cache.PendingWorldEvents != null && _cache.PendingWorldEvents.Count > 0)
+            {
+                var active = _cache.PendingWorldEvents
+                    .Where(e => e.TurnAdded + e.TtlTurns >= _cache.CurrentTurn)
+                    .OrderByDescending(e => e.TurnAdded)
+                    .FirstOrDefault();
+                if (active != null)
+                    alert = $"\n[WORLD ALERT — {active.Type.Replace("_", " ")}: {active.Description}]\n" +
+                            "Mention this naturally in the scene if any NPC would plausibly know about it.\n";
+            }
+
+            string context = data + guidance + alert;
+            if (string.IsNullOrEmpty(context.Trim())) return "";
 
             string turnStr = _cache.CurrentTurn > 0 ? $" — Turn {_cache.CurrentTurn}" : "";
-            return $"\n[WORLD STATE{turnStr}]\n{context}";
+            string result = $"[WORLD STATE{turnStr}]\n{context}";
+
+            int maxChars = maxTokens * 4;
+            if (result.Length > maxChars)
+                result = result.Substring(0, maxChars) + "...";
+
+            return "\n" + result;
         }
 
         private void RefreshCacheIfNeeded()
