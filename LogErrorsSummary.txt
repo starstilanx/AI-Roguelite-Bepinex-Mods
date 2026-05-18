@@ -1,0 +1,41 @@
+# LogOutput.log Error Summary for AI Roguelite
+
+This file contains a summary of all errors, exceptions, and notable warnings found in the latest `BepInEx\LogOutput.log` file.
+
+**Note:** The previously identified `MissingMethodException` in `AIROG_GenContext` and `NanoBanana` API (400 Bad Request) errors have been successfully resolved and no longer appear in the logs!
+
+## 1. NullReferenceException in ItemTooltip
+**Error:** `[Error  : Unity Log] NullReferenceException: Object reference not set to an instance of an object`
+**Stack Trace (Partial):**
+- `ItemTooltip.ExecuteShowTooltip (GameEntity entity, System.Boolean withImg, System.Boolean isDepleted, System.Boolean forceSmall)`
+- `UnityEngine.UnitySynchronizationContext+WorkRequest.Invoke ()`
+**Notes:** This exception occurs when attempting to display a tooltip for an item/entity. It seems an object reference related to the tooltip rendering or the entity itself is null when the async task executes.
+
+## 2. Narrative Flavor Localization Missing
+**Error:** Multiple `[Error  : Unity Log] [WARNING: LOCALIZED STRING NOT FOUND: ...]` 
+**Details:** Strings not found include:
+- `narrative-flavor-rr-terse-algo`
+- `narrative-flavor-rr-base-algo`
+- `narrative-flavor-rr-real-algo`
+- `narrative-flavor-rr-base-ai`
+- `narrative-flavor-rr-mood-safe`
+- `narrative-flavor-rr-personal`
+- `narrative-flavor-rr-no-bias`
+- `narrative-flavor-rr-dm`
+- `narrative-flavor-rr-dm-algo`
+- `narrative-flavor-rr-beta-algo`
+**Notes:** Occurs when changing narrative flavors in the dropdown. The game is missing localized text keys for these new reactive realm flavors.
+
+## 3. NPC Expansion Hook Failure
+**Error:** 
+- `[Warning:  HarmonyX] AccessTools.Method: Could not find method for type GameplayManager and name GetActions and parameters (GameCharacter)`
+- `[Warning:NPC Expansion] [NPCExpansion] Could not find GameplayManager.GetActions(GameCharacter) — NPC action menu injection will not work.`
+**Notes:** The `NPC Expansion` mod is failing to patch `GameplayManager.GetActions(GameCharacter)`. This method has likely been removed or its signature changed in the base game, disabling custom NPC action menu injections.
+
+## 4. Minor Warnings
+- **Legacy Region Grandfathering:** Multiple warnings for `grandfathering legacy region logic into new initial location logic2:` (e.g., Farifell, STALKER, WoF). This is standard automated conversion for older presets/saves.
+- **Font Modifier V3:** `Broken FaceInfo detected (Size: 0, LH: 97.5). Repairing...`. The mod gracefully detects and repairs broken font metrics on load.
+- **DontDestroyOnLoad:** `DontDestroyOnLoad only works for root GameObjects or components on root GameObjects.` Minor Unity warning logged during main menu initialization.
+
+## Summary
+The major show-stopping bugs have been eliminated! The primary remaining functional issue is the `NPC Expansion` mod failing to inject into `GameplayManager.GetActions`. Additionally, there is a `NullReferenceException` related to `ItemTooltip` that should be investigated, along with missing localization keys for the narrative flavors.

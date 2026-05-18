@@ -38,19 +38,8 @@ namespace AIROG_NPCExpansion
             var harmony = new Harmony(PLUGIN_GUID);
             harmony.PatchAll(typeof(NPCExpansionPlugin));
 
-            // Manually patch GameplayManager.GetActions(GameCharacter) —
-            // HarmonyX DeclaredMethod resolution fails for this overload at runtime.
-            var getActionsMethod = AccessTools.Method(typeof(GameplayManager), "GetActions", new[] { typeof(GameCharacter) });
-            if (getActionsMethod != null)
-            {
-                harmony.Patch(getActionsMethod,
-                    postfix: new HarmonyMethod(typeof(NPCExpansionPlugin), nameof(Postfix_GetActions)));
-                Logger.LogInfo("[NPCExpansion] Patched GameplayManager.GetActions(GameCharacter) manually.");
-            }
-            else
-            {
-                Logger.LogWarning("[NPCExpansion] Could not find GameplayManager.GetActions(GameCharacter) — NPC action menu injection will not work.");
-            }
+            // NPC action menu injection is now done via Prefix_PresentNpcMenu + Prefix_showMenu
+            // (patching GetActions directly was fragile due to AccessTools overload resolution failures).
 
             // Manually patch PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace —
             // Harmony's attribute-based resolver fails for this newly-added class at runtime.
@@ -391,6 +380,18 @@ namespace AIROG_NPCExpansion
             }
         }
 
+        // --- NPC Action Menu Injection ---
+        // PresentNpcMenu calls GetActions(npc) then dropdownMenu.showMenu().
+        // We capture the NPC here and inject our items inside Prefix_showMenu.
+        private static GameCharacter _pendingNpcForMenu;
+
+        [HarmonyPatch(typeof(GameplayManager), "PresentNpcMenu")]
+        [HarmonyPrefix]
+        public static void Prefix_PresentNpcMenu(GameCharacter npc)
+        {
+            _pendingNpcForMenu = npc;
+        }
+
         // --- Gear System Helper ---
         private static ItemSlot _lastClickedItemSlot;
 
@@ -441,39 +442,100 @@ namespace AIROG_NPCExpansion
         [HarmonyPrefix]
         public static void Prefix_showMenu(List<DropdownMenuItem> menuItems, DropdownMenu __instance)
         {
-            if (_lastClickedItemSlot == null || _lastClickedItemSlot.item == null) 
+            // --- NPC action menu injection ---
+            var npc = _pendingNpcForMenu;
+            _pendingNpcForMenu = null;
+            if (npc != null)
+            {
+                var manager = __instance.manager;
+                var npcData = NPCData.Load(npc.uuid);
+                bool hasLore = npcData != null && !string.IsNullOrEmpty(npcData.Personality);
+                bool isAlive = npc.corpseState == GameCharacter.CorpseState.NONE;
+
+                menuItems.Add(new DropdownMenuItem("<color=#ffff00>Examine</color>", () =>
+                {
+                    NPCExamineUI.OpenFor(npc, manager);
+                    return Task.CompletedTask;
+                }));
+
+                string profileLabel = hasLore ? "<color=#ff9900>Edit Profile</color>" : "<color=#ff9900>Generate Profile</color>";
+                menuItems.Add(new DropdownMenuItem(profileLabel, async () =>
+                {
+                    if (hasLore)
+                        NPCUI.ShowLoreEditor(npc, manager);
+                    else
+                        await NPCGenerator.GenerateLore(npc, manager.GetContextForQuickActions());
+                }));
+
+                if (isAlive && !npc.IsEnemyType())
+                {
+                    menuItems.Add(new DropdownMenuItem("<color=#00ccff>Inventory & Gear</color>", () =>
+                    {
+                        NPCEquipmentUI.OpenFor(npc, manager);
+                        return Task.CompletedTask;
+                    }));
+
+                    if (hasLore)
+                    {
+                        menuItems.Add(new DropdownMenuItem("<color=#ffd700>Accept Quest</color>", async () =>
+                        {
+                            await QuestManager.GenerateQuest(npc, npcData, manager);
+                        }));
+                    }
+
+                    menuItems.Add(new DropdownMenuItem("<color=#aaaaff>Quest Log</color>", () =>
+                    {
+                        QuestUI.Open(manager);
+                        return Task.CompletedTask;
+                    }));
+
+                    if (hasLore)
+                    {
+                        var arcActions = RelationshipArcSystem.GetAvailableArcActions(npc, npcData, manager);
+                        foreach (var arcAction in arcActions)
+                            menuItems.Add(new DropdownMenuItem(arcAction.str, arcAction.a));
+                    }
+                }
+
+                if (NPCData.LoreCache.Values.Any(d => d != null && d.IsDeceased))
+                {
+                    menuItems.Add(new DropdownMenuItem("<color=#ff8888>Hall of Fallen</color>", () =>
+                    {
+                        HallOfFallenUI.Open(manager);
+                        return Task.CompletedTask;
+                    }));
+                }
+                return; // NPC menu handled — skip item-give logic
+            }
+
+            // --- Item give injection ---
+            if (_lastClickedItemSlot == null || _lastClickedItemSlot.item == null)
             {
                 _lastClickedItemSlot = null;
                 return;
             }
-            if (_lastClickedItemSlot.item.itemState != GameItem.ItemState.INVENTORY) 
+            if (_lastClickedItemSlot.item.itemState != GameItem.ItemState.INVENTORY)
             {
                 _lastClickedItemSlot = null;
                 return;
             }
 
-            var manager = __instance.manager;
-            var currentNpc = GetCurrentlySelectedNpc(manager);
-            
+            var itemManager = __instance.manager;
+            var currentNpc = GetCurrentlySelectedNpc(itemManager);
+
             if (currentNpc != null && !currentNpc.IsEnemyType())
             {
                 string giveText = $"Give to {currentNpc.GetPrettyName()}";
-                // Colorized specific check to avoid missing it if base game adds a similar but different one
                 if (!menuItems.Any(m => m.menuItemText.Contains("Give to") || m.menuItemText.Contains("<color=#00ff00>")))
                 {
                     var itemToGive = _lastClickedItemSlot.item;
                     menuItems.Add(new DropdownMenuItem("<color=#00ff00>" + giveText + "</color>", async () =>
                     {
-                        await NPCEquipmentUI.GiveItemToNPC(itemToGive, currentNpc, manager);
+                        await NPCEquipmentUI.GiveItemToNPC(itemToGive, currentNpc, itemManager);
                     }));
-                    Debug.Log($"[AIROG_NPCExpansion] Injected 'Give to {currentNpc.GetPrettyName()}' choice for {itemToGive.GetPrettyName()}.");
                 }
             }
-            else
-            {
-                 Debug.Log($"[AIROG_NPCExpansion] Skipping 'Give to' injection. currentNpc: {(currentNpc?.GetPrettyName() ?? "null")}, IsEnemy: {currentNpc?.IsEnemyType()}");
-            }
-            
+
             _lastClickedItemSlot = null;
         }
 
@@ -566,70 +628,6 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        public static void Postfix_GetActions(GameCharacter npc, ref List<StrToAction> __result, GameplayManager __instance)
-        {
-            if (npc == null || npc.corpseState != GameCharacter.CorpseState.NONE) return;
-
-            var npcData = NPCData.Load(npc.uuid);
-            bool hasLore = npcData != null && !string.IsNullOrEmpty(npcData.Personality);
-
-            // Examine — available for all characters including enemies
-            __result.Add(new StrToAction("<color=#ffff00>Examine</color>", () =>
-            {
-                NPCExamineUI.OpenFor(npc, __instance);
-                return Task.CompletedTask;
-            }));
-
-            // Generate / Edit Profile — available for all characters including enemies
-            string profileLabel = hasLore ? "<color=#ff9900>Edit Profile</color>" : "<color=#ff9900>Generate Profile</color>";
-            __result.Add(new StrToAction(profileLabel, async () =>
-            {
-                if (hasLore)
-                    NPCUI.ShowLoreEditor(npc, __instance);
-                else
-                    await NPCGenerator.GenerateLore(npc, __instance.GetContextForQuickActions());
-            }));
-
-            // Everything below is friendly-NPC-only
-            if (npc.IsEnemyType()) return;
-
-            __result.Add(new StrToAction("<color=#00ccff>Inventory & Gear</color>", () =>
-            {
-                NPCEquipmentUI.OpenFor(npc, __instance);
-                return Task.CompletedTask;
-            }));
-
-            if (npcData != null && !string.IsNullOrEmpty(npcData.Personality))
-            {
-                __result.Add(new StrToAction("<color=#ffd700>Accept Quest</color>", async () =>
-                {
-                    await QuestManager.GenerateQuest(npc, npcData, __instance);
-                }));
-            }
-
-            __result.Add(new StrToAction("<color=#aaaaff>Quest Log</color>", () =>
-            {
-                QuestUI.Open(__instance);
-                return Task.CompletedTask;
-            }));
-
-            // Relationship Arc actions (Ask Secret, Teach Me — threshold-gated)
-            if (npcData != null && !string.IsNullOrEmpty(npcData.Personality))
-            {
-                var arcActions = RelationshipArcSystem.GetAvailableArcActions(npc, npcData, __instance);
-                foreach (var arcAction in arcActions)
-                    __result.Add(arcAction);
-            }
-
-            if (NPCData.LoreCache.Values.Any(d => d != null && d.IsDeceased))
-            {
-                __result.Add(new StrToAction("<color=#ff8888>Hall of Fallen</color>", () =>
-                {
-                    HallOfFallenUI.Open(__instance);
-                    return Task.CompletedTask;
-                }));
-            }
-        }
 
         // REMOVED: Postfix_GetDetailsForPromptStr logic moved to AIROG_GenContext per architecture guidelines.
 
@@ -694,7 +692,7 @@ namespace AIROG_NPCExpansion
 
             // 1. Remove from Player/World Inventory context
             // Using REMOVE_BUT_KEEP_IN_CTX ensures it's not deleted from memory, just from the list
-            manager.inventory.RemoveItemIfExists(item.uuid, SS.DelMode.REMOVE_BUT_KEEP_IN_CTX);
+            manager.inventory.RemoveItemIfExists(item.uuid);
             
             // 2. Update Item Entity Data
             item.itemState = GameItem.ItemState.INVENTORY;

@@ -23,17 +23,22 @@ namespace AIROG_NanoBanana
         // OnImageGenerationDropdownChanged(0) call the game fires internally.
         internal static bool _optionsOpenInProgress = false;
         
-        public const string PREF_KEY_GEMINI_API_KEY = "PREF_KEY_GEMINI_IMG_GEN_API_KEY";
-        public const string PREF_KEY_GEMINI_MODEL = "PREF_KEY_GEMINI_IMG_GEN_MODEL";
+        public const string PREF_KEY_GEMINI_API_KEY   = "PREF_KEY_GEMINI_IMG_GEN_API_KEY";
+        public const string PREF_KEY_GEMINI_MODEL      = "PREF_KEY_GEMINI_IMG_GEN_MODEL";
+        public const string PREF_KEY_GEMINI_RESOLUTION = "PREF_KEY_GEMINI_IMG_GEN_RESOLUTION";
 
-        // Configuration for the API Key and Model
-        // Modified to check PlayerPrefs first
-        public string GeminiApiKey => PlayerPrefs.HasKey(PREF_KEY_GEMINI_API_KEY) 
-            ? PlayerPrefs.GetString(PREF_KEY_GEMINI_API_KEY) 
+        // Preset table: (display name, model ID, output resolution — empty = model default)
+        internal static readonly string[] PRESET_NAMES  = { "Gemini 2.5 Flash", "Gemini 3.1 Flash · 1K", "Gemini 3.1 Flash · 2K", "Gemini 3.1 Flash · 4K" };
+        internal static readonly string[] PRESET_MODELS = { "gemini-2.5-flash-image", "gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview" };
+        internal static readonly string[] PRESET_RES    = { "", "1K", "2K", "4K" };
+
+        public string GeminiApiKey    => PlayerPrefs.HasKey(PREF_KEY_GEMINI_API_KEY)
+            ? PlayerPrefs.GetString(PREF_KEY_GEMINI_API_KEY)
             : Config.Bind("General", "GeminiApiKey", "", "API Key for Gemini Image Generation").Value;
-        public string GeminiModel => PlayerPrefs.HasKey(PREF_KEY_GEMINI_MODEL) 
-            ? PlayerPrefs.GetString(PREF_KEY_GEMINI_MODEL) 
-            : Config.Bind("General", "GeminiModel", "gemini-2.5-flash-image", "Model ID to use for Gemini Image Generation").Value;
+        public string GeminiModel      => PlayerPrefs.HasKey(PREF_KEY_GEMINI_MODEL)
+            ? PlayerPrefs.GetString(PREF_KEY_GEMINI_MODEL)
+            : Config.Bind("General", "GeminiModel", "gemini-2.5-flash-image", "Model ID").Value;
+        public string GeminiResolution => PlayerPrefs.GetString(PREF_KEY_GEMINI_RESOLUTION, "");
 
         private void Awake()
         {
@@ -61,19 +66,14 @@ namespace AIROG_NanoBanana
                 // Construct the URL (API key is passed as a header, not query param)
                 string url = $"https://generativelanguage.googleapis.com/v1beta/models/{GeminiModel}:generateContent";
 
-                // Build the request payload following official docs:
-                // https://ai.google.dev/gemini-api/docs/image-generation
                 JObject body = new JObject();
-                
-                // Add Generation Config with Image Modality
-                // Must include both TEXT and IMAGE for image generation models
-                body["generationConfig"] = new JObject
+
+                JObject generationConfig = new JObject
                 {
-                    ["responseModalities"] = new JArray { "TEXT", "IMAGE" }
+                    ["responseModalities"] = new JArray { "IMAGE" },
+                    ["thinkingConfig"]     = new JObject { ["thinkingLevel"] = "minimal" },
                 };
-                // Note: safetySettings with BLOCK_NONE are NOT included here because
-                // Gemini 3 Pro Image Preview rejects requests that use that threshold.
-                // The image generation models have their own default safety filtering.
+                body["generationConfig"] = generationConfig;
 
                 JArray contents = new JArray();
                 JObject content = new JObject { ["role"] = "user" };
@@ -90,7 +90,7 @@ namespace AIROG_NanoBanana
                     byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body.ToString());
                     request.uploadHandler = new UploadHandlerRaw(bodyRaw);
                     request.downloadHandler = new DownloadHandlerBuffer();
-                    request.timeout = 120; // 120 second timeout (Gemini 3 Pro thinking can be slow)
+                    request.timeout = 120;
                     request.SetRequestHeader("Content-Type", "application/json");
                     request.SetRequestHeader("x-goog-api-key", apiKey);
 
@@ -119,7 +119,6 @@ namespace AIROG_NanoBanana
                         {
                             foreach (var part in candidateParts)
                             {
-                                // Skip "thought" parts from Gemini 3 Pro's thinking mode
                                 if (part["thought"]?.Value<bool>() == true) continue;
 
                                 if (part["inlineData"] != null)
@@ -156,6 +155,15 @@ namespace AIROG_NanoBanana
                 Logger.LogError($"NanoBanana: Exception during image generation: {ex.Message}\n{ex.StackTrace}");
                 return GameEntity.ImgGenState.REGULAR_FAILED;
             }
+        }
+
+        private static string GetAspectRatioForEntity(GameEntity entity, GameEntity.ImgGenInfo imgGenInfo)
+        {
+            if (imgGenInfo == entity.spGenInfo) return "2:3";   // sprites: upright character art
+            if (entity is Place)                return "16:9";  // locations: landscape scene
+            if (entity is GameCharacter)        return "3:4";   // characters/NPCs: portrait
+            if (entity is GameItem)             return "1:1";   // inventory items: square
+            return "4:3";                                        // static objects / fallback
         }
     }
 
@@ -223,15 +231,16 @@ namespace AIROG_NanoBanana
             
             if (isGemini)
             {
-                // Guard: the API key input field may also be null outside the Options screen
-                if (__instance.customerKeyTxtInputForImgGen == null || __instance.imgGenPresetDropdown == null) return;
+                var keyInputField = __instance.customerKeySlotForImgGen?.inputField;
+                if (keyInputField == null || __instance.imgGenPresetDropdown == null) return;
 
-                string val = __instance.customerKeyTxtInputForImgGen.text;
+                string val = keyInputField.text;
                 PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, val);
 
                 int presetInd = __instance.imgGenPresetDropdown.value;
-                string model = presetInd == 1 ? "gemini-3-pro-image-preview" : "gemini-2.5-flash-image";
-                PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_MODEL, model);
+                int safeInd = (presetInd >= 0 && presetInd < NanoBananaPlugin.PRESET_MODELS.Length) ? presetInd : 0;
+                PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_MODEL,      NanoBananaPlugin.PRESET_MODELS[safeInd]);
+                PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_RESOLUTION, NanoBananaPlugin.PRESET_RES[safeInd]);
 
                 // Persist mode 99 so PopulateSsPrefsWithPlayerPrefs can restore it
                 PlayerPrefs.SetInt("PREF_KEY_IMAGE_GENERATION_MODE2", 99);
@@ -331,27 +340,29 @@ namespace AIROG_NanoBanana
                     }
 
                     // Update placeholder and load our key
-                    if (__instance.customerKeyTxtInputForImgGen != null)
+                    var geminiInputField = __instance.customerKeySlotForImgGen?.inputField;
+                    if (geminiInputField != null)
                     {
-                        var placeholder = __instance.customerKeyTxtInputForImgGen.placeholder as TMP_Text;
+                        var placeholder = geminiInputField.placeholder as TMP_Text;
                         if (placeholder != null)
                         {
                             if (_originalPlaceholder == null) _originalPlaceholder = placeholder.text;
                             placeholder.text = "Enter your Gemini API Key";
                         }
                         string currentKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, "");
-                        __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(currentKey);
+                        geminiInputField.SetTextWithoutNotify(currentKey);
                     }
 
                     // Change the row label from "Customer key" to "Gemini API Key".
-                    // customerKeyTxtInputForImgGenTrans is the row container; its label TMP_Text
-                    // is any child that is NOT inside the InputField's own subtree.
-                    if (__instance.customerKeyTxtInputForImgGenTrans != null && __instance.customerKeyTxtInputForImgGen != null)
+                    if (__instance.customerKeySlotForImgGen != null)
                     {
-                        Transform inputFieldTf = __instance.customerKeyTxtInputForImgGen.transform;
-                        TMP_Text labelComponent = __instance.customerKeyTxtInputForImgGenTrans
+                        var slot = __instance.customerKeySlotForImgGen;
+                        Transform inputFieldTf = slot.inputField != null ? slot.inputField.transform : null;
+                        TMP_Text labelComponent = slot.transform
                             .GetComponentsInChildren<TMP_Text>(true)
-                            .FirstOrDefault(t => !t.transform.IsChildOf(inputFieldTf));
+                            .FirstOrDefault(t =>
+                                (inputFieldTf == null || !t.transform.IsChildOf(inputFieldTf)) &&
+                                t != slot.subStatusTxt);
                         if (labelComponent != null)
                         {
                             if (_originalKeyLabel == null) _originalKeyLabel = labelComponent.text;
@@ -412,19 +423,22 @@ namespace AIROG_NanoBanana
                     }
 
                     // Restore placeholder
-                    if (_originalPlaceholder != null && __instance.customerKeyTxtInputForImgGen?.placeholder is TMP_Text ph)
+                    if (_originalPlaceholder != null && __instance.customerKeySlotForImgGen?.inputField?.placeholder is TMP_Text ph)
                     {
                         ph.text = _originalPlaceholder;
                         _originalPlaceholder = null;
                     }
 
                     // Restore label
-                    if (_originalKeyLabel != null && __instance.customerKeyTxtInputForImgGenTrans != null && __instance.customerKeyTxtInputForImgGen != null)
+                    if (_originalKeyLabel != null && __instance.customerKeySlotForImgGen != null)
                     {
-                        Transform inputFieldTf = __instance.customerKeyTxtInputForImgGen.transform;
-                        TMP_Text labelComponent = __instance.customerKeyTxtInputForImgGenTrans
+                        var slot = __instance.customerKeySlotForImgGen;
+                        Transform inputFieldTf = slot.inputField != null ? slot.inputField.transform : null;
+                        TMP_Text labelComponent = slot.transform
                             .GetComponentsInChildren<TMP_Text>(true)
-                            .FirstOrDefault(t => !t.transform.IsChildOf(inputFieldTf));
+                            .FirstOrDefault(t =>
+                                (inputFieldTf == null || !t.transform.IsChildOf(inputFieldTf)) &&
+                                t != slot.subStatusTxt);
                         if (labelComponent != null)
                         {
                             labelComponent.text = _originalKeyLabel;
@@ -442,8 +456,8 @@ namespace AIROG_NanoBanana
                     if (method != null)
                     {
                         SS.ImageGenerationMode selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
-                        if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeyTxtInputForImgGen != null)
-                            __instance.customerKeyTxtInputForImgGen.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
+                        if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeySlotForImgGen?.inputField != null)
+                            __instance.customerKeySlotForImgGen.inputField.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
                     }
                 }
             }
@@ -718,13 +732,20 @@ namespace AIROG_NanoBanana
             if (mode == (SS.ImageGenerationMode)99)
             {
                 __instance.imgGenPresetDropdown.ClearOptions();
-                __instance.imgGenPresetDropdown.AddOptions(new List<string> { "Gemini 2.5 Flash Image", "Gemini 3 Pro Image Preview" });
-                
-                string currentModel = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_MODEL, NanoBananaPlugin.Instance.GeminiModel);
-                if (currentModel == "gemini-3-pro-image-preview")
-                    __instance.imgGenPresetDropdown.SetValueWithoutNotify(1);
-                else
-                    __instance.imgGenPresetDropdown.SetValueWithoutNotify(0);
+                __instance.imgGenPresetDropdown.AddOptions(NanoBananaPlugin.PRESET_NAMES.ToList());
+
+                string currentModel = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_MODEL, "gemini-2.5-flash-image");
+                string currentRes   = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_RESOLUTION, "");
+                int sel = 0;
+                for (int i = 0; i < NanoBananaPlugin.PRESET_MODELS.Length; i++)
+                {
+                    if (NanoBananaPlugin.PRESET_MODELS[i] == currentModel && NanoBananaPlugin.PRESET_RES[i] == currentRes)
+                    {
+                        sel = i;
+                        break;
+                    }
+                }
+                __instance.imgGenPresetDropdown.SetValueWithoutNotify(sel);
 
                 return false;
             }
@@ -767,11 +788,12 @@ namespace AIROG_NanoBanana
             {
                 // Decouple ImgGen box (Gemini) from Text/Audio (Sapphire)
                 GameObject selected = EventSystem.current?.currentSelectedGameObject;
-                if (selected != null && selected == __instance.customerKeyTxtInputForImgGen.gameObject)
+                var imgKeyField = __instance.customerKeySlotForImgGen?.inputField;
+                if (imgKeyField != null && selected != null && selected == imgKeyField.gameObject)
                 {
-                    // User is typing in THE GEMINI BOX. 
+                    // User is typing in THE GEMINI BOX.
                     // We DO NOT want to sync this to Sapphire fields.
-                    return false; 
+                    return false;
                 }
 
                 // User is typing in one of the SAPPHIRE boxes (Text or Audio).
