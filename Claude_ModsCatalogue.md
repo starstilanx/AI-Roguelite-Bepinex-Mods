@@ -51,14 +51,28 @@ Mods are separated into discrete `.csproj` solutions, generally prefixed with `A
 *   **`AIROG_HistoryTab`**: A UI-first approach allowing players to scroll upward through previously committed turns.
 *   **`AIROG_Chronicle`**: Hooked into `GenerateTxtNoTryStrStyle`. It uses `ChronicleProvider` to automatically summarise the story saga and injects it back through `GenContext`. 
 
+### 🧠 AIROG_Insight
+**Purpose:** NPC conversation tracking and narrative memory extraction.
+*   **Mechanics:** Counts consecutive turns directed at an NPC. Once the conversation threshold (default: 3) is met, it intercepts response generation to extract and strip hidden `<NPC_INSIGHT>` blocks.
+*   **Persistence:** Saves insights to `insight_data.json` inside the game's active save directory.
+
 ### 🔄 AIROG_LoopBeGone
 **Purpose:** Prevents the AI from repeating the same dialogue formats.
 *   **Architecture:** Hooked into AI Response Generation parsing.
 *   **Mechanic:** Employs N-gram algorithms and Levenshtein sequence distance mathematical checks to flag and intercept repeating paragraphs natively.
 
+### 🔌 AIROG_OpenAI5
+**Purpose:** Compatibility layer for newer OpenAI GPT-4.1+, o-series, and GPT-5+ models.
+*   **Key Hooks:** Prefix patches `MyHttpClient.DoHttpRequest` to intercept outbound requests to `/v1/chat/completions`.
+*   **Mechanics:** Replaces `max_tokens` with `max_completion_tokens` (boosting it to at least 8192 for reasoning headroom) and forces `temperature` to `1.0`.
+
 ### 🎟️ AIROG_TokenCount & AIROG_TokenModifierPlugin
 **Purpose:** Fine-tuning AI Token expenses and generation maximums per API call. 
 *   **Key Hooks:** Directly edits the configurations fed to `AIAsker`.
+
+### 🧹 AIROG_GCHelper
+**Purpose:** Automated garbage collection and memory optimization.
+*   **Mechanics:** Forces a full GC on scene loads and every 5 gameplay turns (throttled to a minimum of 30 seconds apart). Also trims `AIROG_GenContext` DMNotes history to 30 items via reflection to limit memory bloat.
 
 ### 🗃️ AIROG_PresetExporter
 **Purpose:** World-builders tool for exporting active games as shareable setup preset templates (prompts, rules, custom data).
@@ -79,6 +93,11 @@ Mods are separated into discrete `.csproj` solutions, generally prefixed with `A
 **Purpose:** Image Generation enhancements.
 *   **NanoBanana**: Direct integration to Google Gemini Imagen models, built explicitly for automatically removing background chromas from generated NPC portraits.
 *   **OpenAIImage**: Hooks for DALL-E generation.
+
+### 🔍 AIROG_StableHordeDetector
+**Purpose:** Real-time tracking and logging of Stable Horde image generation workers.
+*   **Key Hooks:** Postfix patches `StableHordeClient.HttpWithRetry` to intercept `/generate/status/` responses.
+*   **Features:** Extracts the generating model name, worker name, worker ID, and state, logging them to Unity's console and appending to `stable_horde_log.txt`.
 
 ### 🎼 AIROG_MusicExpansion
 **Purpose:** Smart dynamic looping audio. Hooked to the location `Place.cs` and current combat state tags to shuffle ambient environment and battle tracks dynamically.
