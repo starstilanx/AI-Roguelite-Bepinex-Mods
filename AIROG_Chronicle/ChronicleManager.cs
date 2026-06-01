@@ -38,6 +38,9 @@ namespace AIROG_Chronicle
         {
             State = new ChronicleState();
             _uiDirty = true;
+            // Re-subscribe in case the game nulled TurnHappenedEvent on exit to main menu
+            GameplayManager.TurnHappenedEvent -= OnTurnHappened;
+            GameplayManager.TurnHappenedEvent += OnTurnHappened;
             Debug.Log("[Chronicle] State reset for new game.");
         }
 
@@ -219,6 +222,12 @@ namespace AIROG_Chronicle
             {
                 Debug.LogError($"[Chronicle] Load error: {ex.Message}");
                 State = new ChronicleState();
+            }
+            finally
+            {
+                // Re-subscribe in case the game nulled TurnHappenedEvent on exit to main menu
+                GameplayManager.TurnHappenedEvent -= OnTurnHappened;
+                GameplayManager.TurnHappenedEvent += OnTurnHappened;
             }
         }
 
