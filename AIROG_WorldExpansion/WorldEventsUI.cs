@@ -175,7 +175,36 @@ namespace AIROG_WorldExpansion
             // ── Season & Turn header ──────────────────────────────────────────────
             string seasonIcon = SeasonIcon(state.CurrentSeason);
             CreateTextEntry($"<b>Turn {state.CurrentTurn}</b>   {seasonIcon} <b>{state.CurrentSeason}</b>", 26, Color.white);
+
+            // Current territory (native place ownership, best-effort)
+            try
+            {
+                var curPlace = SS.I?.hackyManager?.currentPlace;
+                var topPlace = curPlace?.GetTopLvlPlace() ?? curPlace;
+                var owner    = topPlace?.faction ?? curPlace?.faction;
+                if (owner != null && topPlace != null)
+                {
+                    bool ownerAtWar = state.ActiveWars.Values.Any(
+                        w => w.ActorUuid == owner.uuid || w.TargetUuid == owner.uuid);
+                    string warStr = ownerAtWar ? "  <color=#FF8888>⚔ at war</color>" : "";
+                    CreateTextEntry($"You are in <b>{topPlace.GetPrettyName()}</b> — territory of {owner.GetPrettyName()} ({StandingLabel(owner.GetStanding())}){warStr}",
+                        21, new Color(0.85f, 0.85f, 0.7f));
+                }
+            }
+            catch { }
             CreateSeparator();
+
+            // ── Bounties on the player ────────────────────────────────────────────
+            if (state.PlayerBounties.Count > 0)
+            {
+                CreateTextEntry("<b>☠ Bounties On You</b>", 26, new Color(1f, 0.3f, 0.3f));
+                foreach (var uuid in state.PlayerBounties)
+                {
+                    string facName = state.Factions.TryGetValue(uuid, out var fd) && !string.IsNullOrEmpty(fd.Name) ? fd.Name : "Unknown faction";
+                    CreateTextEntry($"  {facName} wants you dead or captured.", 21, new Color(1f, 0.55f, 0.45f));
+                }
+                CreateSeparator();
+            }
 
             // ── Economy block ─────────────────────────────────────────────────────
             CreateTextEntry("<b>Global Economy</b>", 28, Color.white);
@@ -234,6 +263,7 @@ namespace AIROG_WorldExpansion
 
             if (factionList.Count > 0)
             {
+                var nativeFactions = SS.I?.hackyManager?.GetCurrentFactions();
                 CreateTextEntry("<b>Faction Power Rankings</b>", 26, new Color(0.8f, 0.8f, 1f));
                 int rank = 1;
                 foreach (var f in factionList)
@@ -245,8 +275,20 @@ namespace AIROG_WorldExpansion
                     string tag     = f.Tag != "Neutral" ? $" [{f.Tag}]" : "";
                     string regions = f.ClaimedPlaceUuids.Count > 0 ? $" | {f.ClaimedPlaceUuids.Count}r" : "";
                     string popStr  = f.Population > 0 ? $" | {FormatPop(f.Population)} pop ({f.PopState})" : "";
+
+                    // Player standing from the native reputation system
+                    string youStr = "";
+                    if (!eliminated && !string.IsNullOrEmpty(uuid))
+                    {
+                        var native = nativeFactions?.FirstOrDefault(nf => nf.uuid == uuid);
+                        if (native != null && native.GetStanding() != Faction.FactionStanding.NONE)
+                            youStr = $" | you: {StandingLabel(native.GetStanding())}";
+                        if (state.PlayerBounties.Contains(uuid))
+                            youStr += " <color=#FF5555>☠</color>";
+                    }
+
                     Color rowColor = eliminated ? new Color(0.4f, 0.4f, 0.4f) : new Color(0.7f, 0.9f, 0.7f);
-                    CreateTextEntry($"  {rank}. {nameStr}{tag}  —  {f.Resources} res{popStr}{regions}", 21, rowColor);
+                    CreateTextEntry($"  {rank}. {nameStr}{tag}  —  {f.Resources} res{popStr}{regions}{youStr}", 21, rowColor);
                     rank++;
                 }
                 CreateSeparator();
@@ -288,7 +330,7 @@ namespace AIROG_WorldExpansion
         // ─── Filter Bar ───────────────────────────────────────────────────────────
         private static void CreateFilterBar()
         {
-            string[] filters = { "All", "MAJOR", "WAR", "TRADE", "ECONOMY", "DIPLOMACY", "POPULATION", "RUMOR", "SEASON" };
+            string[] filters = { "All", "MAJOR", "WAR", "PLAYER", "TERRITORY", "TRADE", "ECONOMY", "DIPLOMACY", "POPULATION", "RUMOR", "SEASON" };
 
             GameObject barObj = new GameObject("FilterBar", typeof(RectTransform));
             barObj.transform.SetParent(_contentObj.transform, false);
@@ -371,6 +413,8 @@ namespace AIROG_WorldExpansion
             {
                 case "MAJOR":      return new Color(1f,    0.8f,  0f);
                 case "WAR":        return new Color(1f,    0.4f,  0.4f);
+                case "PLAYER":     return new Color(1f,    0.7f,  0.9f);
+                case "TERRITORY":  return new Color(0.85f, 0.75f, 0.5f);
                 case "TRADE":      return new Color(0.4f,  1f,    0.6f);
                 case "ECONOMY":    return new Color(0.6f,  1f,    1f);
                 case "DIPLOMACY":  return new Color(0.7f,  0.6f,  1f);
@@ -391,6 +435,22 @@ namespace AIROG_WorldExpansion
                 case DiplomaticTier.TradePact:     return new Color(0.4f, 1f,   0.6f);
                 case DiplomaticTier.Alliance:      return new Color(1f,   0.9f, 0.3f);
                 default:                           return Color.white;
+            }
+        }
+
+        private static string StandingLabel(Faction.FactionStanding s)
+        {
+            switch (s)
+            {
+                case Faction.FactionStanding.DESPISED:   return "Despised";
+                case Faction.FactionStanding.SCORNED:    return "Scorned";
+                case Faction.FactionStanding.DISTRUSTED: return "Distrusted";
+                case Faction.FactionStanding.FAVORED:    return "Favored";
+                case Faction.FactionStanding.TRUSTED:    return "Trusted";
+                case Faction.FactionStanding.HONORED:    return "Honored";
+                case Faction.FactionStanding.ADMIRED:    return "Admired";
+                case Faction.FactionStanding.REVERED:    return "Revered";
+                default:                                 return "Neutral";
             }
         }
 

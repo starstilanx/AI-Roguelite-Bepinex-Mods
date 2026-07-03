@@ -21,7 +21,7 @@ namespace AIROG_NPCExpansion
             try
             {
                 if (data == null) data = NPCData.Load(npc.uuid);
-                if (data == null || string.IsNullOrEmpty(data.Personality)) return; // Only track lore'd NPCs
+                if (data == null || !NPCData.HasProfile(npc, data)) return; // Only track lore'd NPCs
                 if (data.IsDeceased) return; // Already recorded
 
                 data.IsDeceased = true;
@@ -85,7 +85,7 @@ namespace AIROG_NPCExpansion
         {
             try
             {
-                string prompt = $"Write a brief epitaph (under 15 words) for {npc.GetPrettyName()}: {data.Personality}. " +
+                string prompt = $"Write a brief epitaph (under 15 words) for {npc.GetPrettyName()}: {NPCData.GetPersonality(npc, data)}. " +
                                 $"Their last goal: {data.CurrentGoal}. Poetic, bittersweet. No quotes.";
 
                 string epitaph = await GameCompat.GenerateTxt(

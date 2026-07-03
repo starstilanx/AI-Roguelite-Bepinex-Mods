@@ -130,8 +130,10 @@ namespace AIROG_NPCExpansion
             var vpR = viewport.GetComponent<RectTransform>();
             vpR.anchorMin = Vector2.zero; vpR.anchorMax = Vector2.one;
             vpR.sizeDelta = Vector2.zero; vpR.anchoredPosition = Vector2.zero;
-            viewport.AddComponent<Mask>().showMaskGraphic = false;
-            viewport.AddComponent<Image>().color = Color.clear;
+            // RectMask2D, NOT Mask: a Mask driven by a fully transparent Image renders no
+            // geometry (cullTransparentMesh), writes no stencil, and hides ALL children.
+            viewport.AddComponent<RectMask2D>();
+            viewport.AddComponent<Image>().color = Color.clear; // raycast target for scroll drag
 
             var contentGO = new GameObject("Content", typeof(RectTransform));
             contentGO.transform.SetParent(viewport.transform, false);

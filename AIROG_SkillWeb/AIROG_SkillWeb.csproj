@@ -3,8 +3,8 @@
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_SkillWeb</AssemblyName>
-    <Description>Path of Exile 2 style Skill Web plugin for AI Roguelite.</Description>
-    <Version>1.0.0</Version>
+    <Description>Mechanical attribute-bonus layer that bridges onto the game's native perk tree.</Description>
+    <Version>3.1.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>

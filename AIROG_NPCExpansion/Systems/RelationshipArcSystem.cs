@@ -63,7 +63,7 @@ namespace AIROG_NPCExpansion
         public static List<StrToAction> GetAvailableArcActions(GameCharacter npc, NPCData data, GameplayManager manager)
         {
             var actions = new List<StrToAction>();
-            if (string.IsNullOrEmpty(data.Personality)) return actions;
+            if (data == null || !NPCData.HasProfile(npc, data)) return actions;
 
             // Ally (60+): Ask Secret
             if (data.Affinity >= 60)

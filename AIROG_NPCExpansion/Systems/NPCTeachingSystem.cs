@@ -48,10 +48,10 @@ namespace AIROG_NPCExpansion
                 else if (data.Tags != null && data.Tags.Count > 0)
                     expertiseHints = string.Join(", ", data.Tags);
                 else
-                    expertiseHints = data.Personality;
+                    expertiseHints = NPCData.GetPersonality(npc, data);
 
                 string prompt = $"NPC Teacher: {npc.GetPrettyName()}\n" +
-                                $"Personality: {data.Personality}\n" +
+                                $"Personality: {NPCData.GetPersonality(npc, data)}\n" +
                                 $"Expertise: {expertiseHints}\n\n" +
                                 $"This NPC is teaching the player one unique skill or technique drawn from their expertise.\n" +
                                 $"Respond ONLY in this exact format:\n" +
@@ -87,7 +87,6 @@ namespace AIROG_NPCExpansion
                 SavePlayerSkills();
 
                 // NPC goodwill cost — they've shared something precious
-                int oldAffinity = data.Affinity;
                 data.ChangeAffinity(-8, "Shared deep knowledge with the player.");
                 NPCData.Save(npc.uuid, data);
                 NPCExpansionPlugin.SyncAffinityToGame(npc.uuid, data);

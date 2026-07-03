@@ -11,95 +11,43 @@ using System.Reflection;
 
 namespace AIROG_Sapi5
 {
-    [HarmonyPatch(typeof(TiktokTtsClient))]
-    public static class TiktokTtsClientPatches
+    // The game merged TiktokTtsClient into TtsClient and replaced the old
+    // SpeakerType/VoiceType enum pipeline with role-string segments resolved
+    // via an LLM call (TtsHelper.GenerateTtsSegments) + TtsVoiceProfile tags.
+    [HarmonyPatch(typeof(TtsClient))]
+    public static class TtsClientPatches
     {
         [HarmonyPrefix]
-        [HarmonyPatch("GenerateMultipleTtsForTmp")]
-        public static bool GenerateMultipleTtsForTmpPrefix(TiktokTtsClient __instance, string strForTts, string voiceName, ref Task<List<string>> __result)
+        [HarmonyPatch("GenerateAndQueueTts")]
+        public static bool GenerateAndQueueTtsPrefix(TtsClient __instance, GameplayManager manager, string turnTxt, bool clearQueue, ref Task __result)
         {
             if (!Sapi5Plugin.UseSapi5.Value) return true;
-            Debug.Log("[SAPI5] GenerateMultipleTtsForTmpPrefix - SAPI5 taking over TTS");
-            __result = GenerateMultipleTtsForTmpAsync(strForTts);
+            Debug.Log("[SAPI5] GenerateAndQueueTtsPrefix - SAPI5 taking over TTS");
+            __result = GenerateAndQueueTtsAsync(manager, turnTxt, clearQueue);
             return false;
         }
 
-        private static async Task<List<string>> GenerateMultipleTtsForTmpAsync(string strForTts)
+        private static async Task GenerateAndQueueTtsAsync(GameplayManager manager, string turnTxt, bool clearQueue)
         {
             try
             {
-                Debug.Log("[SAPI5] GenerateMultipleTtsForTmpAsync called");
-                List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
-                Debug.Log($"[SAPI5] Extracted {list.Count} annotated strings for tmp.");
-                List<Task<string>> tasks = new List<Task<string>>();
+                Debug.Log($"[SAPI5] GenerateAndQueueTtsAsync called. turnTxt length: {turnTxt?.Length ?? -1}");
 
-                foreach (var annotatedStr in list)
+                List<TtsHelper.TtsSegment> segments = await TtsHelper.GenerateTtsSegments(manager, turnTxt);
+                Debug.Log($"[SAPI5] Extracted {segments.Count} tts segments.");
+
+                if (segments.Count == 0)
                 {
-                    string sapi5Voice = GetSapi5VoiceForSpeakerType(annotatedStr.speakerType, SS.Gender.UNKNOWN);
-                    Debug.Log($"[SAPI5] Speaking as {annotatedStr.speakerType} with voice: {sapi5Voice}");
-                    tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), sapi5Voice));
-                }
-
-                string[] uuids = await Task.WhenAll(tasks);
-                return uuids.Where(u => !string.IsNullOrEmpty(u)).ToList();
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[SAPI5] GenerateMultipleTtsForTmpAsync FAILED: {ex}");
-                return new List<string>();
-            }
-        }
-
-        private static string GetSapi5VoiceForSpeakerType(AnnotatedStrForTts.SpeakerType speakerType, SS.Gender playerGender)
-        {
-            return speakerType switch
-            {
-                AnnotatedStrForTts.SpeakerType.NARRATOR => Sapi5Plugin.VoiceNarration.Value,
-                AnnotatedStrForTts.SpeakerType.PLAYER => (playerGender == SS.Gender.MALE) ? Sapi5Plugin.VoiceMale.Value : Sapi5Plugin.VoiceFemale.Value,
-                AnnotatedStrForTts.SpeakerType.NPC_MAN => Sapi5Plugin.VoiceMale.Value,
-                AnnotatedStrForTts.SpeakerType.NPC_WOMAN => Sapi5Plugin.VoiceFemale.Value,
-                AnnotatedStrForTts.SpeakerType.NPC_NEUTRAL => Sapi5Plugin.VoiceNarration.Value,
-                _ => Sapi5Plugin.VoiceNarration.Value,
-            };
-        }
-
-        [HarmonyPrefix]
-        [HarmonyPatch("GenerateMultipleTtsAndUpdateQueue")]
-        public static bool GenerateMultipleTtsAndUpdateQueuePrefix(TiktokTtsClient __instance, GameplayManager manager, string strForTts, SS.VoiceType npcVoiceType, int tryStrLength, bool dialogueOnly, bool clearQueue, ref Task __result)
-        {
-            if (!Sapi5Plugin.UseSapi5.Value) return true;
-            Debug.Log("[SAPI5] GenerateMultipleTtsAndUpdateQueuePrefix - SAPI5 taking over TTS");
-            __result = GenerateMultipleTtsAndUpdateQueueAsync(manager, strForTts, npcVoiceType, dialogueOnly, clearQueue);
-            return false;
-        }
-
-        private static async Task GenerateMultipleTtsAndUpdateQueueAsync(GameplayManager manager, string strForTts, SS.VoiceType npcVoiceType, bool dialogueOnly, bool clearQueue)
-        {
-            try
-            {
-                Debug.Log($"[SAPI5] GenerateMultipleTtsAndUpdateQueueAsync called. strForTts length: {strForTts?.Length ?? -1}, dialogueOnly: {dialogueOnly}");
-
-                List<AnnotatedStrForTts> list = TtsHelper.ExtractAnnotatedStringsForTiktokTts2(strForTts);
-                Debug.Log($"[SAPI5] Extracted {list.Count} annotated strings.");
-
-                if (dialogueOnly)
-                {
-                    list = list.Where((AnnotatedStrForTts an) => an.speakerType != AnnotatedStrForTts.SpeakerType.NARRATOR && an.speakerType != AnnotatedStrForTts.SpeakerType.UNKNOWN).ToList();
-                    Debug.Log($"[SAPI5] After dialogueOnly filter: {list.Count} strings.");
-                }
-
-                if (list.Count == 0)
-                {
-                    Debug.LogWarning("[SAPI5] No annotated strings to synthesize — skipping.");
+                    Debug.LogWarning("[SAPI5] No tts segments to synthesize — skipping.");
                     return;
                 }
 
                 List<Task<string>> tasks = new List<Task<string>>();
-                foreach (var annotatedStr in list)
+                foreach (var seg in segments)
                 {
-                    string voiceName = GetVoiceName(annotatedStr, npcVoiceType, manager.playerCharacter.GetGender());
-                    Debug.Log($"[SAPI5] Speaking as {annotatedStr.speakerType} with voice: {voiceName}");
-                    tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(annotatedStr.content, true), voiceName));
+                    string voiceName = GetSapi5VoiceForRole(seg.role, manager);
+                    Debug.Log($"[SAPI5] Speaking as {seg.role} with voice: {voiceName}");
+                    tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(seg.text, true), voiceName));
                 }
 
                 string[] uuids = await Task.WhenAll(tasks);
@@ -131,32 +79,34 @@ namespace AIROG_Sapi5
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[SAPI5] GenerateMultipleTtsAndUpdateQueueAsync FAILED: {ex}");
+                Debug.LogError($"[SAPI5] GenerateAndQueueTtsAsync FAILED: {ex}");
             }
         }
 
-        private static string GetVoiceName(AnnotatedStrForTts annotatedStr, SS.VoiceType npcVoiceType, SS.Gender playerGender)
+        private static string GetSapi5VoiceForRole(string role, GameplayManager manager)
         {
-            var type = annotatedStr.speakerType switch
-            {
-                AnnotatedStrForTts.SpeakerType.NARRATOR => SS.VoiceType.NARRATION,
-                AnnotatedStrForTts.SpeakerType.PLAYER => (playerGender == SS.Gender.MALE) ? SS.VoiceType.MALE : SS.VoiceType.FEMALE,
-                AnnotatedStrForTts.SpeakerType.NPC_MAN => SS.VoiceType.MALE,
-                AnnotatedStrForTts.SpeakerType.NPC_WOMAN => SS.VoiceType.FEMALE,
-                AnnotatedStrForTts.SpeakerType.NPC_NEUTRAL => npcVoiceType,
-                _ => SS.VoiceType.NARRATION,
-            };
+            if (role == "NARRATOR") return Sapi5Plugin.VoiceNarration.Value;
 
-            return type switch
+            if (role == "PLAYER")
             {
-                SS.VoiceType.NARRATION => Sapi5Plugin.VoiceNarration.Value,
-                SS.VoiceType.MALE => Sapi5Plugin.VoiceMale.Value,
-                SS.VoiceType.FEMALE => Sapi5Plugin.VoiceFemale.Value,
-                SS.VoiceType.MONSTER => Sapi5Plugin.VoiceMonster.Value,
-                SS.VoiceType.ROBOT => Sapi5Plugin.VoiceRobot.Value,
-                SS.VoiceType.ENEMY => Sapi5Plugin.VoiceEnemy.Value,
-                _ => Sapi5Plugin.VoiceNarration.Value
-            };
+                return (manager.playerCharacter.GetGender() == SS.Gender.MALE)
+                    ? Sapi5Plugin.VoiceMale.Value
+                    : Sapi5Plugin.VoiceFemale.Value;
+            }
+
+            TtsVoiceProfile profile = TtsHelper.FindCharacterByName(role, manager)?.ttsVoiceProfile;
+            List<string> tags = profile?.tags;
+            if (tags != null)
+            {
+                if (tags.Any(t => t.IndexOf("monster", StringComparison.OrdinalIgnoreCase) >= 0)) return Sapi5Plugin.VoiceMonster.Value;
+                if (tags.Any(t => t.IndexOf("robot", StringComparison.OrdinalIgnoreCase) >= 0)) return Sapi5Plugin.VoiceRobot.Value;
+                if (tags.Any(t => t.IndexOf("enemy", StringComparison.OrdinalIgnoreCase) >= 0)) return Sapi5Plugin.VoiceEnemy.Value;
+            }
+
+            if (string.Equals(profile?.gender, "Male", StringComparison.OrdinalIgnoreCase)) return Sapi5Plugin.VoiceMale.Value;
+            if (string.Equals(profile?.gender, "Female", StringComparison.OrdinalIgnoreCase)) return Sapi5Plugin.VoiceFemale.Value;
+
+            return Sapi5Plugin.VoiceNarration.Value;
         }
     }
 

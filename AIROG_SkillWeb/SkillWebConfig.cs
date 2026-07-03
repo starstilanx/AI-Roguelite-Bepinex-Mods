@@ -2,28 +2,37 @@ using System;
 
 namespace AIROG_SkillWeb
 {
+    /// <summary>
+    /// Configuration for the Skill Web "mechanical layer" that rides on top of the game's
+    /// native perk tree. The native tree owns structure / learning / activation / narrative;
+    /// this mod only attaches attribute bonuses to learned perks.
+    /// </summary>
     [Serializable]
     public class SkillWebConfig
     {
-        /// <summary>Skill points granted per character level-up.</summary>
-        public int PointsPerLevel = 1;
-
-        /// <summary>Points spent to unlock a new node from the tree.</summary>
-        public int NodeCost = 1;
-
-        /// <summary>Base cost to upgrade a node to the next tier (multiplied by current tier).</summary>
-        public int UpgradeCost = 2;
-
-        /// <summary>Whether unlocked-node stat bonuses are applied to the player.</summary>
+        /// <summary>Whether learned-perk attribute bonuses are applied to the player at all.</summary>
         public bool AllowStatBonuses = true;
 
-        /// <summary>Minimum locked frontier nodes to auto-generate when a node is unlocked.</summary>
-        public int FrontierNodesMin = 1;
+        /// <summary>
+        /// If true, perk attribute bonuses are derived by an AI call that reads the perk's
+        /// name + description. If false (or the call fails), a deterministic keyword heuristic is used.
+        /// AI derivation runs once per perk, asynchronously, and refines the heuristic result.
+        /// </summary>
+        public bool UseAIStatDerivation = true;
 
-        /// <summary>Maximum locked frontier nodes to auto-generate when a node is unlocked.</summary>
-        public int FrontierNodesMax = 4;
+        /// <summary>
+        /// Total attribute budget the heuristic distributes across a learned perk's matched
+        /// attributes. Higher = stronger passives.
+        /// </summary>
+        public float HeuristicBudget = 6f;
 
-        /// <summary>If false, frontier generation is disabled (manual-only expansion).</summary>
-        public bool AutoGenerateFrontier = true;
+        /// <summary>
+        /// Bonus multiplier applied when a learned perk is also one of the player's active perks.
+        /// Active perks already drive the narrative; this rewards activating them mechanically too.
+        /// </summary>
+        public float ActiveBonusMultiplier = 1.5f;
+
+        /// <summary>Safety cap on the total bonus contributed to any single attribute.</summary>
+        public float MaxBonusPerAttribute = 30f;
     }
 }

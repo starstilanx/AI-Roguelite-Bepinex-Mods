@@ -45,7 +45,7 @@ namespace AIROG_NPCExpansion
 
                 string prompt = $"NPC '{giver.GetPrettyName()}' is offering a follow-up quest.\n" +
                                 $"Previous quest completed: \"{completedQuest.ObjectiveText}\"\n" +
-                                $"NPC personality: {data.Personality}\n" +
+                                $"NPC personality: {NPCData.GetPersonality(giver, data)}\n" +
                                 $"{finaleHint}\n\n" +
                                 $"Generate a follow-up that escalates from the previous one. Respond ONLY:\n" +
                                 $"OBJECTIVE: [one-sentence quest, under 30 words]\n" +

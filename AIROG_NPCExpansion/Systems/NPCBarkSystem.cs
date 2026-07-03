@@ -19,7 +19,7 @@ namespace AIROG_NPCExpansion
             try
             {
                 if (globalTurn - data.LastBarkTurn < BARK_COOLDOWN) return;
-                if (string.IsNullOrEmpty(data.Personality)) return;
+                if (!NPCData.HasProfile(npc, data)) return;
                 if (_rng.NextDouble() > BARK_CHANCE) return;
 
                 // Don't bark if this NPC is currently selected for conversation
@@ -36,9 +36,12 @@ namespace AIROG_NPCExpansion
                     prompt,
                     AIAsker.ChatGptPostprocessingType.NONE);
 
-                if (string.IsNullOrEmpty(bark) || bark.Length > 200) return;
+                if (string.IsNullOrEmpty(bark)) return;
 
-                bark = bark.Trim().Trim('"');
+                // Normalise before the length check: strip quotes/whitespace and collapse
+                // any multi-line output into the first line.
+                bark = bark.Trim().Trim('"').Split('\n')[0].Trim();
+                if (bark.Length == 0 || bark.Length > 200) return;
                 _ = manager.gameLogView.LogTextCompat(
                     $"<color=#e0c080>[{npc.GetPrettyName()}]</color> \"{bark}\"");
 
@@ -56,9 +59,10 @@ namespace AIROG_NPCExpansion
         {
             var sb = new System.Text.StringBuilder();
             sb.AppendLine($"NPC: {npc.GetPrettyName()}");
-            sb.AppendLine($"Personality: {data.Personality}");
-            if (!string.IsNullOrEmpty(data.Scenario))
-                sb.AppendLine($"Current Situation: {data.Scenario}");
+            sb.AppendLine($"Personality: {NPCData.GetPersonality(npc, data)}");
+            string background = NPCData.GetBackground(npc, data);
+            if (!string.IsNullOrEmpty(background))
+                sb.AppendLine($"Current Situation: {background}");
             if (!string.IsNullOrEmpty(data.CurrentGoal))
                 sb.AppendLine($"Goal: {data.CurrentGoal}");
             sb.AppendLine($"Relationship with player: {data.RelationshipStatus} (Affinity {data.Affinity}/100)");

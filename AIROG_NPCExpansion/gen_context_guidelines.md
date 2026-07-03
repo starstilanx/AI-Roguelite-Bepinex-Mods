@@ -46,6 +46,24 @@ When injecting NPC context, ensure that **Abilities** are treated as first-class
 
 ---
 
+## Native ImportantCharacterData Bridge (v4.1.0+)
+
+As of the May 20 game update, the game stores `personality`, `background`, and `visualDescription` natively on `GameCharacter.importantData`. NPCProvider now has a fallback path that reads these directly from the live `GameCharacter` object when no JSON stub is cached:
+
+```
+npc.importantData.personality  →  NPCDataStub.Personality
+npc.importantData.background   →  NPCDataStub.Scenario
+npc.importantData.visualDescription → NPCDataStub.Description
+```
+
+This happens in two places in `NPCProvider.GetContext()`:
+- **Direct conversation** (`manager.npcActionsHandler.currentNpc`) — stub is built or enriched on the fly before the main injection block
+- **Ambient injection** (NPC mentioned in prompt) — same fallback for each mentioned NPC
+
+**Rule:** Never rely on the JSON cache alone for personality/background. Always prefer `NPCData.GetPersonality(npc, data)` / `NPCData.GetBackground(npc, data)` over direct `data.Personality` reads anywhere in the codebase.
+
+---
+
 ## NPCData ↔ NPCDataStub Field Sync Reference
 
 When modifying `AIROG_NPCExpansion/NPCData.cs`, ensure the corresponding fields are added to `AIROG_GenContext/ContextProviders/NPCProvider.cs → NPCDataStub`.
@@ -54,6 +72,7 @@ When modifying `AIROG_NPCExpansion/NPCData.cs`, ensure the corresponding fields 
 
 | Category | Field | Injected to Prompt? |
 |----------|-------|---------------------|
+| **Native (game)** | `importantData.personality`, `importantData.background`, `importantData.visualDescription` | ✓ Yes (fallback path in NPCProvider) |
 | **Core Identity** | Name, Description, Personality, Scenario | ✓ Yes |
 | **Character Card** | CreatorNotes, SystemPrompt | ✓ Yes (truncated) |
 | **Character Card (Metadata)** | FirstMessage, PostHistoryInstructions, AlternateGreetings, GenerationInstructions | ✗ No |

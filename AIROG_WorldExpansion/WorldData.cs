@@ -37,19 +37,27 @@ namespace AIROG_WorldExpansion
             CurrentState = new WorldState();
         }
 
-        public static void Save(string dir)
+        public static void Save(string dir, bool quiet = false)
         {
             try
             {
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 string path = Path.Combine(dir, "world_expansion_data.json");
                 File.WriteAllText(path, JsonConvert.SerializeObject(CurrentState, Formatting.Indented));
-                Debug.Log($"[WorldExpansion] Saved world data to {path}");
+                if (!quiet) Debug.Log($"[WorldExpansion] Saved world data to {path}");
             }
             catch (Exception e)
             {
                 Debug.LogError($"[WorldExpansion] Failed to save world data: {e.Message}");
             }
+        }
+
+        // Persists to the active save slot. GenContext's provider reads the JSON from disk,
+        // so this must be called whenever world state changes mid-session (not just on game save).
+        public static void SaveToCurrentDir(bool quiet = true)
+        {
+            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
+            Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg), quiet);
         }
 
         public static void Load(string dir)
@@ -90,6 +98,17 @@ namespace AIROG_WorldExpansion
             if (s.MajorEventHistory == null)    s.MajorEventHistory    = new List<string>();
             if (s.DiplomaticRelations == null)  s.DiplomaticRelations  = new Dictionary<string, DiplomaticRelation>();
             if (s.PendingWorldEvents == null)   s.PendingWorldEvents   = new List<PendingWorldEvent>();
+            if (s.PlayerGrievances == null)     s.PlayerGrievances     = new Dictionary<string, int>();
+            if (s.PlayerBounties == null)       s.PlayerBounties       = new HashSet<string>();
+
+            // Migrate v1.1 placeholder territories ("territory_{uuid}_{i}" fake IDs) — strip them
+            // and clear the seeded flag so factions get re-seeded with real Place UUIDs
+            foreach (var f in s.Factions.Values)
+            {
+                if (f.ClaimedPlaceUuids == null) f.ClaimedPlaceUuids = new List<string>();
+                if (f.ClaimedPlaceUuids.RemoveAll(u => u != null && u.StartsWith("territory_")) > 0)
+                    f.Seeded = false;
+            }
 
             // Migrate legacy FactionRelationships → DiplomaticRelations for old saves
             foreach (var kvp in s.FactionRelationships)
@@ -295,6 +314,15 @@ namespace AIROG_WorldExpansion
 
         // Short-lived events that the AI should acknowledge in the next few turns
         public List<PendingWorldEvent> PendingWorldEvents = new List<PendingWorldEvent>();
+
+        // Tick accumulators — replace modulo-on-turn checks so multi-turn skips (rests) can't jump over a tick
+        public int TurnsSinceMinorTick     = 0;
+        public int TurnsSinceDiplomacyTick = 0;
+        public int TurnsSinceEconomyTick   = 0;
+
+        // Player-as-world-actor state (bridged from the game's native playerFactionRep)
+        public Dictionary<string, int> PlayerGrievances = new Dictionary<string, int>(); // faction uuid → offenses against the player's standing
+        public HashSet<string>         PlayerBounties   = new HashSet<string>();         // faction uuids with an active bounty on the player
     }
 
     [Serializable]
@@ -330,11 +358,14 @@ namespace AIROG_WorldExpansion
     {
         public string       Name              = "";
         public int          Resources         = 100;
-        public List<string> ClaimedPlaceUuids = new List<string>();
+        public List<string> ClaimedPlaceUuids = new List<string>(); // real Place UUIDs (v1.2+)
         public string       Tag               = "Neutral";
         // Population tracker
         public int          Population        = 500;
         public string       PopState          = "Normal"; // Thriving, Normal, Struggling, Razed
+        // Per-faction lazy seeding (replaces the one-shot TerritoriesInitialized flag,
+        // so factions generated mid-game still get territory + population)
+        public bool         Seeded            = false;
     }
 
     [Serializable]

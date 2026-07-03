@@ -9,7 +9,7 @@ namespace AIROG_Chronicle
     {
         public const string PLUGIN_GUID    = "com.airog.chronicle";
         public const string PLUGIN_NAME    = "AIROG Chronicle";
-        public const string PLUGIN_VERSION = "1.0.0";
+        public const string PLUGIN_VERSION = "1.1.0";
 
         public static ChroniclePlugin Instance { get; private set; }
 

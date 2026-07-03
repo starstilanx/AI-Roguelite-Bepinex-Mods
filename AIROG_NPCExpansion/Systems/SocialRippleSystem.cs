@@ -30,14 +30,18 @@ namespace AIROG_NPCExpansion
                 int bystAffinity = bData.GetAffinity(targetUuid);
                 if (Math.Abs(bystAffinity) < 20) continue; // Only react if they care
 
-                // Scale ripple: strong bond → ~33% of delta, weak bond → smaller fraction
+                // Scale ripple: strong bond → ~33% of delta, weak bond → smaller fraction.
+                // Bystanders who DISLIKE the target react inversely: harming their enemy
+                // pleases them, helping their enemy angers them.
                 float rippleFactor = (Mathf.Abs(bystAffinity) / 100f) * 0.33f;
                 int ripple = (int)(delta * rippleFactor);
+                if (bystAffinity < 0) ripple = -ripple;
                 if (ripple == 0) continue;
 
+                bool likesTarget = bystAffinity > 0;
                 string reason = delta > 0
-                    ? $"Witnessed player show kindness to {targetName}."
-                    : $"Witnessed player harm {targetName}.";
+                    ? $"Witnessed player show kindness to {(likesTarget ? "their friend" : "their rival")} {targetName}."
+                    : $"Witnessed player harm {(likesTarget ? "their friend" : "their rival")} {targetName}.";
 
                 bData.ChangeAffinity(ripple, reason);
                 NPCData.Save(bystander.uuid, bData);
@@ -47,8 +51,8 @@ namespace AIROG_NPCExpansion
 
                 string color = ripple > 0 ? "#aaffaa" : "#ffaaaa";
                 string verb = ripple > 0
-                    ? $"approves of how you treated {targetName}."
-                    : $"disapproves of what you did to {targetName}.";
+                    ? $"approves of how you dealt with {targetName}."
+                    : $"disapproves of what you did regarding {targetName}.";
                 _ = manager.gameLogView.LogTextCompat(
                     $"<color={color}>[{bystander.GetPrettyName()}]</color> {verb}");
             }

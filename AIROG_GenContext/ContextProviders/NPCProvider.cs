@@ -107,8 +107,37 @@ namespace AIROG_GenContext.ContextProviders
 
             RefreshCacheIfNeeded();
 
+            // If no NPCData stub exists yet, try to build a minimal one from the game's
+            // native ImportantCharacterData (added in May 20 update). This ensures NPCs
+            // profiled via the native "Generate details" button are still injected into context.
+            if (!_npcCache.ContainsKey(npc.uuid))
+            {
+                var native = npc.importantData;
+                if (native != null && !string.IsNullOrEmpty(native.personality))
+                {
+                    _npcCache[npc.uuid] = new NPCDataStub
+                    {
+                        Name        = npc.GetPrettyName(),
+                        Personality = native.personality,
+                        Scenario    = native.background,
+                        Description = native.visualDescription,
+                    };
+                }
+            }
+
             if (_npcCache.TryGetValue(npc.uuid, out var data))
             {
+                // Layer in any native importantData fields that may be newer than our cached stub
+                var native = npc.importantData;
+                if (native != null)
+                {
+                    if (string.IsNullOrEmpty(data.Personality) && !string.IsNullOrEmpty(native.personality))
+                        data.Personality = native.personality;
+                    if (string.IsNullOrEmpty(data.Scenario) && !string.IsNullOrEmpty(native.background))
+                        data.Scenario = native.background;
+                    if (string.IsNullOrEmpty(data.Description) && !string.IsNullOrEmpty(native.visualDescription))
+                        data.Description = native.visualDescription;
+                }
                 // Format concise context
                 string context = $"\n\n[NPC: {data.Name}]\n";
 
@@ -361,13 +390,31 @@ namespace AIROG_GenContext.ContextProviders
                 foreach (var other in nearbyChars)
                 {
                     if (count >= 2) break; // Limit to 2 NPCs max to save tokens
-                    
+
                     // Simple case-insensitive check
                     if (prompt.IndexOf(other.GetPrettyName(), StringComparison.OrdinalIgnoreCase) >= 0)
                     {
+                        // Seed stub from native importantData if not in cache
+                        if (!_npcCache.ContainsKey(other.uuid))
+                        {
+                            var nativeAmbient = other.importantData;
+                            if (nativeAmbient != null && !string.IsNullOrEmpty(nativeAmbient.personality))
+                            {
+                                _npcCache[other.uuid] = new NPCDataStub
+                                {
+                                    Name        = other.GetPrettyName(),
+                                    Personality = nativeAmbient.personality,
+                                    Scenario    = nativeAmbient.background,
+                                    Description = nativeAmbient.visualDescription,
+                                };
+                            }
+                        }
+
                         if (_npcCache.TryGetValue(other.uuid, out var ambientData))
                         {
-                            string shortInj = $"\n[NPC '{ambientData.Name}': {ambientData.Personality ?? "Unknown"}, {ambientData.Scenario ?? "No status"}]";
+                            string personality = !string.IsNullOrEmpty(ambientData.Personality) ? ambientData.Personality : "Unknown";
+                            string status      = !string.IsNullOrEmpty(ambientData.Scenario) ? ambientData.Scenario : "No status";
+                            string shortInj = $"\n[NPC '{ambientData.Name}': {personality}, {status}]";
                             ambientContext += shortInj;
                             count++;
                         }

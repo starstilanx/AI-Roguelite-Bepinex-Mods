@@ -29,7 +29,7 @@ namespace AIROG_NPCExpansion
                 if (context.Length > 1500) context = context.Substring(context.Length - 1500);
 
                 string prompt = $"NPC '{npc.GetPrettyName()}' is giving the player a quest.\n" +
-                                $"NPC personality: {data.Personality}\n" +
+                                $"NPC personality: {NPCData.GetPersonality(npc, data)}\n" +
                                 $"Current goal: {data.CurrentGoal}\n" +
                                 $"World context: {context}\n\n" +
                                 $"Generate a quest. Respond ONLY in this exact format (no other text):\n" +
@@ -114,31 +114,45 @@ namespace AIROG_NPCExpansion
             if (active.Count == 0) return;
 
             // Trim story text to avoid token bloat
-            if (storyText.Length > 300) storyText = storyText.Substring(0, 300);
+            if (storyText.Length > 500) storyText = storyText.Substring(0, 500);
 
-            foreach (var quest in active)
+            try
             {
-                try
+                // One batched AI call for all active quests instead of one call per quest.
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"Story event that just happened: \"{storyText}\"");
+                sb.AppendLine();
+                sb.AppendLine("Quest completion conditions:");
+                for (int i = 0; i < active.Count; i++)
+                    sb.AppendLine($"{i + 1}. \"{active[i].CompletionCondition}\"");
+                sb.AppendLine();
+                sb.AppendLine("For EACH numbered condition, did the story event fulfill it?");
+                sb.AppendLine("Respond with one line per condition, exactly in the form:");
+                sb.AppendLine("1: YES or 1: NO");
+
+                string answer = await GameCompat.GenerateTxt(
+                    AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER,
+                    sb.ToString(),
+                    AIAsker.ChatGptPostprocessingType.NONE);
+
+                if (string.IsNullOrEmpty(answer)) return;
+
+                foreach (var line in answer.Split('\n'))
                 {
-                    string prompt = $"Quest completion condition: \"{quest.CompletionCondition}\"\n" +
-                                    $"Story event that just happened: \"{storyText}\"\n\n" +
-                                    $"Did this story event fulfill the quest condition? Answer only YES or NO.";
+                    var parts = line.Split(new[] { ':' }, 2);
+                    if (parts.Length < 2) continue;
+                    if (!int.TryParse(parts[0].Trim().TrimStart('#'), out int idx)) continue;
+                    if (idx < 1 || idx > active.Count) continue;
+                    if (!parts[1].Trim().ToUpperInvariant().StartsWith("YES")) continue;
 
-                    string answer = await GameCompat.GenerateTxt(
-                        AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER,
-                        prompt,
-                        AIAsker.ChatGptPostprocessingType.NONE);
-
-                    if (!string.IsNullOrEmpty(answer) &&
-                        answer.Trim().ToUpper().StartsWith("YES"))
-                    {
+                    var quest = active[idx - 1];
+                    if (quest.Status == QuestStatus.Active) // Guard against duplicate lines
                         await CompleteQuest(quest, manager);
-                    }
                 }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[QuestManager] Completion check error: {ex.Message}");
-                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[QuestManager] Completion check error: {ex.Message}");
             }
         }
 
@@ -198,12 +212,15 @@ namespace AIROG_NPCExpansion
 
         public static void CheckDeadlines(int globalTurn, GameplayManager manager)
         {
+            bool anyChanged = false;
+
             foreach (var quest in AllQuests.Where(q =>
                 q.Status == QuestStatus.Active &&
                 q.TurnDeadline >= 0 &&
                 globalTurn > q.TurnDeadline))
             {
                 quest.Status = QuestStatus.Failed;
+                anyChanged = true;
                 _ = manager.gameLogView.LogTextCompat(
                     $"<color=#ff6666>[QUEST FAILED] {quest.GiverName}: {quest.ObjectiveText}</color>");
                 Debug.Log($"[QuestManager] Quest expired: {quest.ObjectiveText}");
@@ -216,12 +233,13 @@ namespace AIROG_NPCExpansion
                 if (data != null && data.IsDeceased)
                 {
                     quest.Status = QuestStatus.Failed;
+                    anyChanged = true;
                     _ = manager.gameLogView.LogTextCompat(
                         $"<color=#ff6666>[QUEST FAILED] {quest.GiverName} has died: {quest.ObjectiveText}</color>");
                 }
             }
 
-            SaveQuests();
+            if (anyChanged) SaveQuests();
         }
 
         // ─── Persistence ───────────────────────────────────────────────────────────

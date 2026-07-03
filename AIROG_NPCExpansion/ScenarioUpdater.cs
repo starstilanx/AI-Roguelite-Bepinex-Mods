@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 using UnityEngine;
 
 namespace AIROG_NPCExpansion
@@ -27,8 +29,59 @@ namespace AIROG_NPCExpansion
 
         private static bool _isUpdating = false;
 
+        private const string STATE_FILE = "npcexpansion_state.json";
+
         /// <summary>Current global turn count. Used by QuestManager and new systems.</summary>
         public static int GlobalTurn => _globalTurn;
+
+        private class PersistedState
+        {
+            public int GlobalTurn;
+        }
+
+        // ─── Persistence ───────────────────────────────────────────────────────────
+        // GlobalTurn is referenced by saved quest data (TurnGiven/TurnDeadline) and
+        // per-NPC cooldowns (LastBarkTurn, MemorySynthesisTurn), so it must survive
+        // save/load instead of drifting with the app session.
+
+        public static void SaveState(string saveDir)
+        {
+            try
+            {
+                if (!Directory.Exists(saveDir)) return;
+                File.WriteAllText(Path.Combine(saveDir, STATE_FILE),
+                    JsonConvert.SerializeObject(new PersistedState { GlobalTurn = _globalTurn }));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] SaveState failed: {ex.Message}");
+            }
+        }
+
+        public static void LoadState(string saveDir)
+        {
+            // Fresh session: clear per-NPC scheduling and interval counters so stale
+            // UUIDs from a previously loaded save don't linger.
+            _npcNextUpdateTurn.Clear();
+            _autonomyCounter = 0;
+            _barkCounter     = 0;
+            _rumorCounter    = 0;
+            _memoryCounter   = 0;
+            _globalTurn      = 0;
+
+            try
+            {
+                string path = Path.Combine(saveDir, STATE_FILE);
+                if (!File.Exists(path)) return;
+                var state = JsonConvert.DeserializeObject<PersistedState>(File.ReadAllText(path));
+                if (state != null) _globalTurn = state.GlobalTurn;
+                Debug.Log($"[AIROG_NPCExpansion] Restored global turn {_globalTurn}.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] LoadState failed: {ex.Message}");
+            }
+        }
 
         // ─── Main Hook ─────────────────────────────────────────────────────────────
         public static void OnTurnHappened(int numTurns, long secs)
@@ -44,7 +97,7 @@ namespace AIROG_NPCExpansion
                       $"Bark={_barkCounter}/{BARK_INTERVAL}, Rumor={_rumorCounter}/{RUMOR_INTERVAL}, " +
                       $"Mem={_memoryCounter}/{MEMORY_INTERVAL}");
 
-            var manager = GameObject.FindObjectOfType<GameplayManager>();
+            var manager = SS.I?.hackyManager;
             if (manager == null || manager.currentPlace == null) return;
 
             var nearbyNpcs = manager.GetCharsForNpcConvoSelectorDropdown()

@@ -236,6 +236,66 @@ namespace AIROG_NPCExpansion
             return null;
         }
 
+        // ─── Native importantData bridge helpers ──────────────────────────────────
+
+        /// <summary>
+        /// Returns true if this NPC has lore from either source:
+        /// our NPCData JSON file OR the game's native ImportantCharacterData.
+        /// </summary>
+        public static bool HasProfile(GameCharacter npc, NPCData data)
+        {
+            if (npc?.importantData != null && !string.IsNullOrEmpty(npc.importantData.personality))
+                return true;
+            return data != null && !string.IsNullOrEmpty(data.Personality);
+        }
+
+        /// <summary>
+        /// Returns the best available personality string: native importantData first,
+        /// then our NPCData field (backward compat with pre-update saves).
+        /// </summary>
+        public static string GetPersonality(GameCharacter npc, NPCData data)
+        {
+            if (npc?.importantData != null && !string.IsNullOrEmpty(npc.importantData.personality))
+                return npc.importantData.personality;
+            return data?.Personality ?? "";
+        }
+
+        /// <summary>
+        /// Returns the best available background/scenario string: native importantData.background
+        /// first, then our NPCData.Scenario (backward compat).
+        /// </summary>
+        public static string GetBackground(GameCharacter npc, NPCData data)
+        {
+            if (npc?.importantData != null && !string.IsNullOrEmpty(npc.importantData.background))
+                return npc.importantData.background;
+            return data?.Scenario ?? "";
+        }
+
+        /// <summary>
+        /// Writes personality and background into the game's native ImportantCharacterData,
+        /// creating the object if needed so CharacterSheet can display our generated data.
+        /// Must be called from the main Unity thread (or with manager in scope).
+        /// </summary>
+        public static void SyncToNativeImportantData(GameCharacter npc, string personality, string background, string visualDescription = null)
+        {
+            try
+            {
+                if (npc == null || npc.manager == null) return;
+                if (npc.importantData == null)
+                    npc.importantData = new ImportantCharacterData(npc.manager);
+                if (!string.IsNullOrEmpty(personality))
+                    npc.importantData.personality = personality;
+                if (!string.IsNullOrEmpty(background))
+                    npc.importantData.background = background;
+                if (!string.IsNullOrEmpty(visualDescription))
+                    npc.importantData.visualDescription = visualDescription;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[NPCExpansion] SyncToNativeImportantData failed for {npc?.GetPrettyName()}: {ex.Message}");
+            }
+        }
+
         public static void SaveSessionLore(string saveDir)
         {
             if (LoreCache.Count == 0) return;

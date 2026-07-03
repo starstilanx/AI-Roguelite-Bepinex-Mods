@@ -2,6 +2,121 @@
 
 ---
 
+## v4.2.0 — *Refinement Pass*
+
+> *"A hundred small gears, each now turning true."*
+
+A codebase-wide refinement: several long-standing logic bugs fixed, AI-call volume reduced, and dead code removed.
+
+### Fixed
+
+- **Quest Log and Hall of Fallen opened as empty panels.** Both scroll views masked their content with a `Mask` component driven by a fully transparent `Image`. Modern Unity culls fully transparent UI meshes (`cullTransparentMesh`), so the mask wrote no stencil and hid *every* entry — the window rendered but its contents never did. Both viewports now use `RectMask2D` (the same approach as the Examine panel, which is why that one always worked).
+- **"Give to NPC" could target the wrong NPC.** The bottom-bar convo dropdown reserves slot 0 for `[OPEN-ENDED]`, so NPC entries are offset by one. The give-item menu read the dropdown value as a direct list index, handing items to the NPC *above* the one selected (or to the first NPC while in open-ended mode). Now resolved through the game's own `Utils.GetTargetedChar`, which handles the offset correctly.
+- **Social ripples ignored rivalries.** When the player harmed an NPC, bystanders who *hated* that NPC still disapproved. Bystander reactions now invert when their bond with the target is negative — harming their rival pleases them, helping their rival angers them.
+- **Global turn counter drifted across save loads.** `GlobalTurn` lived only in memory, so loading a save (or switching saves mid-session) desynced quest deadlines, bark cooldowns, and memory-synthesis timers. It is now persisted to `npcexpansion_state.json` in the save folder and restored on load; per-NPC scenario scheduling is reset on load so stale UUIDs don't linger.
+- **Hostile-NPC idle suppression never triggered.** The "hostile enemies shouldn't casually browse bookshelves while the player watches" check compared the wrong things and always passed. It now correctly checks whether the NPC is in the player's current place.
+- **Version string finally matches** — the plugin reported itself as 3.0.0 since the v4.0 rewrite.
+
+### Improved
+
+- **Quest completion checks are now one AI call instead of N.** Every story turn previously fired a separate YES/NO AI call per active quest. All active quest conditions are now batched into a single numbered-list prompt, with per-line YES/NO parsing. Story excerpt window widened from 300 to 500 chars for better detection.
+- **Fewer redundant scene scans.** All `FindObjectOfType<GameplayManager>()` lookups replaced with the game's `SS.I.hackyManager` singleton reference.
+- **Barks are normalised before validation** — multi-line AI output is collapsed to its first line and re-trimmed before length checks, so a valid bark wrapped in whitespace is no longer discarded.
+- **"Ask Secret" is now exception-safe.** The reveal flow runs inside a menu-action lambda; a failed AI call could previously throw into the void mid-flow. It is now fully guarded.
+- **Quest deadline sweep only writes to disk when something actually changed.**
+
+### Removed
+
+- **`Patches/NemesisPatch.cs` (dead code).** This Harmony class was never registered — `PatchAll` only targets the main plugin type — and if it ever *had* been registered it would have double-promoted nemeses alongside the `DeadLogic` patch (a promotion immediately followed by a phantom "repeat-kill" boost). Nemesis promotion is handled solely by the `DeadLogic` prefix.
+- Dead `IsPlausibleToExamine` shim and other unused locals; async methods with no awaits are now synchronous (no more CS1998 hazards).
+
+---
+
+## v4.1.1 — *Hotfix*
+
+- **Fix: NPCs no longer loot storage containers.** NPCs were incorrectly able to extract items from chests, storage racks, and other `StorageThingGameEntity` objects — in some cases removing an entire container from the world. The autonomy engine now skips all storage containers when looking for loose items to pick up. Additionally, the loose-item name filter has been expanded to exclude a broader set of container keywords (`crate`, `barrel`, `box`, `bin`, `locker`, `vault`, `coffer`, `reliquary`, `storage`, `container`, `sarcophagus`, `urn`) so AI-generated container props can't slip through.
+
+---
+
+## v4.1.0 — *Native Harmony Update*
+
+> *"The world remembers them even when we don't."*
+
+This update aligns NPC Expansion with the May 20 game patch, which introduced native character details (personality, background, visual description), playable party members, and an item-transfer API. Rather than being made redundant, the mod now bridges both worlds: native game data feeds our systems, and our extended data enriches the native UI. An NPC profiled via the game's own "Generate details" button is immediately recognised by every mod system — bark, secrets, reputation, quests, arcs — as if we generated them ourselves.
+
+---
+
+### Native Profile Bridge
+
+The game now stores `personality`, `background`, and `visualDescription` directly on each `GameCharacter` via a new `ImportantCharacterData` object. NPC Expansion now treats this as a first-class data source.
+
+Three new helpers in `NPCData` form the bridge:
+
+- **`HasProfile(npc, data)`** — returns `true` if *either* `npc.importantData.personality` or our own `NPCData.Personality` has content. Every system that previously gated on `!string.IsNullOrEmpty(data.Personality)` now calls this instead, so natively-profiled NPCs activate bark, secret generation, reputation, death tracking, memory synthesis, arc actions, and quest generation without needing a separate "Generate Profile" step.
+- **`GetPersonality(npc, data)`** — reads `importantData.personality` first; falls back to `NPCData.Personality` for saves predating the update.
+- **`GetBackground(npc, data)`** — reads `importantData.background` first; falls back to `NPCData.Scenario`.
+- **`SyncToNativeImportantData(npc, personality, background, visual)`** — writes our data into the game's native object so CharacterSheet always reflects what we generated.
+
+---
+
+### Generation Sync
+
+When our generator finishes producing personality, scenario, attributes, skills, and abilities, it now writes the personality and scenario back into `ch.importantData` immediately. The native CharacterSheet panel will display our generated content without any additional steps. Scenario updates (the background AI call that refreshes an NPC's current situation every 2–5 turns) also sync on each update.
+
+---
+
+### "Generate Details" Bootstrap
+
+A new Harmony postfix on `GameCharacter.GenerateImportantData` intercepts the game's own "Generate details" button. When the native generation completes:
+
+1. Our `NPCData` is seeded from the native result so `HasProfile` returns `true` immediately.
+2. If extended stats (attributes, skills, abilities) haven't been generated yet, our full extended generation is kicked off in the background automatically.
+
+The result: one click on the native button is enough to unlock the full NPC Expansion feature set for that character.
+
+---
+
+### GenContext Injection — Native Fallback
+
+`NPCProvider` in `AIROG_GenContext` previously injected NPC context exclusively from `npcexpansion_lore.json`. It now has a two-stage fallback:
+
+1. **No-stub path** — if an NPC has no entry in the JSON cache but has native `importantData.personality`, a minimal stub is built on the fly from the native fields and injected at full priority into the AI prompt.
+2. **Merge path** — if a cached stub exists but is missing personality or background (e.g. old save, generation still in progress), the native fields are layered in before injection.
+
+Both the direct-conversation injection and the ambient ("NPC mentioned in prompt") injection have been updated. Natively-profiled NPCs are now visible to the AI even before extended generation completes.
+
+---
+
+### Updated Menu Labels
+
+The NPC action menu entry now has three distinct states:
+
+| State | Label | Action |
+|---|---|---|
+| No profile of any kind | **Generate Profile** | Runs full NPCExpansion generation |
+| Native profile exists, no extended stats | **Generate Extended Stats** | Runs extended generation (attributes, skills, abilities) seeded from native data |
+| Full NPCData exists | **Edit Extended Profile** | Opens the lore editor |
+
+This makes it clear that the game's native "Generate details" and our "Generate Profile" are complementary, not competing.
+
+---
+
+### UI — Read from Native First
+
+**NPCExamineUI** — the Examine panel's "Personality" and "Current Situation" sections now call `GetPersonality` / `GetBackground` so they display native profile data even when our extended JSON hasn't loaded yet.
+
+**NPCUI Lore Editor** — the personality and scenario fields are pre-populated from native `importantData` when our own fields are empty. Saving any field in the editor also writes back to `ch.importantData` so CharacterSheet stays in sync.
+
+---
+
+### Under the Hood
+
+- All 9 prompt-building systems (`NPCBarkSystem`, `NPCSecretSystem`, `NPCTeachingSystem`, `NPCDeathTracker`, `NPCReputationSystem`, `NPCMemorySynthesis`, `RelationshipArcSystem`, `QuestManager`, `QuestChainManager`) updated from `data.Personality` reads to `NPCData.GetPersonality(npc, data)` and `HasProfile(npc, data)` guards
+- `NPCProvider` native fallback operates entirely in-memory; no disk reads — no performance cost
+- Backward compatible: old saves with only NPCData JSON continue to work exactly as before
+
+---
+
 ## v4.0.0 — *The Living World Update*
 
 > *"They were never just set dressing."*

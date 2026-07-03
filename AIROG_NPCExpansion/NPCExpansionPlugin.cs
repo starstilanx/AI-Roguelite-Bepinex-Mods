@@ -20,7 +20,7 @@ namespace AIROG_NPCExpansion
     {
         public const string PLUGIN_GUID = "com.airog.npcexpansion";
         public const string PLUGIN_NAME = "NPC Expansion";
-        public const string PLUGIN_VERSION = "3.0.0";
+        public const string PLUGIN_VERSION = "4.2.0";
 
         public static NPCExpansionPlugin Instance { get; private set; }
         public static string NPCDataPath => Path.Combine(Paths.PluginPath, "AIROG_NPCExpansion", "NPCData");
@@ -40,6 +40,21 @@ namespace AIROG_NPCExpansion
 
             // NPC action menu injection is now done via Prefix_PresentNpcMenu + Prefix_showMenu
             // (patching GetActions directly was fragile due to AccessTools overload resolution failures).
+
+            // Patch GameCharacter.GenerateImportantData so that when the player uses the
+            // native "Generate details" button we bootstrap our extended NPCData too.
+            var genImportantMethod = AccessTools.Method(typeof(GameCharacter), "GenerateImportantData");
+            if (genImportantMethod != null)
+            {
+                harmony.Patch(genImportantMethod,
+                    postfix: new HarmonyMethod(typeof(NPCExpansionPlugin),
+                        nameof(Postfix_GenerateImportantData)));
+                Logger.LogInfo("[NPCExpansion] Patched GameCharacter.GenerateImportantData.");
+            }
+            else
+            {
+                Logger.LogWarning("[NPCExpansion] Could not find GameCharacter.GenerateImportantData — native profile generation will not seed NPCData.");
+            }
 
             // Manually patch PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace —
             // Harmony's attribute-based resolver fails for this newly-added class at runtime.
@@ -86,6 +101,48 @@ namespace AIROG_NPCExpansion
             catch { /* Non-critical; GameCharacter may not be loaded yet */ }
         }
 
+        /// <summary>
+        /// Called after the game's native GenerateImportantData completes.
+        /// Seeds our NPCData with the natively generated personality and background so
+        /// all our systems (bark, secrets, arcs, etc.) recognise the NPC as profiled,
+        /// then kicks off extended attribute/skill/ability generation in the background.
+        /// </summary>
+        public static async void Postfix_GenerateImportantData(GameCharacter __instance)
+        {
+            try
+            {
+                var npc = __instance;
+                if (npc == null || npc.importantData == null) return;
+                if (string.IsNullOrEmpty(npc.importantData.personality)) return;
+
+                var data = NPCData.Load(npc.uuid) ?? NPCData.CreateDefault(npc.GetPrettyName());
+
+                // Seed our fields from native data so HasProfile() returns true immediately
+                if (string.IsNullOrEmpty(data.Personality))
+                    data.Personality = npc.importantData.personality;
+                if (string.IsNullOrEmpty(data.Scenario) && !string.IsNullOrEmpty(npc.importantData.background))
+                    data.Scenario = npc.importantData.background;
+                if (string.IsNullOrEmpty(data.Description) && !string.IsNullOrEmpty(npc.importantData.visualDescription))
+                    data.Description = npc.importantData.visualDescription;
+
+                NPCData.Save(npc.uuid, data);
+                Debug.Log($"[NPCExpansion] Seeded NPCData from native importantData for {npc.GetPrettyName()}.");
+
+                // Kick off extended generation (attributes, skills, abilities, secrets) if not already done
+                bool needsExtended = data.Attributes == null || data.Attributes.Count == 0
+                                  || data.Attributes.Values.All(v => v == 10);
+                if (needsExtended)
+                {
+                    string context = npc.manager?.GetContextForQuickActions() ?? "";
+                    await NPCGenerator.GenerateLore(npc, context);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[NPCExpansion] Postfix_GenerateImportantData failed: {ex.Message}");
+            }
+        }
+
         public static void RunAutonomyTest(GameplayManager manager)
         {
             var nearbyNpcs = manager.currentPlace?.npcs?.ToList();
@@ -94,7 +151,7 @@ namespace AIROG_NPCExpansion
                 Debug.Log($"[AIROG_NPCExpansion] Manual autonomy test triggered for {nearbyNpcs.Count} NPCs.");
                 foreach (var npc in nearbyNpcs)
                 {
-                    NPCAutonomy.Process(npc, manager);
+                    _ = NPCAutonomy.Process(npc, manager);
                 }
             }
         }
@@ -268,6 +325,7 @@ namespace AIROG_NPCExpansion
                 QuestManager.SaveQuests();
                 NPCDeathTracker.SaveMemorial();
                 NPCTeachingSystem.SavePlayerSkills();
+                ScenarioUpdater.SaveState(saveDir);
             }
         }
 
@@ -281,6 +339,7 @@ namespace AIROG_NPCExpansion
                 NPCData.LoadSessionLore(saveDir);
                 QuestManager.LoadQuests(saveDir);
                 NPCTeachingSystem.LoadPlayerSkills(saveDir);
+                ScenarioUpdater.LoadState(saveDir);
                 NPCUI.RefreshAll();
 
                 // Sync all loaded affinities into game sentiment values
@@ -354,7 +413,7 @@ namespace AIROG_NPCExpansion
                 // Social Ripple + Gossip + Arc Advancement + Secret Auto-Reveal
                 if (affinityDelta != 0)
                 {
-                    var manager = GameObject.FindObjectOfType<GameplayManager>();
+                    var manager = SS.I?.hackyManager;
                     if (manager != null)
                     {
                         SocialRippleSystem.Process(npc.uuid, npc.GetPrettyName(), affinityDelta, manager);
@@ -367,7 +426,7 @@ namespace AIROG_NPCExpansion
                 // Death Detection: if the NPC just died (corpseState changed to non-NONE)
                 if (npc.corpseState != GameCharacter.CorpseState.NONE && !data.IsDeceased)
                 {
-                    var manager = GameObject.FindObjectOfType<GameplayManager>();
+                    var manager = SS.I?.hackyManager;
                     if (manager != null)
                     {
                         string killerName = interType == InteracterInfo.InteracterType.ATTACK_WITH_ITEM ||
@@ -425,15 +484,14 @@ namespace AIROG_NPCExpansion
                     return NPCEquipmentUI.Instance._currentNpc;
             }
 
-            // 4. Default to bottom bar/dropdown selection
+            // 4. Default to bottom bar/dropdown selection.
+            // The dropdown is 1-based: slot 0 is "[OPEN-ENDED]", NPCs start at 1.
+            // Utils.GetTargetedChar handles the offset (returns null for open-ended).
             if (manager.npcConvoSelectorDropdown != null)
             {
                 var chars = manager.GetCharsForNpcConvoSelectorDropdown();
-                int idx = manager.npcConvoSelectorDropdown.value;
-                if (chars != null && idx >= 0 && idx < chars.Count)
-                {
-                    return chars[idx];
-                }
+                if (chars != null)
+                    return Utils.GetTargetedChar(manager.npcConvoSelectorDropdown.value, chars);
             }
             return null;
         }
@@ -449,7 +507,7 @@ namespace AIROG_NPCExpansion
             {
                 var manager = __instance.manager;
                 var npcData = NPCData.Load(npc.uuid);
-                bool hasLore = npcData != null && !string.IsNullOrEmpty(npcData.Personality);
+                bool hasLore = NPCData.HasProfile(npc, npcData);
                 bool isAlive = npc.corpseState == GameCharacter.CorpseState.NONE;
 
                 menuItems.Add(new DropdownMenuItem("<color=#ffff00>Examine</color>", () =>
@@ -458,10 +516,21 @@ namespace AIROG_NPCExpansion
                     return Task.CompletedTask;
                 }));
 
-                string profileLabel = hasLore ? "<color=#ff9900>Edit Profile</color>" : "<color=#ff9900>Generate Profile</color>";
+                // Determine if extended NPCData stats/skills have been generated yet
+                bool hasNativeProfile = npc.importantData != null && !string.IsNullOrEmpty(npc.importantData.personality);
+                bool hasExtendedData  = npcData != null && npcData.Attributes != null
+                                        && npcData.Attributes.Values.Any(v => v != 10);
+                string profileLabel;
+                if (hasExtendedData)
+                    profileLabel = "<color=#ff9900>Edit Extended Profile</color>";
+                else if (hasNativeProfile)
+                    profileLabel = "<color=#ff9900>Generate Extended Stats</color>";
+                else
+                    profileLabel = "<color=#ff9900>Generate Profile</color>";
+
                 menuItems.Add(new DropdownMenuItem(profileLabel, async () =>
                 {
-                    if (hasLore)
+                    if (hasExtendedData)
                         NPCUI.ShowLoreEditor(npc, manager);
                     else
                         await NPCGenerator.GenerateLore(npc, manager.GetContextForQuickActions());
@@ -653,7 +722,7 @@ namespace AIROG_NPCExpansion
             {
                 string text = await resultTask;
                 if (string.IsNullOrEmpty(text)) return;
-                var manager = GameObject.FindObjectOfType<GameplayManager>();
+                var manager = SS.I?.hackyManager;
                 if (manager != null) _ = QuestManager.CheckCompletion(text, manager);
             }
             catch (Exception ex)

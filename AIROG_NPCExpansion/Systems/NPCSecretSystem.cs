@@ -21,14 +21,14 @@ namespace AIROG_NPCExpansion
         {
             if (data.Secrets == null) data.Secrets = new List<NPCData.NPCSecret>();
             if (data.Secrets.Count > 0) return;
-            if (string.IsNullOrEmpty(data.Personality)) return;
+            if (!NPCData.HasProfile(npc, data)) return;
 
             string context = manager.GetContextForQuickActions();
             if (context.Length > 800) context = context.Substring(context.Length - 800);
 
             string prompt = $"NPC: {npc.GetPrettyName()}\n" +
-                            $"Personality: {data.Personality}\n" +
-                            $"Scenario: {data.Scenario}\n" +
+                            $"Personality: {NPCData.GetPersonality(npc, data)}\n" +
+                            $"Scenario: {NPCData.GetBackground(npc, data)}\n" +
                             $"World context: {context}\n\n" +
                             $"Generate 1-2 secrets this NPC is hiding from the world. Each must be dark, surprising, or deeply personal.\n" +
                             $"Format each secret on its own line exactly as:\n" +
@@ -71,26 +71,34 @@ namespace AIROG_NPCExpansion
 
         public static async Task TryRevealSecret(GameCharacter npc, NPCData data, GameplayManager manager)
         {
-            // Generate secrets if this NPC has never been probed before
-            await EnsureSecretsGenerated(npc, data, manager);
-
-            if (data.Secrets == null || data.Secrets.Count == 0)
+            try
             {
-                _ = manager.gameLogView.LogTextCompat(
-                    $"<color=#aaaaff>{npc.GetPrettyName()} has nothing to hide.</color>");
-                return;
-            }
+                // Generate secrets if this NPC has never been probed before
+                await EnsureSecretsGenerated(npc, data, manager);
 
-            var hidden = data.Secrets.Where(s => !s.IsRevealed).ToList();
-            if (hidden.Count == 0)
+                if (data.Secrets == null || data.Secrets.Count == 0)
+                {
+                    _ = manager.gameLogView.LogTextCompat(
+                        $"<color=#aaaaff>{npc.GetPrettyName()} has nothing to hide.</color>");
+                    return;
+                }
+
+                var hidden = data.Secrets.Where(s => !s.IsRevealed).ToList();
+                if (hidden.Count == 0)
+                {
+                    _ = manager.gameLogView.LogTextCompat(
+                        $"<color=#aaaaff>{npc.GetPrettyName()} has no more secrets to share with you.</color>");
+                    return;
+                }
+
+                var secret = hidden[_rng.Next(hidden.Count)];
+                RevealSecret(npc, data, secret, manager, "confides in you");
+            }
+            catch (Exception ex)
             {
-                _ = manager.gameLogView.LogTextCompat(
-                    $"<color=#aaaaff>{npc.GetPrettyName()} has no more secrets to share with you.</color>");
-                return;
+                // This runs inside a menu-action lambda — never let an exception escape unobserved
+                Debug.LogWarning($"[SecretSystem] TryRevealSecret failed for {npc?.GetPrettyName()}: {ex.Message}");
             }
-
-            var secret = hidden[_rng.Next(hidden.Count)];
-            RevealSecret(npc, data, secret, manager, "confides in you");
         }
 
         // ─── Auto-reveal at very high trust (80+) ─────────────────────────────────

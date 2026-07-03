@@ -14,6 +14,10 @@ namespace AIROG_WorldExpansion
         private const int WAR_EXHAUSTION_RESOURCES = 15; // resources below this = peace
         private const int WAR_PROLONGED_TURNS = 50;  // turns before peace roll starts
         private const float WAR_PEACE_CHANCE  = 0.25f;
+        private const int WAR_MIN_TURNS       = 5;   // wars can't end before this (prevents same-turn peace)
+        private const int MINOR_TICK_TURNS    = 5;
+        private const int DIPLOMACY_TICK_TURNS = 10;
+        private const int ECONOMY_TICK_TURNS  = 25;
 
         private static readonly System.Random rng = new System.Random();
 
@@ -43,39 +47,53 @@ namespace AIROG_WorldExpansion
         {
             if (__instance == null) return;
 
-            WorldData.CurrentState.CurrentTurn += numTurns;
-            int turn = WorldData.CurrentState.CurrentTurn;
+            var state = WorldData.CurrentState;
+            state.CurrentTurn += numTurns;
+            int turn = state.CurrentTurn;
 
-            // Lazy territory initialization
-            if (!WorldData.CurrentState.TerritoriesInitialized)
-                InitializeFactionTerritories(__instance);
+            // Lazy per-faction territory + population seeding (covers factions generated mid-game)
+            SeedNewFactions(__instance);
 
             // Season advancement
-            WorldData.CurrentState.SeasonTurnCounter += numTurns;
-            while (WorldData.CurrentState.SeasonTurnCounter >= SEASON_LENGTH)
+            state.SeasonTurnCounter += numTurns;
+            while (state.SeasonTurnCounter >= SEASON_LENGTH)
             {
-                WorldData.CurrentState.SeasonTurnCounter -= SEASON_LENGTH;
+                state.SeasonTurnCounter -= SEASON_LENGTH;
                 AdvanceSeason(__instance);
             }
 
             // Peace checks for active wars
             CheckActiveWarPeace();
 
-            // Diplomatic drift — every 10 turns
-            if (turn % 10 == 0)
+            // Accumulator-based ticks: a multi-turn skip (rest) can't jump over a boundary
+            state.TurnsSinceDiplomacyTick += numTurns;
+            if (state.TurnsSinceDiplomacyTick >= DIPLOMACY_TICK_TURNS)
+            {
+                state.TurnsSinceDiplomacyTick = 0;
                 ShiftDiplomacyOverTime();
+            }
 
-            // Minor Tick (faction actions) — every 5 turns
-            if (turn % 5 == 0)
+            state.TurnsSinceMinorTick += numTurns;
+            if (state.TurnsSinceMinorTick >= MINOR_TICK_TURNS)
+            {
+                state.TurnsSinceMinorTick = 0;
                 RunMinorTick(__instance);
+            }
 
-            // Economy Tick — every 25 turns
-            if (turn % 25 == 0)
+            state.TurnsSinceEconomyTick += numTurns;
+            if (state.TurnsSinceEconomyTick >= ECONOMY_TICK_TURNS)
+            {
+                state.TurnsSinceEconomyTick = 0;
                 RunEconomyTick(__instance);
+            }
 
             // Major Event — when scheduled
-            if (turn >= WorldData.CurrentState.NextMajorEventTurn)
+            if (turn >= state.NextMajorEventTurn)
                 RunMajorTick(__instance);
+
+            // Persist every turn: GenContext's provider reads the JSON from disk, so without
+            // this, mid-session events (wars, alerts) wouldn't reach the AI until a game save
+            WorldData.SaveToCurrentDir();
         }
 
         // ─── Season ───────────────────────────────────────────────────────────────
@@ -122,29 +140,77 @@ namespace AIROG_WorldExpansion
             }
         }
 
-        // ─── Territory Initialization ─────────────────────────────────────────────
-        private static void InitializeFactionTerritories(GameplayManager manager)
+        // ─── Territory & Population Seeding ───────────────────────────────────────
+        // Claims REAL top-level Place UUIDs: first any places the game already marks as
+        // owned by the faction (Place.faction), then unowned places as a top-up.
+        private static void SeedNewFactions(GameplayManager manager)
         {
             var factions = manager.GetCurrentFactions();
             if (factions == null) return;
+
+            List<Place> topPlaces = null;
             foreach (var faction in factions)
             {
                 if (faction.GetPrettyName() == "Player") continue;
                 var data = WorldData.GetFactionData(faction.uuid);
-                if (data.ClaimedPlaceUuids.Count == 0)
+                if (data.Seeded) continue;
+
+                if (string.IsNullOrEmpty(data.Name))
+                    data.Name = faction.GetPrettyName();
+
+                if (topPlaces == null)
                 {
-                    int count = rng.Next(1, 4);
-                    for (int i = 0; i < count; i++)
-                        data.ClaimedPlaceUuids.Add($"territory_{faction.uuid}_{i}");
+                    try { topPlaces = manager.GetAllTopLvlPlaces() ?? new List<Place>(); }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"[WorldExpansion] Could not enumerate places for seeding: {e.Message}");
+                        topPlaces = new List<Place>();
+                    }
                 }
-                // Seed population on first initialization
+
+                // 1. Adopt places the game already assigns to this faction
+                foreach (var pl in topPlaces)
+                {
+                    if (pl?.faction != null && pl.faction.uuid == faction.uuid
+                        && !data.ClaimedPlaceUuids.Contains(pl.uuid))
+                        data.ClaimedPlaceUuids.Add(pl.uuid);
+                }
+
+                // 2. Landless factions claim 1-3 unowned places (mod-claim only; native
+                //    ownership is set later on conquest, where it's a dramatic event)
+                if (data.ClaimedPlaceUuids.Count == 0 && topPlaces.Count > 0)
+                {
+                    var claimedByAnyone = new HashSet<string>(
+                        WorldData.CurrentState.Factions.Values.SelectMany(f => f.ClaimedPlaceUuids));
+                    var unowned = topPlaces
+                        .Where(p => p != null && p.faction == null && !claimedByAnyone.Contains(p.uuid))
+                        .ToList();
+                    // First pick is random; the rest cluster around it so the faction
+                    // starts with a contiguous homeland instead of scattered blotches
+                    int want = Math.Min(rng.Next(2, 5), unowned.Count);
+                    var picked = new List<Place>();
+                    for (int i = 0; i < want; i++)
+                    {
+                        Place pick;
+                        if (picked.Count == 0)
+                            pick = unowned[rng.Next(unowned.Count)];
+                        else
+                            pick = unowned.OrderBy(c => picked.Min(h => (c.worldCoords - h.worldCoords).sqrMagnitude)).First();
+                        unowned.Remove(pick);
+                        picked.Add(pick);
+                        data.ClaimedPlaceUuids.Add(pick.uuid);
+                    }
+                }
+
+                // Seed population
                 if (data.Population == 500) // default value = not yet seeded
                 {
                     data.Population = rng.Next(300, 1500);
                     data.PopState   = "Normal";
                 }
+
+                data.Seeded = true;
             }
-            WorldData.CurrentState.TerritoriesInitialized = true;
         }
 
         // ─── Active War Peace Checks ──────────────────────────────────────────────
@@ -158,13 +224,19 @@ namespace AIROG_WorldExpansion
                 var war = kvp.Value;
                 int duration = turn - war.StartTurn;
 
-                // Exhaustion peace: one side is bankrupt
+                // Wars need time to breathe — no peace on the turn they're declared
+                if (duration < WAR_MIN_TURNS) continue;
+
+                // Exhaustion peace: one (or both) sides are bankrupt
                 bool actorExhausted  = WorldData.CurrentState.Factions.TryGetValue(war.ActorUuid,  out var a) && a.Resources < WAR_EXHAUSTION_RESOURCES;
                 bool targetExhausted = WorldData.CurrentState.Factions.TryGetValue(war.TargetUuid, out var t) && t.Resources < WAR_EXHAUSTION_RESOURCES;
 
                 if (actorExhausted || targetExhausted)
                 {
-                    toEnd.Add(new KeyValuePair<string, string>(kvp.Key, "both sides are exhausted"));
+                    string reason = actorExhausted && targetExhausted
+                        ? "both sides are exhausted"
+                        : $"{(actorExhausted ? war.ActorName : war.TargetName)} can no longer sustain the fight";
+                    toEnd.Add(new KeyValuePair<string, string>(kvp.Key, reason));
                     continue;
                 }
 
@@ -314,35 +386,35 @@ namespace AIROG_WorldExpansion
             float  newSell        = WorldData.CurrentState.Market.SellMultiplier;
             string feedbackEvent  = null;
 
-            if (ContainsAny(lower, "plague", "pestilence", "disease", "sickness", "dying", "death", "blight", "famine", "drought"))
+            if (ContainsAnyWord(lower, "plague", "pestilence", "disease", "sickness", "dying", "death", "blight", "famine", "drought"))
             {
                 newCondition  = "Depression";
                 newBuy        = 0.6f;
                 newSell       = 0.4f;
                 feedbackEvent = "Disease and death have devastated trade routes. Markets have collapsed.";
             }
-            else if (ContainsAny(lower, "war", "battle", "invasion", "siege", "crusade", "raid", "conflict", "blockade"))
+            else if (ContainsAnyWord(lower, "war", "wars", "battle", "invasion", "siege", "crusade", "raid", "conflict", "blockade"))
             {
                 newCondition  = "Shortage";
                 newBuy        = 1.4f;
                 newSell       = 1.2f;
                 feedbackEvent = "Wartime demands and disrupted supply lines have driven prices up sharply.";
             }
-            else if (ContainsAny(lower, "discovery", "prosperity", "golden age", "abundance", "harvest", "trade route", "opens"))
+            else if (ContainsAnyWord(lower, "discovery", "prosperity", "golden age", "abundance", "harvest", "trade route", "opens"))
             {
                 newCondition  = "Surplus";
                 newBuy        = 0.7f;
                 newSell       = 0.6f;
                 feedbackEvent = "New prosperity has brought goods flooding into the markets across the realm.";
             }
-            else if (ContainsAny(lower, "dark lord", "evil rises", "shadow", "dread", "omen", "prophes"))
+            else if (ContainsAnyWord(lower, "dark lord", "evil rises", "shadow", "dread", "omen", "prophecy", "prophesied", "prophesy"))
             {
                 newCondition  = "Shortage";
                 newBuy        = 1.3f;
                 newSell       = 1.1f;
                 feedbackEvent = "Fear of the rising darkness has caused widespread hoarding and market disruption.";
             }
-            else if (ContainsAny(lower, "inflation", "coin", "treasury", "taxe", "wealth flows"))
+            else if (ContainsAnyWord(lower, "inflation", "coin", "treasury", "tax", "taxes", "wealth flows"))
             {
                 newCondition  = "Inflation";
                 newBuy        = 1.25f;
@@ -365,6 +437,17 @@ namespace AIROG_WorldExpansion
         {
             foreach (var k in keywords)
                 if (text.Contains(k)) return true;
+            return false;
+        }
+
+        // Whole-word matching for event text ("war" must not match "warm"/"reward").
+        // Faction-name tagging keeps substring ContainsAny on purpose ("dark" should match "Darkmoor").
+        private static bool ContainsAnyWord(string text, params string[] keywords)
+        {
+            foreach (var k in keywords)
+                if (System.Text.RegularExpressions.Regex.IsMatch(text,
+                        $@"\b{System.Text.RegularExpressions.Regex.Escape(k)}\b"))
+                    return true;
             return false;
         }
 
@@ -454,11 +537,17 @@ namespace AIROG_WorldExpansion
             // Update faction populations and log state transitions
             UpdateFactionPopulations(manager);
 
+            // Hostile/friendly factions react to the player's native reputation standing
+            PlayerWorldActor.StandingTick(manager);
+
             // Pick an active non-player faction to act
             var activeFactions = factions
                 .Where(f => f.GetPrettyName() != "Player" && !eliminated.Contains(f.uuid))
                 .ToList();
             if (activeFactions.Count == 0) return;
+
+            // Peaceful territorial growth toward unclaimed land
+            TryExpandTerritories(manager, activeFactions);
 
             var acting    = activeFactions[rng.Next(activeFactions.Count)];
             var actingData = WorldData.GetFactionData(acting.uuid);
@@ -556,11 +645,12 @@ namespace AIROG_WorldExpansion
                             string casusBelli = PickCasusBelli(actingTag, targetTag, relKey);
                             WorldData.DeclareWar(acting.uuid, acting.GetPrettyName(),
                                                  target.uuid, target.GetPrettyName(), casusBelli);
+                            PlayerWorldActor.OnWarDeclared(acting, target);
                         }
 
                         // Territory conquest if at war
                         if (atWar && targetData.ClaimedPlaceUuids.Count > 0)
-                            TryCaptureTerritory(actingData, targetData, acting.GetPrettyName(), target.GetPrettyName());
+                            TryCaptureTerritory(actingData, targetData, acting, acting.GetPrettyName(), target.GetPrettyName());
 
                         // Faction elimination check
                         if (targetData.Resources <= 0)
@@ -624,15 +714,115 @@ namespace AIROG_WorldExpansion
             }
         }
 
+        // ─── Territorial Expansion ────────────────────────────────────────────────
+        private const int    EXPANSION_COST    = 25;
+        private const int    EXPANSION_MIN_RES = 50;
+        private const double EXPANSION_CHANCE  = 0.35;
+
+        // Each minor tick, healthy factions may annex the nearest unclaimed top-level
+        // place to their territory, so borders organically grow toward each other
+        // (and war fronts on the political map eventually meet).
+        private static void TryExpandTerritories(GameplayManager manager, List<Faction> activeFactions)
+        {
+            List<Place> topPlaces;
+            try { topPlaces = manager.GetAllTopLvlPlaces() ?? new List<Place>(); }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[WorldExpansion] Could not enumerate places for expansion: {e.Message}");
+                return;
+            }
+            if (topPlaces.Count == 0) return;
+
+            var placeByUuid = new Dictionary<string, Place>();
+            foreach (var p in topPlaces)
+                if (p != null && !placeByUuid.ContainsKey(p.uuid)) placeByUuid[p.uuid] = p;
+
+            var owned = new HashSet<string>();
+            foreach (var p in topPlaces)
+                if (p?.faction != null) owned.Add(p.uuid);
+            foreach (var kvp in WorldData.CurrentState.Factions)
+                if (!WorldData.CurrentState.EliminatedFactions.Contains(kvp.Key))
+                    foreach (var u in kvp.Value.ClaimedPlaceUuids) owned.Add(u);
+
+            // Fair-share cap keeps one faction from eating the whole map
+            int cap = Math.Max(3, topPlaces.Count / Math.Max(2, activeFactions.Count));
+
+            foreach (var faction in activeFactions)
+            {
+                var data = WorldData.GetFactionData(faction.uuid);
+                if (data.ClaimedPlaceUuids.Count == 0) continue; // landless factions get land via seeding, not expansion
+                if (data.ClaimedPlaceUuids.Count >= cap) continue;
+                if (data.Resources < EXPANSION_MIN_RES) continue;
+                if (data.PopState == "Struggling" || data.PopState == "Razed") continue;
+                if (rng.NextDouble() > EXPANSION_CHANCE) continue;
+
+                Place best = null;
+                float bestDist = float.MaxValue;
+                foreach (var ownUuid in data.ClaimedPlaceUuids)
+                {
+                    if (!placeByUuid.TryGetValue(ownUuid, out var ownPl)) continue;
+                    foreach (var cand in topPlaces)
+                    {
+                        if (cand == null || owned.Contains(cand.uuid)) continue;
+                        float d = (cand.worldCoords - ownPl.worldCoords).sqrMagnitude;
+                        if (d < bestDist) { bestDist = d; best = cand; }
+                    }
+                }
+                if (best == null) continue; // no unclaimed land left
+
+                data.Resources -= EXPANSION_COST;
+                data.ClaimedPlaceUuids.Add(best.uuid);
+                owned.Add(best.uuid);
+                best.faction = faction; // native ownership, visible in-game like conquest
+                WorldData.LogEvent(
+                    $"{faction.GetPrettyName()} has annexed {best.GetPrettyName()}, expanding its territory.",
+                    "TERRITORY");
+
+                // Only alert the AI when the map changes under the player's feet
+                if (manager.currentPlace?.GetTopLvlPlace()?.uuid == best.uuid)
+                    WorldData.QueuePlayerEvent(
+                        $"{faction.GetPrettyName()} has annexed {best.GetPrettyName()} — the region you are in is now their territory.",
+                        "TERRITORY_CLAIMED");
+
+                WorldEventsUI.MarkDirty();
+            }
+        }
+
         // ─── Territory Conquest ───────────────────────────────────────────────────
         private static void TryCaptureTerritory(FactionExtData winner, FactionExtData loser,
-            string winnerName, string loserName)
+            Faction winnerFaction, string winnerName, string loserName)
         {
             if (rng.NextDouble() > 0.33) return;
-            string territory = loser.ClaimedPlaceUuids[rng.Next(loser.ClaimedPlaceUuids.Count)];
-            loser.ClaimedPlaceUuids.Remove(territory);
-            winner.ClaimedPlaceUuids.Add(territory);
-            WorldData.LogEvent($"{winnerName} has seized a territory from {loserName}!", "WAR");
+            if (loser.ClaimedPlaceUuids.Count == 0) return;
+            string territoryUuid = loser.ClaimedPlaceUuids[rng.Next(loser.ClaimedPlaceUuids.Count)];
+            loser.ClaimedPlaceUuids.Remove(territoryUuid);
+            winner.ClaimedPlaceUuids.Add(territoryUuid);
+
+            // Flip native ownership so the conquest is visible in-game (place icon, prompts)
+            string placeName = TransferNativePlaceOwnership(territoryUuid, winnerFaction);
+            WorldData.LogEvent(placeName != null
+                ? $"{winnerName} has seized {placeName} from {loserName}!"
+                : $"{winnerName} has seized a territory from {loserName}!", "WAR");
+        }
+
+        // Sets Place.faction on the real place, returning its name (null if the uuid can't be resolved)
+        private static string TransferNativePlaceOwnership(string placeUuid, Faction newOwner)
+        {
+            try
+            {
+                if (SS.I?.uuidToGameEntityMap != null
+                    && SS.I.uuidToGameEntityMap.TryGetValue(placeUuid, out var ent)
+                    && ent is Place place)
+                {
+                    place.faction = newOwner;
+                    return place.GetPrettyName();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[WorldExpansion] Could not transfer place ownership: {e.Message}");
+            }
+            return null;
         }
 
         // ─── Faction Elimination ──────────────────────────────────────────────────
@@ -641,9 +831,12 @@ namespace AIROG_WorldExpansion
         {
             WorldData.CurrentState.EliminatedFactions.Add(loser.uuid);
 
-            // Transfer territories to victor
+            // Transfer territories to victor (including native place ownership)
             foreach (var territory in loserData.ClaimedPlaceUuids)
+            {
                 victorData.ClaimedPlaceUuids.Add(territory);
+                TransferNativePlaceOwnership(territory, victor);
+            }
             loserData.ClaimedPlaceUuids.Clear();
 
             // Population devastated by conquest
@@ -659,6 +852,8 @@ namespace AIROG_WorldExpansion
             string key = WorldData.GetRelationshipKey(loser.uuid, victor.uuid);
             if (WorldData.CurrentState.ActiveWars.ContainsKey(key))
                 WorldData.CurrentState.ActiveWars.Remove(key);
+
+            PlayerWorldActor.OnFactionFallen(loser, victor);
 
             WorldLoreExpansion.RecordHistoricalEvent(manager, desc, "History",
                 new List<string> { loser.GetPrettyName(), victor.GetPrettyName(), "fallen", "conquered" });

@@ -101,24 +101,61 @@ namespace AIROG_Chronicle
         {
             var btnObj = new GameObject("ChronicleBtn", typeof(RectTransform), typeof(Image), typeof(Button));
             btnObj.transform.SetParent(buttonsHolder, false);
-            btnObj.GetComponent<Image>().color = new Color(0.12f, 0.08f, 0.22f, 0.9f);
+
+            var img = btnObj.GetComponent<Image>();
+            Sprite btnSprite = LoadSprite("ChronicleButton.png");
+            if (btnSprite != null)
+            {
+                img.sprite = btnSprite;
+                img.color = Color.white;
+                img.preserveAspect = true;
+            }
+            else
+            {
+                img.color = new Color(0.12f, 0.08f, 0.22f, 0.9f);
+                var label = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+                label.transform.SetParent(btnObj.transform, false);
+                var txt = label.GetComponent<TextMeshProUGUI>();
+                txt.text = "Chron"; txt.fontSize = 11; txt.fontStyle = FontStyles.Bold;
+                txt.color = new Color(0.85f, 0.75f, 1.0f);
+                txt.alignment = TextAlignmentOptions.Center;
+                txt.enableWordWrapping = false;
+                StretchFull(label.GetComponent<RectTransform>());
+            }
 
             var le = btnObj.AddComponent<LayoutElement>();
             le.preferredWidth = 60; le.minWidth = 60;
             le.preferredHeight = 60; le.minHeight = 60;
 
-            var label = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
-            label.transform.SetParent(btnObj.transform, false);
-            var txt = label.GetComponent<TextMeshProUGUI>();
-            txt.text = "Chron"; txt.fontSize = 11; txt.fontStyle = FontStyles.Bold;
-            txt.color = new Color(0.85f, 0.75f, 1.0f);
-            txt.alignment = TextAlignmentOptions.Center;
-            txt.enableWordWrapping = false;
-            StretchFull(label.GetComponent<RectTransform>());
-
-            btnObj.GetComponent<Button>().onClick.AddListener(Toggle);
+            var btn = btnObj.GetComponent<Button>();
+            btn.targetGraphic = img;
+            btn.onClick.AddListener(Toggle);
             btnObj.transform.SetAsLastSibling();
             Debug.Log("[Chronicle] HUD button injected.");
+        }
+
+        private static Sprite LoadSprite(string filename)
+        {
+            try
+            {
+                string path = System.IO.Path.Combine(Application.streamingAssetsPath, "Chronicle", filename);
+                if (System.IO.File.Exists(path))
+                {
+                    byte[] bytes = System.IO.File.ReadAllBytes(path);
+                    Texture2D tex = new Texture2D(2, 2);
+                    if (tex.LoadImage(bytes))
+                        return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+                }
+                else
+                {
+                    Debug.LogWarning($"[Chronicle] Button icon not found at {path}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Chronicle] Failed to load button icon: {ex}");
+            }
+            return null;
         }
 
         // ---- Toggle / Refresh ----
@@ -223,21 +260,27 @@ namespace AIROG_Chronicle
 
         // ---- Session Recap ----
 
-        private static void ShowRecap()
+        private static async void ShowRecap()
         {
-            var state = ChronicleManager.State;
-            string recap = state?.LastSessionRecap;
-
-            if (string.IsNullOrEmpty(recap) && state?.ClosedChapters != null && state.ClosedChapters.Count > 0)
-                recap = state.ClosedChapters[state.ClosedChapters.Count - 1].Recap;
-
-            if (string.IsNullOrEmpty(recap))
-                recap = "No session recap available yet. Complete a few chapters to generate one.";
-
             try
             {
-                var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
-                manager?.gameLogView?.LogText($"\n\n\u2014 Chronicle Recap \u2014\n{recap}\n");
+                var logView = SS.I?.hackyManager?.gameLogView;
+                if (logView == null) return;
+
+                string recap = await ChronicleManager.GetOrGenerateSessionRecapAsync();
+
+                // AI unavailable / nothing to recap / already generating \u2014 fall back gracefully
+                if (string.IsNullOrEmpty(recap))
+                {
+                    var state = ChronicleManager.State;
+                    recap = state?.LastSessionRecap;
+                    if (string.IsNullOrEmpty(recap) && state?.ClosedChapters != null && state.ClosedChapters.Count > 0)
+                        recap = state.ClosedChapters[state.ClosedChapters.Count - 1].Recap;
+                    if (string.IsNullOrEmpty(recap))
+                        recap = "No session recap available yet. Play a few turns to record story beats first.";
+                }
+
+                _ = logView.LogText($"\n\n\u2014 Chronicle Recap \u2014\n{recap}\n");
             }
             catch (Exception ex)
             {

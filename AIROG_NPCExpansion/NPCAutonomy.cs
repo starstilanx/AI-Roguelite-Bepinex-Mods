@@ -49,9 +49,9 @@ namespace AIROG_NPCExpansion
 
             // Pursue Narrative Goal
             if (!string.IsNullOrEmpty(data.CurrentGoal))
-                await PursueGoal(npc, data, manager);
+                PursueGoal(npc, data, manager);
 
-            await PerformAbility(npc, data, manager);
+            PerformAbility(npc, data, manager);
 
             if (data.AllowWorldInteraction)
                 await WorldInteraction(npc, data, manager); // Awaited WorldInteraction
@@ -266,15 +266,16 @@ namespace AIROG_NPCExpansion
 
         private static void SelfPreservation(GameCharacter npc, NPCData data, GameplayManager manager)
         {
+            if (npc.items == null) return;
             if (npc.health < npc.GetMaxHealth() * 0.5f)
             {
                 var healingItem = npc.items.FirstOrDefault(i => i.IsConsumable() && (i.equipmentType == EquipmentPanel.EquipmentType.CONSUMABLE_HEALING || i.consumableSurvivalBarId == "health"));
                 if (healingItem != null)
                 {
                     Debug.Log($"[NPCAutonomy] {npc.GetPrettyName()} is using {healingItem.GetPrettyName()} for self-preservation.");
-                    
+
                     long healAmount = Utils.GetItemHealAmount(new CauseOfEvent(healingItem), npc.level, npc.GetMaxHealth());
-                    npc.health = Math.Min(npc.maxHealth, npc.health + healAmount);
+                    npc.health = Math.Min(npc.GetMaxHealth(), npc.health + healAmount);
                     npc.items.Remove(healingItem);
                     
                     _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision($"{npc.GetPrettyName()} uses {healingItem.GetPrettyName()} to heal wounds."));
@@ -325,8 +326,8 @@ namespace AIROG_NPCExpansion
             // Hostile enemies should NOT be casually examining objects when the player is present.
             // They should be focused on combat, not admiring art or warming by fires.
             bool isHostile = npc.IsEnemyType() || npc.sentimentV2 <= -2.0f; // Scorned or worse
-            bool playerIsInSamePlace = manager.playerCharacter != null && manager.currentPlace != null;
-            
+            bool playerIsInSamePlace = manager.playerCharacter != null && manager.currentPlace == npc.parentPlace;
+
             if (isHostile && playerIsInSamePlace)
             {
                 // Hostile enemies only do combat-relevant actions, skip all world interactions
@@ -347,7 +348,7 @@ namespace AIROG_NPCExpansion
             // Skip looting for followers
             if (!isFollower && npc.items.Count < 20)
             {
-                var candidates = new List<(ThingGameEntity source, GameItem item, bool isFromStorage)>();
+                var candidates = new List<(ThingGameEntity source, GameItem item)>();
 
                 // Ensure things collection is not null
                 var things = manager.currentPlace.things;
@@ -355,20 +356,17 @@ namespace AIROG_NPCExpansion
 
                 foreach (var thing in things)
                 {
-                    if (thing is StorageThingGameEntity storage && storage.items != null && storage.items.Count > 0)
-                    {
-                        foreach (var stItem in storage.items)
-                        {
-                            if (stItem != null) candidates.Add((thing, stItem, true));
-                        }
-                    }
-                    else if (thing.storedItemInfo != null)
+                    // Skip storage containers entirely — NPCs should not loot chests, racks, or other player storage
+                    if (thing is StorageThingGameEntity)
+                        continue;
+
+                    if (thing.storedItemInfo != null)
                     {
                         // We partially hydrate to evaluate
                         try
                         {
                             GameItem tempItem = (GameItem)thing.storedItemInfo.GetPartiallyHydrated(manager);
-                            if (tempItem != null) candidates.Add((thing, tempItem, false));
+                            if (tempItem != null) candidates.Add((thing, tempItem));
                         }
                         catch (Exception ex)
                         {
@@ -381,7 +379,7 @@ namespace AIROG_NPCExpansion
                         try
                         {
                             GameItem tempItem = await GameItem.Create(thing.GetPrettyName(), thing.description, manager, npc.level, 0, GameItem.ItemQuality.COMMON, true);
-                            if (tempItem != null) candidates.Add((thing, tempItem, false));
+                            if (tempItem != null) candidates.Add((thing, tempItem));
                         }
                         catch (Exception ex)
                         {
@@ -398,12 +396,8 @@ namespace AIROG_NPCExpansion
                         .First();
 
                     GameItem itemToPick = winner.item;
-                    
-                    if (winner.isFromStorage)
-                    {
-                        ((StorageThingGameEntity)winner.source).items.Remove(itemToPick);
-                    }
-                    else if (winner.source.storedItemInfo != null)
+
+                    if (winner.source.storedItemInfo != null)
                     {
                         winner.source.storedItemInfo = null;
                         // Ensure it's in the global map
@@ -601,9 +595,12 @@ namespace AIROG_NPCExpansion
             if (string.IsNullOrEmpty(name)) return false;
             string n = name.ToLowerInvariant();
             
-            // Exclude furniture/static objects explicitly
-            if (n.Contains("rack") || n.Contains("shelf") || n.Contains("cabinet") || n.Contains("chest") || 
-                n.Contains("table") || n.Contains("altar") || n.Contains("stand") || n.Contains("pedestal"))
+            // Exclude furniture, containers, and static objects
+            if (n.Contains("rack") || n.Contains("shelf") || n.Contains("cabinet") || n.Contains("chest") ||
+                n.Contains("table") || n.Contains("altar") || n.Contains("stand") || n.Contains("pedestal") ||
+                n.Contains("crate") || n.Contains("barrel") || n.Contains("box") || n.Contains("bin") ||
+                n.Contains("locker") || n.Contains("vault") || n.Contains("coffer") || n.Contains("reliquary") ||
+                n.Contains("storage") || n.Contains("container") || n.Contains("sarcophagus") || n.Contains("urn"))
                 return false;
 
             return n.Contains("machete") || n.Contains("sword") || n.Contains("shield") || n.Contains("armor") || 
@@ -613,14 +610,7 @@ namespace AIROG_NPCExpansion
                    n.Contains("herb") || n.Contains("mushroom") || n.Contains("meat") || n.Contains("bread");
         }
 
-        private static bool IsPlausibleToExamine(ThingGameEntity thing)
-        {
-            // This is now redundant but kept for any external references if needed, 
-            // though we've integrated it into the new logic.
-            return GetInteractionPlausibility(null, new NPCData(), thing).isPlausible;
-        }
-
-        private static async Task PursueGoal(GameCharacter npc, NPCData data, GameplayManager manager)
+        private static void PursueGoal(GameCharacter npc, NPCData data, GameplayManager manager)
         {
              // 10% chance to act on goal per turn, OR immediately if we have no thoughts yet (for UI)
              bool forceThink = (data.RecentThoughts == null || data.RecentThoughts.Count == 0);
@@ -643,7 +633,7 @@ namespace AIROG_NPCExpansion
              }
         }
 
-        private static async Task PerformAbility(GameCharacter npc, NPCData data, GameplayManager manager)
+        private static void PerformAbility(GameCharacter npc, NPCData data, GameplayManager manager)
         {
             // 5% chance to perform an ability if one exists
             if (UnityEngine.Random.value > 0.05f) return;

@@ -28,6 +28,16 @@ namespace AIROG_GenContext.ContextProviders
             public Dictionary<string, int> GrievanceCounts;
             public List<string> EliminatedFactions; // HashSet serializes as array
             public List<PendingWorldEventStub> PendingWorldEvents;
+            public Dictionary<string, DiplomaticRelationStub> DiplomaticRelations;
+            public List<string> PlayerBounties; // HashSet serializes as array
+        }
+
+        private class DiplomaticRelationStub
+        {
+            public int    Tier;
+            public int    TierChangedTurn;
+            public string FactionAName;
+            public string FactionBName;
         }
 
         private class MarketStateStub
@@ -44,6 +54,8 @@ namespace AIROG_GenContext.ContextProviders
             public int Resources;
             public List<string> ClaimedPlaceUuids;
             public string Tag;
+            public int Population;
+            public string PopState;
         }
 
         private class WorldEventStub
@@ -55,7 +67,9 @@ namespace AIROG_GenContext.ContextProviders
 
         private class WarDeclarationStub
         {
+            public string ActorUuid;
             public string ActorName;
+            public string TargetUuid;
             public string TargetName;
             public string CasusBelli;
             public int StartTurn;
@@ -119,11 +133,49 @@ namespace AIROG_GenContext.ContextProviders
                     {
                         var f = kv.Value;
                         string regions = f.ClaimedPlaceUuids?.Count > 0 ? $", {f.ClaimedPlaceUuids.Count}r" : "";
-                        return $"{f.Name} [{f.Tag}{regions}]";
+                        string pop = !string.IsNullOrEmpty(f.PopState) && f.PopState != "Normal"
+                            ? $", {f.PopState.ToLower()}" : "";
+                        return $"{f.Name} [{f.Tag}{regions}{pop}]";
                     });
                 if (notable.Any())
                     data += $"Factions: {string.Join(", ", notable)}\n";
             }
+
+            // ── Diplomacy (non-neutral, non-war pacts and rivalries) ──────────────
+            if (_cache.DiplomaticRelations != null && _cache.DiplomaticRelations.Count > 0)
+            {
+                var pacts = _cache.DiplomaticRelations.Values
+                    .Where(r => r.Tier != 0 && r.Tier != -3
+                             && !string.IsNullOrEmpty(r.FactionAName) && !string.IsNullOrEmpty(r.FactionBName))
+                    .OrderByDescending(r => r.TierChangedTurn)
+                    .Take(4)
+                    .Select(r => $"{r.FactionAName} & {r.FactionBName}: {TierLabel(r.Tier)}");
+                if (pacts.Any())
+                    data += $"Diplomacy: {string.Join("; ", pacts)}\n";
+            }
+
+            // ── Current Location territory (live game state, not the JSON) ───────
+            string locationDirective = null;
+            try
+            {
+                var curPlace = SS.I?.hackyManager?.currentPlace;
+                var topPlace = curPlace?.GetTopLvlPlace() ?? curPlace;
+                var owner    = topPlace?.faction ?? curPlace?.faction;
+                if (owner != null && topPlace != null)
+                {
+                    string line = $"Current Location: {topPlace.GetPrettyName()} — territory of {owner.GetPrettyName()} (disposition toward player: {owner.GetStandingPromptStr()})";
+                    var warHere = _cache.ActiveWars?.Values.FirstOrDefault(
+                        w => w.ActorUuid == owner.uuid || w.TargetUuid == owner.uuid);
+                    if (warHere != null)
+                    {
+                        string enemy = warHere.ActorUuid == owner.uuid ? warHere.TargetName : warHere.ActorName;
+                        line += $", currently at war with {enemy}";
+                        locationDirective = "this land is at war — patrols, checkpoints, conscription notices, wary locals";
+                    }
+                    data += line + "\n";
+                }
+            }
+            catch { /* location context is best-effort; never break prompt building */ }
 
             // ── Recent Events ─────────────────────────────────────────────────────
             if (_cache.Events != null && _cache.Events.Count > 0)
@@ -172,6 +224,21 @@ namespace AIROG_GenContext.ContextProviders
                 case "Summer": directives.Add("long summer days — easier travel, higher spirits overall"); break;
             }
 
+            if (locationDirective != null)
+                directives.Add(locationDirective);
+
+            // Active bounties on the player make the world dangerous in specific ways
+            if (_cache.PlayerBounties != null && _cache.PlayerBounties.Count > 0 && _cache.Factions != null)
+            {
+                var bountyNames = _cache.PlayerBounties
+                    .Select(u => _cache.Factions.TryGetValue(u, out var f) && !string.IsNullOrEmpty(f.Name) ? f.Name : null)
+                    .Where(n => n != null)
+                    .Take(3)
+                    .ToList();
+                if (bountyNames.Count > 0)
+                    directives.Add($"ACTIVE BOUNTY on the player from {string.Join(", ", bountyNames)} — bounty hunters, informants, and ambushes are fair game");
+            }
+
             string guidance = "";
             if (directives.Count > 0)
             {
@@ -180,17 +247,21 @@ namespace AIROG_GenContext.ContextProviders
                     guidance += $"• {d}\n";
             }
 
-            // ── Pending World Alert ───────────────────────────────────────────────
+            // ── Pending World Alerts (up to 2 newest still-live events) ───────────
             string alert = "";
             if (_cache.PendingWorldEvents != null && _cache.PendingWorldEvents.Count > 0)
             {
                 var active = _cache.PendingWorldEvents
                     .Where(e => e.TurnAdded + e.TtlTurns >= _cache.CurrentTurn)
                     .OrderByDescending(e => e.TurnAdded)
-                    .FirstOrDefault();
-                if (active != null)
-                    alert = $"\n[WORLD ALERT — {active.Type.Replace("_", " ")}: {active.Description}]\n" +
-                            "Mention this naturally in the scene if any NPC would plausibly know about it.\n";
+                    .Take(2)
+                    .ToList();
+                if (active.Count > 0)
+                {
+                    foreach (var evt in active)
+                        alert += $"\n[WORLD ALERT — {evt.Type.Replace("_", " ")}: {evt.Description}]";
+                    alert += "\nMention these naturally in the scene if any NPC would plausibly know about them.\n";
+                }
             }
 
             string context = data + guidance + alert;
@@ -204,6 +275,20 @@ namespace AIROG_GenContext.ContextProviders
                 result = result.Substring(0, maxChars) + "...";
 
             return "\n" + result;
+        }
+
+        private static string TierLabel(int tier)
+        {
+            switch (tier)
+            {
+                case -3: return "At War";
+                case -2: return "Hostile";
+                case -1: return "Cold War";
+                case  1: return "Non-Aggression Pact";
+                case  2: return "Trade Pact";
+                case  3: return "Alliance";
+                default: return "Neutral";
+            }
         }
 
         private void RefreshCacheIfNeeded()

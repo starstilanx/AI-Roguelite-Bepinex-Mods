@@ -6,8 +6,6 @@ namespace AIROG_HistoryTab
 {
     public static class ConsoleLogFix
     {
-        private const int MAX_LOG_LENGTH = 1000;
-
         public static void Patch(Harmony harmony, bool enable)
         {
             if (!enable)
@@ -17,23 +15,9 @@ namespace AIROG_HistoryTab
             }
             try
             {
-                // 1. Aggressively truncate all log calls
-                var loggerLogMethod = AccessTools.Method(typeof(UnityEngine.Logger), "Log", new Type[] { typeof(LogType), typeof(object) });
-                if (loggerLogMethod != null) harmony.Patch(original: loggerLogMethod, prefix: new HarmonyMethod(AccessTools.Method(typeof(ConsoleLogFix), nameof(Prefix_LoggerLog))));
-
-                var loggerLogCtxMethod = AccessTools.Method(typeof(UnityEngine.Logger), "Log", new Type[] { typeof(LogType), typeof(object), typeof(UnityEngine.Object) });
-                if (loggerLogCtxMethod != null) harmony.Patch(original: loggerLogCtxMethod, prefix: new HarmonyMethod(AccessTools.Method(typeof(ConsoleLogFix), nameof(Prefix_LoggerLog))));
-
-                var logMethod = AccessTools.Method(typeof(Debug), "Log", new Type[] { typeof(object) });
-                if (logMethod != null) harmony.Patch(original: logMethod, prefix: new HarmonyMethod(AccessTools.Method(typeof(ConsoleLogFix), nameof(Prefix_Log))));
-
-                var logErrorMethod = AccessTools.Method(typeof(Debug), "LogError", new Type[] { typeof(object) });
-                if (logErrorMethod != null) harmony.Patch(original: logErrorMethod, prefix: new HarmonyMethod(AccessTools.Method(typeof(ConsoleLogFix), nameof(Prefix_Log))));
-
-                var logWarningMethod = AccessTools.Method(typeof(Debug), "LogWarning", new Type[] { typeof(object) });
-                if (logWarningMethod != null) harmony.Patch(original: logWarningMethod, prefix: new HarmonyMethod(AccessTools.Method(typeof(ConsoleLogFix), nameof(Prefix_Log))));
-
-                // 2. Wrap the BepInEx Console Log Listener in a try-catch to prevent crash propagation
+                // 1. Wrap the BepInEx Console Log Listener in a try-catch to prevent crash propagation
+                // (Note: we do NOT patch Debug.Log globally — that truncates the in-game console log.
+                //  The finalizer below is sufficient to swallow encoding crashes on the BepInEx side.)
                 var consoleListenerType = AccessTools.TypeByName("BepInEx.Logging.ConsoleLogListener");
                 if (consoleListenerType != null)
                 {
@@ -45,7 +29,7 @@ namespace AIROG_HistoryTab
                     }
                 }
 
-                // 3. Patch Utils truncation methods to be surrogate-aware
+                // 2. Patch Utils truncation methods to be surrogate-aware
                 var truncateBeginningMethod = AccessTools.Method(typeof(Utils), nameof(Utils.TruncateBeginning));
                 if (truncateBeginningMethod != null) harmony.Patch(original: truncateBeginningMethod, prefix: new HarmonyMethod(AccessTools.Method(typeof(ConsoleLogFix), nameof(Prefix_TruncateBeginning))));
 
@@ -118,10 +102,6 @@ namespace AIROG_HistoryTab
             return false;
         }
 
-        public static void Prefix_Log(ref object message) => Truncate(ref message);
-
-        public static void Prefix_LoggerLog(LogType logType, ref object message) => Truncate(ref message);
-
         // Finalizer can catch exceptions and suppress them by returning null
         public static Exception Finalizer_LogEvent(Exception __exception)
         {
@@ -133,18 +113,5 @@ namespace AIROG_HistoryTab
             return null;
         }
 
-        private static void Truncate(ref object message)
-        {
-            if (message is string s && s.Length > MAX_LOG_LENGTH)
-            {
-                int len = MAX_LOG_LENGTH;
-                // If we are at the end of a high surrogate, back up one to avoid splitting a pair
-                if (len > 0 && char.IsHighSurrogate(s[len - 1]))
-                {
-                    len--;
-                }
-                message = s.Substring(0, len) + "... [MOD TRUNCATED]";
-            }
-        }
     }
 }

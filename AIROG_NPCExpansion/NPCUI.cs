@@ -337,8 +337,18 @@ namespace AIROG_NPCExpansion
                      list.Add(arg);
                 };
 
-                addText("Personality", data.Personality, (s) => data.Personality = s);
-                addText("Scenario", data.Scenario, (s) => data.Scenario = s);
+                // Pre-populate from native importantData when our field is empty (e.g. NPC was
+                // profiled via native "Generate details" before our mod had a chance to run).
+                string initPersonality = NPCData.GetPersonality(npc, data);
+                string initBackground  = NPCData.GetBackground(npc, data);
+                addText("Personality", initPersonality, (s) => {
+                    data.Personality = s;
+                    NPCData.SyncToNativeImportantData(npc, s, null);
+                });
+                addText("Scenario / Background", initBackground, (s) => {
+                    data.Scenario = s;
+                    NPCData.SyncToNativeImportantData(npc, null, s);
+                });
                 addText("First Message", data.FirstMessage, (s) => data.FirstMessage = s);
                 addText("Message Examples", data.MessageExamples, (s) => data.MessageExamples = s);
                 addText("System Prompt", data.SystemPrompt, (s) => data.SystemPrompt = s);
@@ -398,6 +408,8 @@ namespace AIROG_NPCExpansion
                 if (args.Length > 1) args[1] = "Edit NPC Lore";
                 if (args.Length > 2) args[2] = new Action(() => {
                          NPCData.Save(npc.uuid, data);
+                         // Keep native CharacterSheet fields in sync with any manual edits
+                         NPCData.SyncToNativeImportantData(npc, data.Personality, data.Scenario);
                          Debug.Log($"[AIROG_NPCExpansion] Saved edited lore for {npc.GetPrettyName()}");
                          NPCUI.RefreshAll();
                      });

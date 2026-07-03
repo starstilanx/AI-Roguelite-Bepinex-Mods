@@ -22,13 +22,13 @@ namespace AIROG_NPCExpansion
             {
                 if (data.ReputationTags == null) data.ReputationTags = new System.Collections.Generic.List<string>();
                 if (data.ReputationTags.Count >= MAX_TAGS) return;
-                if (string.IsNullOrEmpty(data.Personality)) return;
+                if (!NPCData.HasProfile(npc, data)) return;
 
                 string existing = data.ReputationTags.Count > 0
                     ? $"Existing reputation: {string.Join(", ", data.ReputationTags)}. "
                     : "";
 
-                string prompt = $"NPC '{npc.GetPrettyName()}': {data.Personality}\n{existing}" +
+                string prompt = $"NPC '{npc.GetPrettyName()}': {NPCData.GetPersonality(npc, data)}\n{existing}" +
                                 $"They just: {actionDesc}\n\n" +
                                 $"Give ONE short reputation tag (2-4 words, lowercase) this action earns them. " +
                                 $"Output ONLY the tag. Examples: 'battle-hardened', 'generous merchant', 'quick to flee'.";

@@ -281,7 +281,7 @@ namespace AIROG_NPCExpansion
                 NPCData.Save(_currentNpc.uuid, data);
             });
 
-            bool hasProfile = !string.IsNullOrEmpty(data.Personality);
+            bool hasProfile = NPCData.HasProfile(_currentNpc, data);
             if (_regenBtnSprite != null)
                 AddImageBtn(_regenBtnSprite, async (btn) => { await HandleGeneration(null, btn); });
             else
@@ -308,23 +308,25 @@ namespace AIROG_NPCExpansion
                 AddStatRow("Disposition", string.Join(", ", data.InteractionTraits));
 
             // ── PROFILE ───────────────────────────────────────────────────────
-            bool anyProfile = !string.IsNullOrEmpty(data.Personality)
-                           || !string.IsNullOrEmpty(data.Scenario)
+            string displayPersonality = NPCData.GetPersonality(_currentNpc, data);
+            string displayBackground  = NPCData.GetBackground(_currentNpc, data);
+            bool anyProfile = !string.IsNullOrEmpty(displayPersonality)
+                           || !string.IsNullOrEmpty(displayBackground)
                            || !string.IsNullOrEmpty(data.FirstMessage);
             if (anyProfile)
             {
                 AddDivider();
 
-                if (!string.IsNullOrEmpty(data.Personality))
+                if (!string.IsNullOrEmpty(displayPersonality))
                 {
                     AddHeader("Personality");
-                    AddText(data.Personality, 15, new Color(0.1f, 0.1f, 0.2f));
+                    AddText(displayPersonality, 15, new Color(0.1f, 0.1f, 0.2f));
                 }
 
-                if (!string.IsNullOrEmpty(data.Scenario))
+                if (!string.IsNullOrEmpty(displayBackground))
                 {
                     AddHeader("Current Situation");
-                    AddText(data.Scenario, 15, new Color(0.08f, 0.08f, 0.08f));
+                    AddText(displayBackground, 15, new Color(0.08f, 0.08f, 0.08f));
                 }
 
                 if (!string.IsNullOrEmpty(data.FirstMessage))

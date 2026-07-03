@@ -25,6 +25,7 @@ namespace AIROG_GenContext
             _providers.Add(new ContextProviders.NPCProvider());
             _providers.Add(new ContextProviders.HistoryProvider());
             _providers.Add(new ContextProviders.WorldContextProvider());
+            _providers.Add(new ContextProviders.GrandStrategyProvider());
             _providers.Add(new ContextProviders.SettlementProvider());
             _providers.Add(new ContextProviders.SkillWebProvider());
             _providers.Add(new ContextProviders.InsightProvider());

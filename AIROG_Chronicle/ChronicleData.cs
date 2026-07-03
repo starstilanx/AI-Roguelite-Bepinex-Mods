@@ -28,5 +28,6 @@ namespace AIROG_Chronicle
         public Chapter CurrentChapter { get; set; } = new Chapter { Number = 1, StartTurn = 1, EndTurn = -1 };
         public int GlobalTurn { get; set; }
         public string LastSessionRecap { get; set; }
+        public int LastSessionRecapTurn { get; set; } = -1;  // GlobalTurn when the recap was generated
     }
 }

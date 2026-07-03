@@ -21,7 +21,7 @@ namespace AIROG_NPCExpansion
             {
                 if (globalTurn - data.MemorySynthesisTurn < SYNTHESIS_INTERVAL) return;
                 if (npc.storyTurnHistoryV2 == null || npc.storyTurnHistoryV2.Count == 0) return;
-                if (string.IsNullOrEmpty(data.Personality)) return; // Only for lore'd NPCs
+                if (!NPCData.HasProfile(npc, data)) return; // Only for lore'd NPCs
 
                 // Build compact story snippet from recent turns
                 var history = npc.storyTurnHistoryV2;

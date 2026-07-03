@@ -1,87 +1,49 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using UnityEngine;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace AIROG_SkillWeb
 {
-    public enum NodeType { Basic, Notable, Keystone }
-
-    [Serializable]
-    public class SkillNode
+    /// <summary>
+    /// A lightweight snapshot of a native PerkNode's relevant runtime state, passed from the
+    /// plugin (which can read the live game) into the data layer for recomputation.
+    /// </summary>
+    public struct PerkSnapshot
     {
-        public string id;
-        public string name;
-        public string description;
-        public Vector2 position;
-        public List<string> connectedIds = new List<string>();
-
-        /// <summary>Stat name → base bonus amount (applied * tier when unlocked).</summary>
-        public Dictionary<string, float> statModifiers = new Dictionary<string, float>();
-
-        public bool isUnlocked = false;
-
-        /// <summary>0 = locked, 1/2/3 = mastery tiers.</summary>
-        public int tier = 0;
-
-        public string imageUuid;
-        public string treeId;
-        public List<string> narrativeTraits = new List<string>();
-
-        /// <summary>Milestone nodes are generated at level milestones and have richer effects.</summary>
-        public bool isMilestone = false;
-
-        /// <summary>Visual and mechanical tier: Basic (small), Notable (medium), Keystone (powerful with tradeoff).</summary>
-        public NodeType nodeType = NodeType.Basic;
-
-        public SkillNode() { }
-
-        public SkillNode(string id, string name, string description, Vector2 position)
-        {
-            this.id          = id;
-            this.name        = name;
-            this.description = description;
-            this.position    = position;
-        }
+        public string uuid;
+        public bool isActivated;
     }
 
+    /// <summary>The derived mechanical bonus attached to a single native perk (keyed by perk UUID).</summary>
     [Serializable]
-    public class SkillTree
+    public class PerkBonus
     {
-        public string id;
-        public string name;
-        public string purpose;
-        public string colorHex = "#FFFFFF";
-        public int nodesUnlocked = 0;
+        public string perkUuid;
+        public string perkName;
 
-        public SkillTree() { }
+        /// <summary>Attribute name (Strength/Dexterity/Intellect/Cunning/Charisma) → base amount when learned.</summary>
+        public Dictionary<string, float> stats = new Dictionary<string, float>();
 
-        public SkillTree(string id, string name, string purpose)
-        {
-            this.id      = id;
-            this.name    = name;
-            this.purpose = purpose;
-        }
+        /// <summary>True once stats have been computed (heuristic or AI). Prevents re-derivation.</summary>
+        public bool derived = false;
+
+        /// <summary>True once the AI pass has refined the heuristic result.</summary>
+        public bool aiRefined = false;
     }
 
+    /// <summary>
+    /// Per-save sidecar that stores attribute bonuses for native perks. The native perk tree is the
+    /// source of truth for which perks exist / are learned / are active; this only adds the mechanical
+    /// stat layer that the native (purely narrative) system lacks.
+    /// </summary>
     public class SkillWebData
     {
-        public List<SkillNode> nodes = new List<SkillNode>();
-        public List<SkillTree> trees = new List<SkillTree>();
+        /// <summary>perk UUID → derived bonus. The only persisted state.</summary>
+        public Dictionary<string, PerkBonus> perkBonuses = new Dictionary<string, PerkBonus>();
 
-        public float nodeRadius = 50f;
-        public int   skillPoints = 0;
-        public int   totalPointsEarned = 0;
-        public int   totalNodesUnlocked = 0;
-        public int   lastKnownLevel = 1;
-
-        /// <summary>Active narrative traits toggled on by the player.</summary>
-        public HashSet<string> activeAffixes = new HashSet<string>();
-
-        /// <summary>Accumulated stat bonuses from all unlocked nodes. Not serialized — rebuilt on load.</summary>
+        /// <summary>Accumulated attribute bonuses from all currently-learned perks. Rebuilt on sync; not serialized.</summary>
         [JsonIgnore]
         public Dictionary<SS.PlayerAttribute, float> CachedStats = new Dictionary<SS.PlayerAttribute, float>();
 
@@ -93,10 +55,12 @@ namespace AIROG_SkillWeb
             {
                 try
                 {
-                    var settings = new JsonSerializerSettings();
-                    settings.Converters.Add(new Vector2Converter());
-                    var data = JsonConvert.DeserializeObject<SkillWebData>(File.ReadAllText(path), settings);
-                    if (data != null) return data;
+                    var data = JsonConvert.DeserializeObject<SkillWebData>(File.ReadAllText(path));
+                    if (data != null)
+                    {
+                        if (data.perkBonuses == null) data.perkBonuses = new Dictionary<string, PerkBonus>();
+                        return data;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -115,7 +79,6 @@ namespace AIROG_SkillWeb
                     Formatting = Formatting.Indented,
                     ReferenceLoopHandling = ReferenceLoopHandling.Ignore
                 };
-                settings.Converters.Add(new Vector2Converter());
                 File.WriteAllText(path, JsonConvert.SerializeObject(this, settings));
             }
             catch (Exception ex)
@@ -124,168 +87,51 @@ namespace AIROG_SkillWeb
             }
         }
 
-        // ── Graph helpers ────────────────────────────────────────────────────────
+        // ── Bonus bookkeeping ─────────────────────────────────────────────────────
 
-        public bool CheckCollision(Vector2 pos, string excludeId = null)
+        public PerkBonus GetOrCreate(string uuid, string name)
         {
-            foreach (var n in nodes)
+            if (!perkBonuses.TryGetValue(uuid, out PerkBonus pb))
             {
-                if (n.id == excludeId) continue;
-                if (Vector2.Distance(n.position, pos) < nodeRadius * 2.2f) return true;
+                pb = new PerkBonus { perkUuid = uuid, perkName = name };
+                perkBonuses[uuid] = pb;
             }
-            return false;
-        }
-
-        /// <summary>Adds a node only if the position is collision-free. Returns false on collision.</summary>
-        public bool TryAddNode(SkillNode node)
-        {
-            if (CheckCollision(node.position, node.id))
+            else if (!string.IsNullOrEmpty(name))
             {
-                Debug.LogWarning($"[SkillWeb] Collision — could not place '{node.name}' at {node.position}");
-                return false;
+                pb.perkName = name;
             }
-            nodes.Add(node);
-            return true;
+            return pb;
         }
-
-        public void AddConnection(string id1, string id2)
-        {
-            var n1 = nodes.Find(n => n.id == id1);
-            var n2 = nodes.Find(n => n.id == id2);
-            if (n1 != null && !n1.connectedIds.Contains(id2)) n1.connectedIds.Add(id2);
-            if (n2 != null && !n2.connectedIds.Contains(id1)) n2.connectedIds.Add(id1);
-        }
-
-        public SkillTree GetTree(string id)
-        {
-            if (string.IsNullOrEmpty(id)) return null;
-            return trees.Find(t => t.id == id);
-        }
-
-        // ── Unlock / upgrade logic ───────────────────────────────────────────────
 
         /// <summary>
-        /// True if <paramref name="node"/> is locked but adjacent to at least one unlocked node,
-        /// OR it is an isolated root node (no connections yet).
+        /// Rebuilds <see cref="CachedStats"/> from the supplied set of currently-learned perks.
+        /// Active perks have their bonus scaled by <see cref="SkillWebConfig.ActiveBonusMultiplier"/>.
         /// </summary>
-        public bool CanUnlock(SkillNode node)
-        {
-            if (node.isUnlocked) return false;
-            if (node.connectedIds.Count == 0) return true;  // floating root — always reachable
-            foreach (var id in node.connectedIds)
-            {
-                var neighbor = nodes.Find(n => n.id == id);
-                if (neighbor != null && neighbor.isUnlocked) return true;
-            }
-            return false;
-        }
-
-        /// <summary>True if node is unlocked and below tier 3.</summary>
-        public bool CanUpgrade(SkillNode node) => node.isUnlocked && node.tier < 3;
-
-        /// <summary>
-        /// Returns the point cost to unlock (if locked) or upgrade (if already unlocked).
-        /// Unlock = NodeCost. Upgrade T1→T2 = UpgradeCost×1, T2→T3 = UpgradeCost×2.
-        /// </summary>
-        public int UnlockCost(SkillNode node)
-        {
-            if (!node.isUnlocked)
-            {
-                int baseCost = SkillWebPlugin.Instance.SkillConfig.NodeCost;
-                switch (node.nodeType)
-                {
-                    case NodeType.Notable:  return baseCost * 2;
-                    case NodeType.Keystone: return baseCost * 4;
-                    default:                return baseCost;
-                }
-            }
-            return SkillWebPlugin.Instance.SkillConfig.UpgradeCost * node.tier;
-        }
-
-        /// <summary>Spends points and unlocks the node. Returns false if not unlockable or insufficient points.</summary>
-        public bool TryUnlock(SkillNode node)
-        {
-            if (!CanUnlock(node)) return false;
-            int cost = UnlockCost(node);
-            if (skillPoints < cost) return false;
-
-            skillPoints -= cost;
-            node.isUnlocked = true;
-            node.tier = 1;
-            totalNodesUnlocked++;
-            var tree = GetTree(node.treeId);
-            if (tree != null) tree.nodesUnlocked++;
-            RecalculateStats();
-            return true;
-        }
-
-        /// <summary>Spends points and upgrades the node to the next tier. Returns false if not upgradeable or insufficient points.</summary>
-        public bool TryUpgrade(SkillNode node)
-        {
-            if (!CanUpgrade(node)) return false;
-            int cost = UnlockCost(node);
-            if (skillPoints < cost) return false;
-
-            skillPoints -= cost;
-            node.tier++;
-            RecalculateStats();
-            return true;
-        }
-
-        // ── Stat accumulation ────────────────────────────────────────────────────
-
-        public void RecalculateStats()
+        public void RecalculateStats(IEnumerable<PerkSnapshot> learnedPerks, SkillWebConfig cfg)
         {
             if (CachedStats == null) CachedStats = new Dictionary<SS.PlayerAttribute, float>();
             CachedStats.Clear();
+            if (learnedPerks == null) return;
 
-            foreach (var node in nodes)
+            foreach (var snap in learnedPerks)
             {
-                if (!node.isUnlocked || node.statModifiers == null) continue;
-                float tierMult = node.tier; // T1 = 1×, T2 = 2×, T3 = 3×
-                foreach (var kvp in node.statModifiers)
+                if (snap.uuid == null) continue;
+                if (!perkBonuses.TryGetValue(snap.uuid, out PerkBonus pb) || pb.stats == null) continue;
+
+                float mult = snap.isActivated ? cfg.ActiveBonusMultiplier : 1f;
+                foreach (var kvp in pb.stats)
                 {
-                    if (Enum.TryParse(kvp.Key, true, out SS.PlayerAttribute attr))
-                    {
-                        if (!CachedStats.ContainsKey(attr)) CachedStats[attr] = 0;
-                        CachedStats[attr] += kvp.Value * tierMult;
-                    }
+                    if (!Enum.TryParse(kvp.Key, true, out SS.PlayerAttribute attr) ||
+                        attr == SS.PlayerAttribute.Unknown) continue;
+                    if (!CachedStats.ContainsKey(attr)) CachedStats[attr] = 0f;
+                    CachedStats[attr] += kvp.Value * mult;
                 }
             }
+
+            // Clamp each attribute's total to the configured ceiling.
+            var keys = new List<SS.PlayerAttribute>(CachedStats.Keys);
+            foreach (var k in keys)
+                CachedStats[k] = Mathf.Clamp(CachedStats[k], -cfg.MaxBonusPerAttribute, cfg.MaxBonusPerAttribute);
         }
-
-        // ── AI context ───────────────────────────────────────────────────────────
-
-        /// <summary>Returns a formatted block of all active narrative traits for AI context injection.</summary>
-        public string GetActiveTraitsBlock()
-        {
-            var sb = new StringBuilder();
-            foreach (var node in nodes)
-            {
-                if (!node.isUnlocked || node.narrativeTraits == null) continue;
-                foreach (var trait in node.narrativeTraits)
-                    sb.AppendLine($"  - {trait} (from {node.name}, Tier {node.tier})");
-            }
-            return sb.ToString().Trim();
-        }
-    }
-
-    // ── JSON converter for UnityEngine.Vector2 ──────────────────────────────────
-
-    public class Vector2Converter : JsonConverter
-    {
-        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
-        {
-            var v = (Vector2)value;
-            new JObject { ["x"] = v.x, ["y"] = v.y }.WriteTo(writer);
-        }
-
-        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
-        {
-            var jo = JObject.Load(reader);
-            return new Vector2(jo["x"].Value<float>(), jo["y"].Value<float>());
-        }
-
-        public override bool CanConvert(Type objectType) => objectType == typeof(Vector2);
     }
 }

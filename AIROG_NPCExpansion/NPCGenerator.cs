@@ -37,10 +37,13 @@ namespace AIROG_NPCExpansion
 
                 // Parse the response, updating existing data if available
                 NPCData data = ParseAIResponse(generatedText, npc, existingData);
-                
+
                 // Save the data
                 NPCData.Save(npc.uuid, data);
-                 
+
+                // Sync to native ImportantCharacterData so CharacterSheet displays our results
+                NPCData.SyncToNativeImportantData(npc, data.Personality, data.Scenario, npc.description);
+
                 return true;
             }
             catch (Exception ex)
@@ -81,6 +84,9 @@ namespace AIROG_NPCExpansion
                 {
                     data.Scenario = updatedScenario.Trim();
                     NPCData.Save(npc.uuid, data);
+
+                    // Keep native importantData.background in sync with our updated scenario
+                    NPCData.SyncToNativeImportantData(npc, null, data.Scenario);
 
                     // Seed scenario snippet into the rumor network so other NPCs can learn it
                     string factSnippet = $"{npc.GetPrettyName()}: {data.Scenario}";

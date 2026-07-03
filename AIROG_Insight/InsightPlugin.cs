@@ -12,7 +12,7 @@ namespace AIROG_Insight
     {
         public const string PLUGIN_GUID = "com.airog.insight";
         public const string PLUGIN_NAME = "Insight Mechanic";
-        public const string PLUGIN_VERSION = "1.1.0";
+        public const string PLUGIN_VERSION = "1.2.0";
 
         private void Awake()
         {
@@ -46,7 +46,7 @@ namespace AIROG_Insight
             else
                 Logger.LogWarning("[Insight] Could not find GameplayManager.ProcessInteractionInfoNoTryStr");
 
-            // Intercept AI responses to extract <NPC_INSIGHT> blocks
+            // Intercept AI responses to extract <NPC_INSIGHT> / <PLACE_INSIGHT> blocks
             var generateMethod = AccessTools.Method(typeof(AIAsker), nameof(AIAsker.GenerateTxtNoTryStrStyle));
             if (generateMethod != null)
                 harmony.Patch(generateMethod, postfix: new HarmonyMethod(typeof(InsightPlugin), nameof(Postfix_GenerateTxt)));
@@ -58,10 +58,15 @@ namespace AIROG_Insight
 
         // ── Persistence ──────────────────────────────────────────────────────────
 
-        public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+        private static void SaveNow()
         {
             if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
                 InsightData.Instance.Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+        }
+
+        public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+        {
+            SaveNow();
         }
 
         public static void Postfix_ReadSaveFile(string saveSubDir)
@@ -80,27 +85,39 @@ namespace AIROG_Insight
             Debug.Log("[Insight] Insight data reset for new game.");
         }
 
-        // ── Conversation Tracking ─────────────────────────────────────────────
+        // ── Conversation / Place Tracking ─────────────────────────────────────
 
         public static void Prefix_ProcessInteraction(GameplayManager __instance, InteractionInfo interactionInfo)
         {
             try
             {
-                // Only count turns directed at an NPC
-                var npc = __instance?.npcActionsHandler?.currentNpc;
-                if (npc == null) return;
-
                 var data = InsightData.Instance;
-                if (!data.ConversationCounts.ContainsKey(npc.uuid))
-                    data.ConversationCounts[npc.uuid] = 0;
+                bool dirty = false;
 
-                data.ConversationCounts[npc.uuid]++;
-                int count = data.ConversationCounts[npc.uuid];
-                Debug.Log($"[Insight] Conversation #{count} with {npc.GetPrettyName()} (threshold: {InsightData.InsightThreshold})");
+                // Count turns directed at an NPC
+                var npc = __instance?.npcActionsHandler?.currentNpc;
+                if (npc != null)
+                {
+                    if (!data.ConversationCounts.ContainsKey(npc.uuid))
+                        data.ConversationCounts[npc.uuid] = 0;
+                    data.ConversationCounts[npc.uuid]++;
+                    dirty = true;
+                    Debug.Log($"[Insight] Conversation #{data.ConversationCounts[npc.uuid]} with {npc.GetPrettyName()} (threshold: {InsightData.InsightThreshold})");
+                }
 
-                // Persist the updated count so InsightProvider can read it via the JSON cache
-                if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                    data.Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+                // Count interactions taken at the current place (drives location insights)
+                var place = __instance?.currentPlace;
+                if (place != null)
+                {
+                    if (!data.PlaceInteractionCounts.ContainsKey(place.uuid))
+                        data.PlaceInteractionCounts[place.uuid] = 0;
+                    data.PlaceInteractionCounts[place.uuid]++;
+                    dirty = true;
+                }
+
+                // Persist so InsightProvider (GenContext) sees fresh counts via the JSON cache
+                if (dirty)
+                    SaveNow();
             }
             catch (Exception ex)
             {
@@ -123,44 +140,111 @@ namespace AIROG_Insight
             string text = await original;
             try
             {
-                const string openTag = "<NPC_INSIGHT>";
-                const string closeTag = "</NPC_INSIGHT>";
-                int start = text.IndexOf(openTag, StringComparison.OrdinalIgnoreCase);
-                int end   = text.IndexOf(closeTag, StringComparison.OrdinalIgnoreCase);
-
-                if (start >= 0 && end > start)
+                bool dirty = false;
+                text = ExtractBlock(text, "NPC_INSIGHT", insightText =>
                 {
-                    string insightText = text.Substring(start + openTag.Length, end - start - openTag.Length).Trim();
+                    var npc = SS.I?.hackyManager?.npcActionsHandler?.currentNpc;
+                    if (npc == null || string.IsNullOrEmpty(insightText)) return;
 
-                    // Strip block from response so the player doesn't see it
-                    string after = text.Substring(end + closeTag.Length).TrimStart('\n', '\r', ' ');
-                    text = text.Substring(0, start) + after;
+                    InsightData.Instance.AddNpcInsight(npc.uuid, insightText);
+                    dirty = true;
+                    Debug.Log($"[Insight] ✦ Gained insight on {npc.GetPrettyName()}: {insightText}");
+                    NotifyPlayer($"✦ Insight gained — {npc.GetPrettyName()}: {insightText}");
+                    TryRecordChronicleBeat($"Gained insight into {npc.GetPrettyName()}: {insightText}");
+                });
 
-                    // Attribute the insight to the NPC currently being conversed with
-                    var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
-                    var npc = manager?.npcActionsHandler?.currentNpc;
-                    if (npc != null && !string.IsNullOrEmpty(insightText))
-                    {
-                        InsightData.Instance.NpcInsights[npc.uuid] = insightText;
-                        Debug.Log($"[Insight] ✦ Gained insight on {npc.GetPrettyName()}: {insightText}");
-
-                        if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                            InsightData.Instance.Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
-                    }
-                }
-                else if (start >= 0)
+                text = ExtractBlock(text, "PLACE_INSIGHT", insightText =>
                 {
-                    // Bare/unclosed tag — strip it to avoid leaking into the narrative
-                    int lineEnd = text.IndexOf('\n', start);
-                    text = text.Substring(0, start) + (lineEnd > start ? text.Substring(lineEnd + 1) : "");
-                    text = text.TrimStart('\n', '\r', ' ');
-                }
+                    var place = SS.I?.hackyManager?.currentPlace;
+                    if (place == null || string.IsNullOrEmpty(insightText)) return;
+                    if (InsightData.Instance.PlaceInsights.ContainsKey(place.uuid)) return;
+
+                    InsightData.Instance.PlaceInsights[place.uuid] = insightText;
+                    dirty = true;
+                    Debug.Log($"[Insight] ✦ Gained insight on location {place.GetPrettyName()}: {insightText}");
+                    NotifyPlayer($"✦ Location insight — {place.GetPrettyName()}: {insightText}");
+                });
+
+                if (dirty)
+                    SaveNow();
             }
             catch (Exception ex)
             {
                 Debug.LogError($"[Insight] ExtractInsightAsync error: {ex.Message}");
             }
             return text;
+        }
+
+        /// <summary>
+        /// Finds a &lt;TAG&gt;...&lt;/TAG&gt; block, passes its trimmed content to <paramref name="onFound"/>,
+        /// and returns the text with the block stripped. Bare/unclosed tags are stripped to end of line.
+        /// </summary>
+        private static string ExtractBlock(string text, string tag, Action<string> onFound)
+        {
+            string openTag = "<" + tag + ">";
+            string closeTag = "</" + tag + ">";
+            int start = text.IndexOf(openTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0) return text;
+            int end = text.IndexOf(closeTag, StringComparison.OrdinalIgnoreCase);
+
+            if (end > start)
+            {
+                string content = text.Substring(start + openTag.Length, end - start - openTag.Length).Trim();
+                // In UNIFIED mode newlines inside JSON strings arrive as literal \n
+                content = content.Replace("\\n", " ").Replace("\\r", "").Trim();
+                onFound(content);
+
+                string after = text.Substring(end + closeTag.Length).TrimStart('\n', '\r', ' ');
+                return text.Substring(0, start) + after;
+            }
+
+            // Bare/unclosed tag — strip it to avoid leaking into the narrative
+            int lineEnd = text.IndexOf('\n', start);
+            text = text.Substring(0, start) + (lineEnd > start ? text.Substring(lineEnd + 1) : "");
+            return text.TrimStart('\n', '\r', ' ');
+        }
+
+        // ── Player feedback ───────────────────────────────────────────────────
+
+        private static void NotifyPlayer(string message)
+        {
+            try
+            {
+                var logView = SS.I?.hackyManager?.gameLogView;
+                if (logView != null)
+                    _ = logView.LogText("<color=#B08FFF>" + message + "</color>");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Insight] NotifyPlayer failed: {ex.Message}");
+            }
+        }
+
+        // ── Chronicle integration (soft dependency via reflection) ────────────
+
+        private static void TryRecordChronicleBeat(string summary)
+        {
+            try
+            {
+                var mgrType = Type.GetType("AIROG_Chronicle.ChronicleManager, AIROG_Chronicle");
+                var beatType = Type.GetType("AIROG_Chronicle.ChronicleBeat, AIROG_Chronicle");
+                if (mgrType == null || beatType == null) return;
+
+                int turn = 0;
+                var state = mgrType.GetProperty("State")?.GetValue(null);
+                if (state != null)
+                    turn = (int)(state.GetType().GetProperty("GlobalTurn")?.GetValue(state) ?? 0);
+
+                var beat = Activator.CreateInstance(beatType);
+                beatType.GetProperty("Turn")?.SetValue(beat, turn);
+                beatType.GetProperty("Summary")?.SetValue(beat, summary);
+                beatType.GetProperty("IsMilestone")?.SetValue(beat, true);
+                mgrType.GetMethod("RecordBeat")?.Invoke(null, new[] { beat });
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Insight] Chronicle beat integration failed: {ex.Message}");
+            }
         }
     }
 }

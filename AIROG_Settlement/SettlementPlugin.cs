@@ -11,7 +11,7 @@ using Newtonsoft.Json;
 
 namespace AIROG_Settlement
 {
-    [BepInPlugin("com.airog.settlement", "Settlement Mod", "1.0.0")]
+    [BepInPlugin("com.airog.settlement", "Settlement Mod", "1.1.1")]
     public class SettlementPlugin : BaseUnityPlugin
     {
         public static SettlementPlugin Instance;
@@ -33,7 +33,7 @@ namespace AIROG_Settlement
 
         // Persistent UI refs (live on modal, always visible regardless of active tab)
         public TextMeshProUGUI OverviewNameText;
-        public TextMeshProUGUI GoldText, WoodText, StoneText;
+        public TextMeshProUGUI GoldText, WoodText, StoneText, PopulationText;
         public RawImage SettlementImageDisplay;
 
         public GameObject CenterWorkspaceObj;
@@ -150,7 +150,69 @@ namespace AIROG_Settlement
                 TabContentObjects[i].SetActive(i == index);
 
             if (index == 1) RefreshBuildingsTab();
+            if (index == 2) RefreshPopulationTab();
             if (index == 3) RefreshTradeTab();
+        }
+
+        // ─── Per-Turn Simulation ────────────────────────────────────────────────
+        // Production runs on the game's turn event (NOT WriteSaveFile, which can fire
+        // several times — or not at all — per turn and made income erratic).
+
+        private static readonly string[] NameFirst = { "Bren", "Mara", "Tolim", "Eska", "Dorn", "Lyra", "Fenwick", "Hilda", "Osric", "Petra", "Quinn", "Sable" };
+        private static readonly string[] NameLast  = { "Ashfoot", "Briarwood", "Coppervein", "Dunmore", "Emberly", "Fallowfield", "Greenbottle", "Hollowbrook", "Ironwhistle", "Thistledown" };
+
+        public static void OnTurnHappened(int numTurns, long secs)
+        {
+            try
+            {
+                var self = Instance;
+                if (self == null) return;
+                var s = self.CurrentSettlement;
+                if (s == null || string.IsNullOrEmpty(s.LocationUuid)) return;
+
+                s.ProduceResources(numTurns);
+                s.UpdateHappiness();
+                self.TryResidentArrival(numTurns);
+                self.ScheduleUiUpdate();
+            }
+            catch (Exception ex)
+            {
+                Log?.LogWarning($"Settlement turn tick failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// New residents drift in over time: requires a Farm (food), free capacity,
+        /// and a 20% chance per elapsed turn.
+        /// </summary>
+        private void TryResidentArrival(int numTurns)
+        {
+            var s = CurrentSettlement;
+            if (!s.HasBuilding("farm")) return;
+            if (s.Residents.Count >= s.GetPopulationCap()) return;
+
+            float arrivalChance = 1f - Mathf.Pow(0.8f, numTurns); // 20% per turn, compounded
+            if (UnityEngine.Random.value > arrivalChance) return;
+
+            // Job comes from a random completed building
+            var built = s.Buildings.FindAll(b => b.IsComplete);
+            if (built.Count == 0) return;
+            var employer = BuildingCatalog.Get(built[UnityEngine.Random.Range(0, built.Count)].BuildingID);
+
+            var resident = new ResidentData
+            {
+                Name = NameFirst[UnityEngine.Random.Range(0, NameFirst.Length)] + " " +
+                       NameLast[UnityEngine.Random.Range(0, NameLast.Length)],
+                Job = employer?.ResidentJob ?? "Laborer",
+                Happiness = 50
+            };
+            s.Residents.Add(resident);
+            s.UpdateHappiness();
+
+            Log.LogInfo($"New resident arrived: {resident.Name} ({resident.Job})");
+            var gameLog = SS.I?.hackyManager?.gameLogView;
+            if (gameLog != null)
+                _ = gameLog.LogText($"<color=#a0d8a0>[{s.Name}] A new resident has settled here: {resident.Name}, {resident.Job}.</color>");
         }
 
         public bool IsSettlement(Place p)
@@ -161,9 +223,20 @@ namespace AIROG_Settlement
         public void EstablishSettlement(Place p)
         {
             if (p == null) return;
-            CurrentSettlement.LocationUuid = p.uuid;
-            CurrentSettlement.Name = p.GetPrettyName();
-            CurrentSettlement.Resources["Gold"] = 100;
+
+            // Establishing is a full fresh start — a previous settlement elsewhere is abandoned
+            // entirely (previously this reset resources but silently kept old buildings/residents).
+            if (!string.IsNullOrEmpty(CurrentSettlement.LocationUuid))
+                Log.LogWarning($"Abandoning previous settlement '{CurrentSettlement.Name}' to establish a new one.");
+
+            CurrentSettlement = new SettlementState
+            {
+                LocationUuid = p.uuid,
+                Name = p.GetPrettyName()
+            };
+            // 150 gold: enough for two producers (40+60) with 50 left toward a Farm,
+            // so the opening build order can't dead-end the economy.
+            CurrentSettlement.Resources["Gold"] = 150;
             CurrentSettlement.Resources["Wood"] = 0;
             CurrentSettlement.Resources["Stone"] = 0;
             Log.LogInfo($"Established settlement at {p.GetPrettyName()} ({p.uuid})");
@@ -175,54 +248,88 @@ namespace AIROG_Settlement
             else UpdateOverviewUI();
         }
 
+        /// <summary>True once the player has established the settlement at a map location.</summary>
+        public bool HasActiveSettlement => !string.IsNullOrEmpty(CurrentSettlement?.LocationUuid);
+
         public void UpdateOverviewUI()
         {
-            // Settlement name (persistent, always visible)
+            // Settlement name (persistent, always visible).
+            // Check LocationUuid, not Name — the default state has a placeholder name.
             if (OverviewNameText != null)
             {
-                OverviewNameText.text = string.IsNullOrEmpty(CurrentSettlement.Name)
-                    ? "No Active Settlement"
-                    : CurrentSettlement.Name;
+                OverviewNameText.text = HasActiveSettlement
+                    ? CurrentSettlement.Name
+                    : "No Active Settlement";
             }
 
             // Resources in right sidebar (persistent, always visible)
-            int gold  = CurrentSettlement.Resources.TryGetValue("Gold",  out int g) ? g : 0;
-            int wood  = CurrentSettlement.Resources.TryGetValue("Wood",  out int w) ? w : 0;
-            int stone = CurrentSettlement.Resources.TryGetValue("Stone", out int s) ? s : 0;
-            if (GoldText  != null) GoldText.text  = $"Gold: {gold}";
-            if (WoodText  != null) WoodText.text  = $"Wood: {wood}";
-            if (StoneText != null) StoneText.text = $"Stone: {stone}";
+            if (!HasActiveSettlement)
+            {
+                if (GoldText  != null) GoldText.text  = "Gold: —";
+                if (WoodText  != null) WoodText.text  = "Wood: —";
+                if (StoneText != null) StoneText.text = "Stone: —";
+            }
+            else
+            {
+                int gold  = CurrentSettlement.Resources.TryGetValue("Gold",  out int g) ? g : 0;
+                int wood  = CurrentSettlement.Resources.TryGetValue("Wood",  out int w) ? w : 0;
+                int stone = CurrentSettlement.Resources.TryGetValue("Stone", out int s) ? s : 0;
+                if (GoldText  != null) GoldText.text  = $"Gold: {gold}";
+                if (WoodText  != null) WoodText.text  = $"Wood: {wood}";
+                if (StoneText != null) StoneText.text = $"Stone: {stone}";
+            }
 
-            // Settlement image (Overview tab only)
+            // Population in right sidebar (persistent)
+            if (PopulationText != null)
+            {
+                PopulationText.text = string.IsNullOrEmpty(CurrentSettlement.LocationUuid)
+                    ? "Pop: —"
+                    : $"Pop: {CurrentSettlement.Residents.Count}/{CurrentSettlement.GetPopulationCap()}";
+            }
+
+            // Settlement image (Overview tab only). Textures are cached by ImageUuid so we
+            // don't re-read the PNG and leak a new Texture2D on every refresh.
             if (SettlementImageDisplay != null)
             {
+                bool shown = false;
                 if (!string.IsNullOrEmpty(CurrentSettlement.ImageUuid) && SS.I != null)
                 {
-                    string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg,
-                                               CurrentSettlement.ImageUuid + ".png");
-                    if (File.Exists(path))
+                    if (CurrentSettlement.ImageUuid == _loadedImageUuid && _loadedImageTex != null)
                     {
-                        byte[] data = File.ReadAllBytes(path);
-                        Texture2D tex = new Texture2D(2, 2);
-                        if (tex.LoadImage(data))
-                        {
-                            SettlementImageDisplay.texture = tex;
-                            SettlementImageDisplay.color = Color.white;
-                        }
+                        shown = true; // Already displaying this image
                     }
                     else
                     {
-                        SettlementImageDisplay.texture = null;
-                        SettlementImageDisplay.color = new Color(0, 0, 0, 0.4f);
+                        string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg,
+                                                   CurrentSettlement.ImageUuid + ".png");
+                        if (File.Exists(path))
+                        {
+                            byte[] data = File.ReadAllBytes(path);
+                            Texture2D tex = new Texture2D(2, 2);
+                            if (tex.LoadImage(data))
+                            {
+                                if (_loadedImageTex != null) Destroy(_loadedImageTex);
+                                _loadedImageTex = tex;
+                                _loadedImageUuid = CurrentSettlement.ImageUuid;
+                                SettlementImageDisplay.texture = tex;
+                                SettlementImageDisplay.color = Color.white;
+                                shown = true;
+                            }
+                            else Destroy(tex);
+                        }
                     }
                 }
-                else
+
+                if (!shown)
                 {
                     SettlementImageDisplay.texture = null;
                     SettlementImageDisplay.color = new Color(0, 0, 0, 0.4f);
                 }
             }
         }
+
+        private Texture2D _loadedImageTex;
+        private string _loadedImageUuid;
 
         public void TriggerImageGeneration()
         {
@@ -233,32 +340,35 @@ namespace AIROG_Settlement
                 p = SS.I.uuidToGameEntityMap[CurrentSettlement.LocationUuid] as Place;
             if (p == null) return;
 
-            System.Threading.Tasks.Task.Run(async () => {
-                try {
-                    await GenerateSettlementImage(p);
-                } catch (Exception e) {
-                    Log.LogError($"Error generating image: {e.Message}");
-                }
-            });
+            // Fire-and-forget on the MAIN thread. Task.Run would move game/Unity API
+            // calls onto a pool thread, which Unity does not allow.
+            _ = GenerateSettlementImage(p);
         }
 
         public async System.Threading.Tasks.Task GenerateSettlementImage(Place p)
         {
-            Log.LogInfo("Starting settlement image generation...");
+            try
+            {
+                Log.LogInfo("Starting settlement image generation...");
 
-            string prompt = $"A cozy and prospering settlement called {CurrentSettlement.Name}, located in {p.GetPrettyName()}. {p.GetPotentiallyNullDescription()}";
-            string uuid = Guid.NewGuid().ToString();
+                string prompt = $"A cozy and prospering settlement called {CurrentSettlement.Name}, located in {p.GetPrettyName()}. {p.GetPotentiallyNullDescription()}";
+                string uuid = Guid.NewGuid().ToString();
 
-            SettlementImageEntity entity = new SettlementImageEntity(prompt, uuid, p.manager);
+                SettlementImageEntity entity = new SettlementImageEntity(prompt, uuid, p.manager);
 
-            // FIX: GetEntImgSettings returns a reference to the shared settings object.
-            // Do NOT mutate .x/.y — it would permanently corrupt game image settings.
-            var settings = SS.I.settingsPojo.GetEntImgSettings(SettingsPojo.EntImgType.PLACE);
-            await AIAsker.getGeneratedImage(settings, entity, true);
+                // NOTE: GetEntImgSettings returns a reference to the shared settings object.
+                // Do NOT mutate .x/.y — it would permanently corrupt game image settings.
+                var settings = SS.I.settingsPojo.GetEntImgSettings(SettingsPojo.EntImgType.PLACE);
+                await AIAsker.getGeneratedImage(settings, entity, true);
 
-            CurrentSettlement.ImageUuid = uuid;
-            SaveSettlementData();
-            _needsUiUpdate = true;
+                CurrentSettlement.ImageUuid = uuid;
+                SaveSettlementData();
+                _needsUiUpdate = true;
+            }
+            catch (Exception e)
+            {
+                Log.LogError($"Error generating settlement image: {e}");
+            }
         }
 
         public class SettlementImageEntity : GameEntity
@@ -296,27 +406,8 @@ namespace AIROG_Settlement
             }
         }
 
-        public string GetSettlementPromptContext(Place p)
-        {
-            if (p == null || !IsSettlement(p)) return "";
-
-            string context = $"\n\n[Settlement Context: You are at the settlement of {CurrentSettlement.Name}. ";
-            context += "Resources: ";
-            foreach (var res in CurrentSettlement.Resources)
-                context += $"{res.Key}: {res.Value}, ";
-            context = context.TrimEnd(' ', ',') + ".";
-
-            if (CurrentSettlement.Buildings.Count > 0)
-            {
-                context += " Constructed buildings: ";
-                foreach (var b in CurrentSettlement.Buildings)
-                    context += $"{b.Name}, ";
-                context = context.TrimEnd(' ', ',') + ".";
-            }
-
-            context += "]";
-            return context;
-        }
+        // NOTE: Prompt injection intentionally lives in AIROG_GenContext's SettlementProvider,
+        // which reads settlement_data.json (see gen_context_guidelines.md). Do not inject here.
 
         public void LoadSettlementData(string subdir)
         {
@@ -337,8 +428,43 @@ namespace AIROG_Settlement
             }
         }
 
+        /// <summary>
+        /// Draws the shared "no settlement yet" notice into a tab. All gameplay tabs are
+        /// inert until the player establishes a settlement at a map location — previously
+        /// you could build into a phantom settlement that could never produce anything.
+        /// </summary>
+        private void DrawNoSettlementNotice(Transform content, string tabTitle)
+        {
+            SettlementUIHelper.CreateUIElement("NoticeBg", content, 305, 124, 405, 323, null,
+                new Color(0.06f, 0.06f, 0.10f, 0.88f));
+
+            GameObject headerObj = new GameObject("Header", typeof(RectTransform), typeof(TextMeshProUGUI));
+            headerObj.transform.SetParent(content, false);
+            var hTxt = headerObj.GetComponent<TextMeshProUGUI>();
+            hTxt.text = tabTitle;
+            hTxt.fontSize = 18;
+            hTxt.fontStyle = FontStyles.Bold;
+            hTxt.alignment = TextAlignmentOptions.Center;
+            hTxt.color = new Color(0.95f, 0.85f, 0.5f);
+            hTxt.outlineWidth = 0.15f;
+            hTxt.outlineColor = Color.black;
+            SettlementUIHelper.SetRect(headerObj.GetComponent<RectTransform>(), 305, 127, 405, 22);
+
+            GameObject msgObj = new GameObject("Notice", typeof(RectTransform), typeof(TextMeshProUGUI));
+            msgObj.transform.SetParent(content, false);
+            var mTxt = msgObj.GetComponent<TextMeshProUGUI>();
+            mTxt.text = "No settlement has been established yet.\n\n" +
+                        "Travel to a location on the world map and press\n" +
+                        "<b>Establish Settlement</b> to found one there.";
+            mTxt.fontSize = 14;
+            mTxt.alignment = TextAlignmentOptions.Center;
+            mTxt.color = new Color(0.8f, 0.8f, 0.8f);
+            SettlementUIHelper.SetRect(msgObj.GetComponent<RectTransform>(), 315, 230, 385, 90);
+        }
+
         public void BuildBuilding(string buildingId)
         {
+            if (!HasActiveSettlement) { Log.LogWarning("Cannot build: no settlement established."); return; }
             var def = BuildingCatalog.Get(buildingId);
             if (def == null) { Log.LogError($"Unknown building ID: {buildingId}"); return; }
             if (CurrentSettlement.HasBuilding(buildingId)) { Log.LogWarning($"{buildingId} already built."); return; }
@@ -356,7 +482,33 @@ namespace AIROG_Settlement
                 ConstructionProgress = 100f
             });
 
+            CurrentSettlement.RecalculateLevel();
+            CurrentSettlement.UpdateHappiness();
             Log.LogInfo($"Built {def.Name} at {CurrentSettlement.Name}.");
+            SaveSettlementData();
+        }
+
+        public void UpgradeBuilding(string buildingId)
+        {
+            if (!HasActiveSettlement) return;
+            var def = BuildingCatalog.Get(buildingId);
+            var instance = CurrentSettlement.GetBuilding(buildingId);
+            if (def == null || instance == null) return;
+            if (instance.Level >= BuildingDefinition.MAX_LEVEL) return;
+
+            var cost = def.GetUpgradeCost(instance.Level);
+            if (!BuildingDefinition.CanAffordCost(CurrentSettlement, cost))
+            {
+                Log.LogWarning($"Cannot afford upgrade for {buildingId}.");
+                return;
+            }
+
+            foreach (var kv in cost)
+                CurrentSettlement.Resources[kv.Key] -= kv.Value;
+            instance.Level++;
+
+            CurrentSettlement.RecalculateLevel();
+            Log.LogInfo($"Upgraded {def.Name} to level {instance.Level}.");
             SaveSettlementData();
         }
 
@@ -372,6 +524,8 @@ namespace AIROG_Settlement
 
             for (int i = content.childCount - 1; i >= 0; i--)
                 Destroy(content.GetChild(i).gameObject);
+
+            if (!HasActiveSettlement) { DrawNoSettlementNotice(content, "Trade & Logistics"); return; }
 
             SettlementUIHelper.CreateUIElement("TradeBg", content, 305, 124, 405, 323, null,
                 new Color(0.06f, 0.06f, 0.10f, 0.88f));
@@ -487,6 +641,8 @@ namespace AIROG_Settlement
             for (int i = content.childCount - 1; i >= 0; i--)
                 Destroy(content.GetChild(i).gameObject);
 
+            if (!HasActiveSettlement) { DrawNoSettlementNotice(content, "Buildings"); return; }
+
             // Solid dark background covering the full center frame area (masks the transparent interior)
             SettlementUIHelper.CreateUIElement("BldgBg", content, 305, 124, 405, 323, null,
                 new Color(0.06f, 0.06f, 0.10f, 0.88f));
@@ -510,8 +666,13 @@ namespace AIROG_Settlement
             {
                 var def = catalog[i];
                 float rowY = 152f + i * 48f;
-                bool isBuilt = CurrentSettlement.HasBuilding(def.ID);
-                bool canAfford = !isBuilt && def.CanAfford(CurrentSettlement);
+                var instance = CurrentSettlement.GetBuilding(def.ID);
+                bool isBuilt = instance != null;
+                bool isMaxed = isBuilt && instance.Level >= BuildingDefinition.MAX_LEVEL;
+                var upgradeCost = (isBuilt && !isMaxed) ? def.GetUpgradeCost(instance.Level) : null;
+                bool canAfford = !isBuilt
+                    ? def.CanAfford(CurrentSettlement)
+                    : (!isMaxed && BuildingDefinition.CanAffordCost(CurrentSettlement, upgradeCost));
 
                 // Row background
                 Color bgColor = isBuilt
@@ -523,7 +684,7 @@ namespace AIROG_Settlement
                 GameObject nameObj = new GameObject($"Name_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
                 nameObj.transform.SetParent(content, false);
                 var nameTxt = nameObj.GetComponent<TextMeshProUGUI>();
-                nameTxt.text = def.Name;
+                nameTxt.text = isBuilt ? $"{def.Name} (Lv {instance.Level})" : def.Name;
                 nameTxt.fontSize = 14;
                 nameTxt.fontStyle = FontStyles.Bold;
                 nameTxt.alignment = TextAlignmentOptions.Left;
@@ -544,15 +705,16 @@ namespace AIROG_Settlement
                 GameObject costObj = new GameObject($"Cost_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
                 costObj.transform.SetParent(content, false);
                 var costTxt = costObj.GetComponent<TextMeshProUGUI>();
-                if (isBuilt)
+                if (isMaxed)
                 {
-                    costTxt.text = "Constructed";
+                    costTxt.text = "Max Level";
                     costTxt.color = new Color(0.45f, 0.9f, 0.45f);
                 }
                 else
                 {
+                    var displayCost = isBuilt ? upgradeCost : def.Cost;
                     var parts = new System.Text.StringBuilder();
-                    foreach (var kv in def.Cost)
+                    foreach (var kv in displayCost)
                         parts.Append($"{kv.Key}: {kv.Value}  ");
                     costTxt.text = parts.ToString().TrimEnd();
                     costTxt.color = canAfford ? new Color(0.95f, 0.85f, 0.45f) : new Color(0.9f, 0.35f, 0.35f);
@@ -561,8 +723,8 @@ namespace AIROG_Settlement
                 costTxt.alignment = TextAlignmentOptions.Center;
                 SettlementUIHelper.SetRect(costObj.GetComponent<RectTransform>(), 507, rowY + 4, 104, 36);
 
-                // Build button
-                if (!isBuilt)
+                // Build / Upgrade button (maxed buildings get no button)
+                if (!isMaxed)
                 {
                     Color btnColor = canAfford
                         ? new Color(0.12f, 0.38f, 0.12f, 0.95f)
@@ -575,7 +737,8 @@ namespace AIROG_Settlement
                     GameObject btnTxt = new GameObject("T", typeof(RectTransform), typeof(TextMeshProUGUI));
                     btnTxt.transform.SetParent(btnObj.transform, false);
                     var bTxt = btnTxt.GetComponent<TextMeshProUGUI>();
-                    bTxt.text = canAfford ? "Build" : "Can't Afford";
+                    string actionLabel = isBuilt ? "Upgrade" : "Build";
+                    bTxt.text = canAfford ? actionLabel : "Can't Afford";
                     bTxt.fontSize = 11;
                     bTxt.alignment = TextAlignmentOptions.Center;
                     bTxt.color = canAfford ? Color.white : new Color(0.55f, 0.55f, 0.55f);
@@ -584,13 +747,104 @@ namespace AIROG_Settlement
                     btr.offsetMin = btr.offsetMax = Vector2.zero;
 
                     string defId = def.ID;
+                    bool doUpgrade = isBuilt;
                     btn.onClick.AddListener(() =>
                     {
-                        BuildBuilding(defId);
+                        if (doUpgrade) UpgradeBuilding(defId);
+                        else BuildBuilding(defId);
                         RefreshBuildingsTab();
                         UpdateOverviewUI();
                     });
                 }
+            }
+        }
+
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Population tab: lists residents with their jobs and happiness.
+        /// Residents arrive automatically over time (requires a Farm and free capacity).
+        /// </summary>
+        public void RefreshPopulationTab()
+        {
+            if (TabContentObjects.Count < 3 || TabContentObjects[2] == null) return;
+            Transform content = TabContentObjects[2].transform;
+
+            for (int i = content.childCount - 1; i >= 0; i--)
+                Destroy(content.GetChild(i).gameObject);
+
+            if (!HasActiveSettlement) { DrawNoSettlementNotice(content, "Population"); return; }
+
+            SettlementUIHelper.CreateUIElement("PopBg", content, 305, 124, 405, 323, null,
+                new Color(0.06f, 0.06f, 0.10f, 0.88f));
+
+            GameObject headerObj = new GameObject("Header", typeof(RectTransform), typeof(TextMeshProUGUI));
+            headerObj.transform.SetParent(content, false);
+            var hTxt = headerObj.GetComponent<TextMeshProUGUI>();
+            hTxt.text = $"Population  ({CurrentSettlement.Residents.Count}/{CurrentSettlement.GetPopulationCap()})";
+            hTxt.fontSize = 18;
+            hTxt.fontStyle = FontStyles.Bold;
+            hTxt.alignment = TextAlignmentOptions.Center;
+            hTxt.color = new Color(0.95f, 0.85f, 0.5f);
+            hTxt.outlineWidth = 0.15f;
+            hTxt.outlineColor = Color.black;
+            SettlementUIHelper.SetRect(headerObj.GetComponent<RectTransform>(), 305, 127, 405, 22);
+
+            if (CurrentSettlement.Residents.Count == 0)
+            {
+                GameObject emptyObj = new GameObject("Empty", typeof(RectTransform), typeof(TextMeshProUGUI));
+                emptyObj.transform.SetParent(content, false);
+                var eTxt = emptyObj.GetComponent<TextMeshProUGUI>();
+                eTxt.text = CurrentSettlement.HasBuilding("farm")
+                    ? "No residents yet.\nWith a farm providing food, settlers will arrive over time."
+                    : "No residents yet.\nBuild a Farm — nobody settles where there is no food.";
+                eTxt.fontSize = 13;
+                eTxt.alignment = TextAlignmentOptions.Center;
+                eTxt.color = new Color(0.75f, 0.75f, 0.75f);
+                SettlementUIHelper.SetRect(emptyObj.GetComponent<RectTransform>(), 315, 240, 385, 60);
+                return;
+            }
+
+            for (int i = 0; i < CurrentSettlement.Residents.Count && i < 6; i++)
+            {
+                var resident = CurrentSettlement.Residents[i];
+                float rowY = 152f + i * 48f;
+
+                SettlementUIHelper.CreateUIElement($"Row_{i}", content, 309, rowY, 397, 44, null,
+                    new Color(0.08f, 0.08f, 0.14f, 0.75f));
+
+                GameObject nameObj = new GameObject($"Name_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
+                nameObj.transform.SetParent(content, false);
+                var nameTxt = nameObj.GetComponent<TextMeshProUGUI>();
+                nameTxt.text = resident.Name;
+                nameTxt.fontSize = 14;
+                nameTxt.fontStyle = FontStyles.Bold;
+                nameTxt.alignment = TextAlignmentOptions.Left;
+                nameTxt.color = Color.white;
+                SettlementUIHelper.SetRect(nameObj.GetComponent<RectTransform>(), 314, rowY + 4, 220, 20);
+
+                GameObject jobObj = new GameObject($"Job_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
+                jobObj.transform.SetParent(content, false);
+                var jobTxt = jobObj.GetComponent<TextMeshProUGUI>();
+                jobTxt.text = resident.Job;
+                jobTxt.fontSize = 11;
+                jobTxt.alignment = TextAlignmentOptions.Left;
+                jobTxt.color = new Color(0.72f, 0.72f, 0.72f);
+                SettlementUIHelper.SetRect(jobObj.GetComponent<RectTransform>(), 314, rowY + 26, 220, 16);
+
+                // Happiness readout
+                GameObject hapObj = new GameObject($"Hap_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
+                hapObj.transform.SetParent(content, false);
+                var hapTxt = hapObj.GetComponent<TextMeshProUGUI>();
+                // Plain ASCII markers — the game's TMP font atlas has no emoji glyphs
+                string face = resident.Happiness >= 70 ? "Content" : resident.Happiness >= 45 ? "Fine" : "Unhappy";
+                hapTxt.text = $"{face} ({resident.Happiness})";
+                hapTxt.fontSize = 14;
+                hapTxt.alignment = TextAlignmentOptions.Right;
+                hapTxt.color = resident.Happiness >= 70 ? new Color(0.55f, 0.95f, 0.55f)
+                             : resident.Happiness >= 45 ? new Color(0.95f, 0.9f, 0.6f)
+                             : new Color(0.95f, 0.5f, 0.5f);
+                SettlementUIHelper.SetRect(hapObj.GetComponent<RectTransform>(), 560, rowY + 10, 140, 24);
             }
         }
     }
@@ -601,9 +855,20 @@ namespace AIROG_Settlement
         public static void Postfix()
         {
             if (SettlementPlugin.Instance == null) return;
-            SettlementPlugin.Instance.CurrentSettlement.ProduceResources();
+            // Production moved to TurnHappenedEvent — this hook only persists state.
             SettlementPlugin.Instance.SaveSettlementData();
             SettlementPlugin.Instance.ScheduleUiUpdate();
+        }
+    }
+
+    [HarmonyPatch(typeof(GameplayManager), "Start")]
+    public static class Patch_GameplayManager_Start
+    {
+        public static void Postfix()
+        {
+            // -=/+= keeps the subscription single across scene reloads
+            GameplayManager.TurnHappenedEvent -= SettlementPlugin.OnTurnHappened;
+            GameplayManager.TurnHappenedEvent += SettlementPlugin.OnTurnHappened;
         }
     }
 
@@ -746,6 +1011,8 @@ namespace AIROG_Settlement
                 826, 173, 164, 42, GoldIcon: SettlementPlugin.Instance.WoodIcon);
             SettlementPlugin.Instance.StoneText = CreateSidebarText(modalObj.transform, "SidebarStone",
                 826, 218, 164, 42, GoldIcon: SettlementPlugin.Instance.StoneIcon);
+            SettlementPlugin.Instance.PopulationText = CreateSidebarText(modalObj.transform, "SidebarPop",
+                826, 263, 164, 42);
 
             // ---- Tab Content objects ----
             SettlementPlugin.Instance.TabContentObjects.Clear();
@@ -878,7 +1145,10 @@ namespace AIROG_Settlement
                     rect.sizeDelta = enterRect.sizeDelta;
                     rect.anchorMin = enterRect.anchorMin;
                     rect.anchorMax = enterRect.anchorMax;
-                    rect.anchoredPosition = enterRect.anchoredPosition - new Vector2(enterRect.sizeDelta.x + 10f, 0);
+                    rect.pivot = enterRect.pivot;
+                    // Stack ABOVE the Enter Location button — positioning it to the left
+                    // pushed it outside the details panel where it was clipped to a sliver.
+                    rect.anchoredPosition = enterRect.anchoredPosition + new Vector2(0, enterRect.sizeDelta.y + 8f);
                 }
 
                 var img = foundBtn.GetComponent<Image>();
@@ -921,8 +1191,9 @@ namespace AIROG_Settlement
                     vRect.sizeDelta = enterRect.sizeDelta;
                     vRect.anchorMin = enterRect.anchorMin;
                     vRect.anchorMax = enterRect.anchorMax;
-                    // Mutually exclusive with establish button — same position
-                    vRect.anchoredPosition = enterRect.anchoredPosition - new Vector2(enterRect.sizeDelta.x + 10f, 0);
+                    vRect.pivot = enterRect.pivot;
+                    // Mutually exclusive with establish button — same stacked-above position
+                    vRect.anchoredPosition = enterRect.anchoredPosition + new Vector2(0, enterRect.sizeDelta.y + 8f);
                 }
 
                 viewBtn.GetComponent<Image>().color = new Color(0.1f, 0.35f, 0.1f, 0.85f);
