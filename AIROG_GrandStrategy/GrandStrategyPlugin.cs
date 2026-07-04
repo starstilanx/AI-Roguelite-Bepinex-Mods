@@ -13,7 +13,7 @@ namespace AIROG_GrandStrategy
     {
         public const string PLUGIN_GUID = "com.airog.grandstrategy";
         public const string PLUGIN_NAME = "Grand Strategy";
-        public const string PLUGIN_VERSION = "0.3.0";
+        public const string PLUGIN_VERSION = "0.4.0";
 
         public static GrandStrategyPlugin Instance { get; private set; }
 
@@ -74,6 +74,23 @@ namespace AIROG_GrandStrategy
             {
                 string name = cmd.Length > 8 ? cmd.Substring(8).Trim() : "";
                 __instance.MessageModal().ShowModal(DominionManager.FoundDominion(__instance, name), false, true);
+                return false;
+            }
+            if (upper.StartsWith("GS_RENAME"))
+            {
+                var s = GrandStrategyData.State;
+                if (!s.Founded) { __instance.MessageModal().ShowModal("No dominion founded yet.", false, true); return false; }
+                string name = cmd.Length > 9 ? cmd.Substring(9).Trim() : "";
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    __instance.MessageModal().ShowModal("Usage: GS_RENAME <new name>", false, true);
+                    return false;
+                }
+                string old = s.DominionName;
+                s.DominionName = name.Trim();
+                GrandStrategyData.LogDeed($"{old} was renamed {s.DominionName} by decree of its sovereign.");
+                GrandStrategyData.SaveToCurrentDir();
+                __instance.MessageModal().ShowModal($"{old} shall henceforth be known as {s.DominionName}.", false, true);
                 return false;
             }
             if (upper.StartsWith("GS_ORDER"))
@@ -172,12 +189,16 @@ namespace AIROG_GrandStrategy
             }
             string vassals  = string.Join(", ", s.VassalNames.Values);
             string petition = s.PendingPetition != null ? "\n⚖ A petition awaits (GS_PETITION)" : "";
+            string advisors = s.Advisors.Count > 0
+                ? string.Join(", ", s.Advisors.Select(a => $"{a.Name} ({a.Role.ToLower()})"))
+                : "none";
 
             return $"═ {s.DominionName} ═ (founded turn {s.FoundedTurn})\n" +
                    $"Treasury: {s.Treasury}g | Army: {s.ArmyStrength} | CP: {s.CommandPoints}/{s.MaxCommandPoints} | Pop: {fac.Population} | Tax: {s.TaxPolicy}\n" +
                    $"Holdings ({s.Holdings.Count}):\n{holdings}\n" +
                    $"Great works: {(string.IsNullOrEmpty(wonders) ? "none" : wonders)}\n" +
                    $"Vassals: {(string.IsNullOrEmpty(vassals) ? "none" : vassals)}\n" +
+                   $"Council: {advisors}\n" +
                    $"At war with: {(string.IsNullOrEmpty(wars) ? "no one" : wars)}\n" +
                    $"Casus belli: {(string.IsNullOrEmpty(claims) ? "none" : claims)}" +
                    petition + victory;

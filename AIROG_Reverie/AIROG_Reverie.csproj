@@ -2,18 +2,14 @@
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
-    <AssemblyName>AIROG_GrandStrategy</AssemblyName>
-    <Description>A BepInEx plugin for AI Roguelite adding a 4X grand-strategy layer on top of AIROG_WorldExpansion.</Description>
-    <Version>0.4.0</Version>
+    <AssemblyName>AIROG_Reverie</AssemblyName>
+    <Description>A BepInEx plugin for AI Roguelite that adds a playable dream layer: dreams woven from the player's own story, prophetic omens, and hauntings.</Description>
+    <Version>1.0.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
+    <OutputPath>bin\Debug\net472\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\AIROG_WorldExpansion\AIROG_WorldExpansion.csproj">
-      <Private>False</Private>
-    </ProjectReference>
-  </ItemGroup>
 
   <ItemGroup>
     <Reference Include="BepInEx">
@@ -32,26 +28,6 @@
       <HintPath>..\AIRL\libs\UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>..\AIRL\libs\UnityEngine.UI.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UIModule">
-      <HintPath>..\AIRL\libs\UnityEngine.UIModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>..\AIRL\libs\UnityEngine.TextRenderingModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Unity.TextMeshPro">
-      <HintPath>..\AIRL\libs\Unity.TextMeshPro.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>..\AIRL\libs\Newtonsoft.Json.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
     <Reference Include="Assembly-CSharp">
       <HintPath>..\AIRL\libs\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
@@ -60,9 +36,26 @@
       <HintPath>..\AIRL\libs\netstandard.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\AIRL\libs\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>..\AIRL\libs\Unity.TextMeshPro.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>..\AIRL\libs\UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="Microsoft.CSharp" />
+    <!-- GenContext reference for IContextProvider / ContextManager -->
+    <Reference Include="AIROG_GenContext">
+      <HintPath>..\AIROG_GenContext\bin\Debug\net472\AIROG_GenContext.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

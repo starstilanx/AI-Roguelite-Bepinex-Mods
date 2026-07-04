@@ -5,6 +5,7 @@ using AIROG_WorldExpansion;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace AIROG_GrandStrategy
@@ -18,13 +19,23 @@ namespace AIROG_GrandStrategy
     {
         private const string BUTTON_NAME = "DominionButton_Mod";
         private const string PANEL_NAME  = "DominionPanel_Mod";
+        private const string MARKER_NAME = "DominionMarker_Mod";
 
         private static bool _panelOn;
         private static int _targetIdx;
         private static int _impIdx;
         private static int _wonderIdx;
         private static int _holdingIdx;
+        private static int _advisorRoleIdx;
         private static string _lastResult = "";
+
+        // Map-click targeting: a panel toggle arms pick mode, then the next left-click on a
+        // MapLocation (intercepted via Harmony below) supplies a specific place instead of
+        // ANNEX/CAMPAIGN's automatic nearest/adjacent pick.
+        private enum PickMode { None, Annex, Campaign }
+        private static PickMode _pickMode = PickMode.None;
+        private static string _pickedAnnexUuid;
+        private static string _pickedCampaignUuid;
 
         private static readonly Color GOLD    = new Color(1f, 0.85f, 0.3f);
         private static readonly Color MUTED   = new Color(0.78f, 0.78f, 0.83f);
@@ -41,6 +52,7 @@ namespace AIROG_GrandStrategy
             try
             {
                 EnsureDominionButton(__instance);
+                EnsureCapitalMarker(__instance);
                 if (_panelOn) BuildPanel(__instance);
                 else ClearPanel(__instance);
             }
@@ -56,6 +68,8 @@ namespace AIROG_GrandStrategy
         {
             SetButtonVisible(__instance, false);
             ClearPanel(__instance);
+            ClearCapitalMarker(__instance);
+            _pickMode = PickMode.None;
         }
 
         [HarmonyPatch(typeof(MapModal), "ShowUniv")]
@@ -64,6 +78,8 @@ namespace AIROG_GrandStrategy
         {
             SetButtonVisible(__instance, false);
             ClearPanel(__instance);
+            ClearCapitalMarker(__instance);
+            _pickMode = PickMode.None;
         }
 
         [HarmonyPatch(typeof(MapModal), "HideMapModal")]
@@ -71,6 +87,31 @@ namespace AIROG_GrandStrategy
         public static void Postfix_HideMapModal(MapModal __instance)
         {
             ClearPanel(__instance);
+            ClearCapitalMarker(__instance);
+            _pickMode = PickMode.None;
+        }
+
+        // A left-click on the world map, while a pick mode is armed from the panel, supplies
+        // a specific place to ANNEX/CAMPAIGN instead of triggering the native travel/select
+        // behavior. Consumed (returns false) only while a pick is actually pending.
+        [HarmonyPatch(typeof(MapLocation), "OnPointerUp")]
+        [HarmonyPrefix]
+        public static bool Prefix_MapLocationPointerUp(MapLocation __instance, PointerEventData eventData)
+        {
+            if (_pickMode == PickMode.None) return true;
+            if (eventData.button != PointerEventData.InputButton.Left) return true;
+
+            Place place = __instance.GetPlace();
+            if (place == null) return true;
+
+            if (_pickMode == PickMode.Annex)     _pickedAnnexUuid = place.uuid;
+            else if (_pickMode == PickMode.Campaign) _pickedCampaignUuid = place.uuid;
+
+            var modal = __instance.mapModal;
+            _lastResult = $"Target set: {place.GetPrettyName()}.";
+            _pickMode = PickMode.None;
+            if (modal != null) { Click(modal); BuildPanel(modal); }
+            return false;
         }
 
         // ─── Toggle button ────────────────────────────────────────────────────────
@@ -164,6 +205,85 @@ namespace AIROG_GrandStrategy
             modal.manager?.soundManager?.smallClickSoundFxObj?.PlayNextSound();
         }
 
+        // ─── Capital marker ───────────────────────────────────────────────────────
+        // A small label pinned to the capital's map icon (gold dominion name + army
+        // strength) so the dominion reads at a glance on the world map, independent of
+        // whether WorldExpansion's own political lens is toggled on.
+
+        private static void ClearCapitalMarker(MapModal modal)
+        {
+            Transform old = modal.mapLocationsParent?.Find(MARKER_NAME);
+            if (old != null) UnityEngine.Object.Destroy(old.gameObject);
+        }
+
+        private static void EnsureCapitalMarker(MapModal modal)
+        {
+            if (modal.mapLocationsParent == null) return;
+            var s = GrandStrategyData.State;
+            Transform old = modal.mapLocationsParent.Find(MARKER_NAME);
+
+            if (!s.Founded || string.IsNullOrEmpty(s.CapitalPlaceUuid))
+            {
+                if (old != null) UnityEngine.Object.Destroy(old.gameObject);
+                return;
+            }
+
+            Vector2 pos;
+            try
+            {
+                if (SS.I?.uuidToGameEntityMap == null
+                    || !SS.I.uuidToGameEntityMap.TryGetValue(s.CapitalPlaceUuid, out var e) || !(e is Place capPlace))
+                {
+                    if (old != null) UnityEngine.Object.Destroy(old.gameObject);
+                    return;
+                }
+                pos = capPlace.worldCoords;
+            }
+            catch { return; }
+
+            GameObject markerObj;
+            TMP_Text label;
+            if (old != null)
+            {
+                markerObj = old.gameObject;
+                label = markerObj.GetComponentInChildren<TMP_Text>();
+            }
+            else
+            {
+                markerObj = new GameObject(MARKER_NAME, typeof(RectTransform));
+                markerObj.layer = modal.mapLocationsParent.gameObject.layer;
+                var rt = (RectTransform)markerObj.transform;
+                rt.SetParent(modal.mapLocationsParent, false);
+                rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.pivot = new Vector2(0.5f, 0f);
+                rt.sizeDelta = new Vector2(240, 24);
+                rt.localScale = Vector3.one;
+
+                GameObject lblObj = new GameObject("Label", typeof(RectTransform));
+                lblObj.layer = markerObj.layer;
+                lblObj.transform.SetParent(markerObj.transform, false);
+                var lrt = (RectTransform)lblObj.transform;
+                lrt.anchorMin = Vector2.zero;
+                lrt.anchorMax = Vector2.one;
+                lrt.offsetMin = Vector2.zero;
+                lrt.offsetMax = Vector2.zero;
+                label = lblObj.AddComponent<TextMeshProUGUI>();
+                if (modal.voronoiWorldTitle != null) label.font = modal.voronoiWorldTitle.font;
+                label.fontSize = 13;
+                label.fontStyle = FontStyles.Bold;
+                label.alignment = TextAlignmentOptions.Bottom;
+                label.raycastTarget = false;
+                label.richText = true;
+                label.enableWordWrapping = false;
+            }
+
+            var mrt = (RectTransform)markerObj.transform;
+            mrt.localPosition = new Vector3(pos.x, pos.y + 34f, 0f); // sits just above the capital's icon
+            if (label != null)
+                label.text = $"<color=#FFD34D>♛ {s.DominionName}</color> <color=#FF9E9E>⚔{s.ArmyStrength}</color>";
+            markerObj.transform.SetAsLastSibling();
+        }
+
         // ─── Panel ────────────────────────────────────────────────────────────────
 
         private static void ClearPanel(MapModal modal)
@@ -249,6 +369,15 @@ namespace AIROG_GrandStrategy
             if (wars.Count > 0)
                 AddText(panel, font, $"<color=#FF7766>⚔ At war: {string.Join(", ", wars)}</color>", 13, Color.white);
 
+            var worstHolding = s.Holdings.Values.OrderByDescending(h => h.Unrest).FirstOrDefault();
+            if (worstHolding != null && worstHolding.Unrest >= 20)
+                AddText(panel, font, $"<color=#FFAA55>⚠ Unrest brewing in {worstHolding.Name} ({worstHolding.Unrest})</color>", 13, Color.white);
+
+            if (s.Advisors.Count > 0)
+                AddText(panel, font,
+                    $"Council: {string.Join(", ", s.Advisors.Select(a => $"{a.Name} ({a.Role.ToLower()})"))}",
+                    12, MUTED);
+
             if (!string.IsNullOrEmpty(s.WonderInProgress))
             {
                 var wip = OrderSystem.WonderDefs.FirstOrDefault(w => w.Key == s.WonderInProgress);
@@ -260,7 +389,17 @@ namespace AIROG_GrandStrategy
             // ── Realm orders ──
             AddText(panel, font, "── REALM ──", 12, DIVIDER);
             var r1 = AddRow(panel);
-            AddButton(r1, font, "ANNEX 25g",    () => DoOrder(modal, "ANNEX", ""));
+            AddButton(r1, font, string.IsNullOrEmpty(_pickedAnnexUuid) ? "ANNEX 25g" : "ANNEX ▸ picked",
+                () => DoOrder(modal, "ANNEX", "", _pickedAnnexUuid));
+            AddButton(r1, font, _pickMode == PickMode.Annex ? "🎯 CLICK MAP…" : "🎯 pick",
+                () =>
+                {
+                    _pickMode = _pickMode == PickMode.Annex ? PickMode.None : PickMode.Annex;
+                    _lastResult = _pickMode == PickMode.Annex
+                        ? "Click an unclaimed place on the map to target ANNEX." : "";
+                    Click(modal);
+                    BuildPanel(modal);
+                }, new Color(0.20f, 0.16f, 0.28f, 0.95f));
             AddButton(r1, font, "TRADE",         () => DoOrder(modal, "TRADE", ""));
             AddButton(r1, font, "DISBAND",       () => DoOrder(modal, "DISBAND", ""));
             var r2 = AddRow(panel);
@@ -303,6 +442,13 @@ namespace AIROG_GrandStrategy
                 BuildPanel(modal);
             });
 
+            // ── Council ──
+            var role = OrderSystem.AdvisorRoles[_advisorRoleIdx % OrderSystem.AdvisorRoles.Length];
+            var r6 = AddRow(panel);
+            AddButton(r6, font, $"{role} ▸", () => { _advisorRoleIdx++; Click(modal); BuildPanel(modal); },
+                new Color(0.12f, 0.20f, 0.16f, 0.95f));
+            AddButton(r6, font, "COUNCIL 40g", () => DoOrder(modal, "COUNCIL", role));
+
             // ── Targeted orders (Diplomacy & War) ──
             var targets = EligibleTargets(manager);
             string tName = targets.Count > 0 ? targets[_targetIdx % targets.Count].GetPrettyName() : "";
@@ -318,9 +464,22 @@ namespace AIROG_GrandStrategy
             AddButton(d1, font, "ENVOY 20g",      () => DoOrder(modal, "ENVOY", tName));
             AddButton(d1, font, "FABRICATE 2CP",  () => DoOrder(modal, "FABRICATE", tName));
             AddButton(d1, font, "PEACE 25g",      () => DoOrder(modal, "PEACE", tName));
+            var d1b = AddRow(panel);
+            AddButton(d1b, font, "PACT 15g",       () => DoOrder(modal, "PACT", tName));
+            AddButton(d1b, font, "TRADE_DEAL 20g", () => DoOrder(modal, "TRADE_DEAL", tName));
             var d2 = AddRow(panel);
             AddButton(d2, font, "WAR 2CP",      () => DoOrder(modal, "WAR", tName), BTN_WARM);
-            AddButton(d2, font, "CAMPAIGN 2CP", () => DoOrder(modal, "CAMPAIGN", tName), BTN_WARM);
+            AddButton(d2, font, string.IsNullOrEmpty(_pickedCampaignUuid) ? "CAMPAIGN 2CP" : "CAMPAIGN ▸ picked",
+                () => DoOrder(modal, "CAMPAIGN", tName, _pickedCampaignUuid), BTN_WARM);
+            AddButton(d2, font, _pickMode == PickMode.Campaign ? "🎯 CLICK MAP…" : "🎯 pick",
+                () =>
+                {
+                    _pickMode = _pickMode == PickMode.Campaign ? PickMode.None : PickMode.Campaign;
+                    _lastResult = _pickMode == PickMode.Campaign
+                        ? "Click an enemy-held place on the map to target CAMPAIGN." : "";
+                    Click(modal);
+                    BuildPanel(modal);
+                }, new Color(0.20f, 0.16f, 0.28f, 0.95f));
             AddButton(d2, font, "PILLAGE 2CP",  () => DoOrder(modal, "PILLAGE", tName), BTN_WARM);
             var d3 = AddRow(panel);
             AddButton(d3, font, "INCITE 30g",    () => DoOrder(modal, "INCITE", tName));
@@ -342,12 +501,18 @@ namespace AIROG_GrandStrategy
 
         // ─── Actions ──────────────────────────────────────────────────────────────
 
-        private static void DoOrder(MapModal modal, string type, string arg)
+        private static void DoOrder(MapModal modal, string type, string arg, string placeUuid = null)
         {
             if (string.IsNullOrEmpty(arg) && RequiresTarget(type))
                 _lastResult = "No target faction available.";
             else
-                _lastResult = OrderSystem.Issue(modal.manager, type, arg);
+                _lastResult = OrderSystem.Issue(modal.manager, type, arg, placeUuid);
+
+            // Map-click picks are single-use regardless of outcome — a failed order just
+            // means the player re-picks (or lets ANNEX/CAMPAIGN fall back to automatic).
+            if (type == "ANNEX")    _pickedAnnexUuid = null;
+            if (type == "CAMPAIGN") _pickedCampaignUuid = null;
+
             Click(modal);
             BuildPanel(modal);
         }
@@ -359,6 +524,7 @@ namespace AIROG_GrandStrategy
                 case "ENVOY": case "FABRICATE": case "WAR": case "CAMPAIGN":
                 case "PILLAGE": case "PEACE": case "VASSAL":
                 case "INCITE": case "SABOTAGE": case "SCOUT":
+                case "PACT": case "TRADE_DEAL":
                     return true;
                 default:
                     return false;

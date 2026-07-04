@@ -56,6 +56,11 @@ Mods are separated into discrete `.csproj` solutions, generally prefixed with `A
 *   **`AIROG_HistoryTab`**: A UI-first approach allowing players to scroll upward through previously committed turns.
 *   **`AIROG_Chronicle`**: Hooked into `GenerateTxtNoTryStrStyle`. It uses `ChronicleProvider` to automatically summarise the story saga and injects it back through `GenContext`. 
 
+### 🌙 AIROG_Reverie
+**Purpose:** The dream layer — sleeping can drop the player into a playable dream woven from their own Chronicle beats; triumph grants a self-fulfilling prophetic Omen, losing all Lucidity means something follows you out (Haunting).
+*   **Architecture:** Rest-intent regex on `DoConvoTextFieldSubmission` triggers the dream roll (35%, 12-turn cooldown); `DreamWeaver` composes a dreamscape locally from `chronicle.json` stubs + a 12-theme table; `<DREAM_STATE>` hidden blocks (lucidity/progress/event/omen) drive the state machine; HP snapshot at sleep is restored on wake so dreams never kill the body.
+*   **Key Hooks:** `ReverieProvider` (GenContext, priority 96) injects dream directives / `[WAKING]` one-shot / `[PROPHETIC OMEN]` + `[HAUNTED]` awake context; `GenerateTxtNoTryStrStyle` postfix extracts blocks; persists to `reverie.json`. Console: `REVERIE_TEST`, `REVERIE_STATUS`, `REVERIE_WAKE`.
+
 ### 🧠 AIROG_Insight
 **Purpose:** NPC conversation tracking and narrative memory extraction.
 *   **Mechanics:** Counts consecutive turns directed at an NPC. Once the conversation threshold (default: 3) is met, it intercepts response generation to extract and strip hidden `<NPC_INSIGHT>` blocks.

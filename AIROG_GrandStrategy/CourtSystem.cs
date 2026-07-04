@@ -82,6 +82,7 @@ namespace AIROG_GrandStrategy
             {
                 new PetitionData
                 {
+                    Role       = "STEWARD",
                     Text       = $"The merchant guilds of {holding} beg relief from road tolls, claiming trade withers under them.",
                     AcceptText = $"{realm} lowered the tolls — the guilds rejoice, though the treasury feels it.",
                     RejectText = $"{realm} kept its tolls. The guilds of {holding} mutter that the crown milks them dry.",
@@ -90,6 +91,7 @@ namespace AIROG_GrandStrategy
                 },
                 new PetitionData
                 {
+                    Role       = "MARSHAL",
                     Text       = "Grizzled veterans of your campaigns demand pensions for their scars and lost brothers.",
                     AcceptText = $"{realm} granted its veterans their due — old soldiers now speak proudly of the crown.",
                     RejectText = $"{realm} turned its veterans away. Some drift into banditry; the ranks grumble.",
@@ -98,6 +100,7 @@ namespace AIROG_GrandStrategy
                 },
                 new PetitionData
                 {
+                    Role       = "STEWARD",
                     Text       = $"A blight has ruined the harvest around {holding}; its people plead for grain from the crown's stores.",
                     AcceptText = $"Grain wagons under {realm}'s banner reached {holding} — the people bless the sovereign's name.",
                     RejectText = $"No relief came to {holding}. The hungry remember who let them starve.",
@@ -106,6 +109,7 @@ namespace AIROG_GrandStrategy
                 },
                 new PetitionData
                 {
+                    Role       = "CHANCELLOR",
                     Text       = "Minor nobles offer a chest of gold in exchange for hollow court titles and the sovereign's favor.",
                     AcceptText = $"{realm} sold its titles — the coffers swell, but the smallfolk sneer at the new 'lords'.",
                     RejectText = $"{realm} refused to cheapen its honors. The nobles withdraw, respect grudgingly intact.",
@@ -114,6 +118,7 @@ namespace AIROG_GrandStrategy
                 },
                 new PetitionData
                 {
+                    Role       = "CHANCELLOR",
                     Text       = "The temples ask the crown to fund a holy procession through every holding of the realm.",
                     AcceptText = $"Censers and hymns wound through {realm} — the faithful credit the sovereign's piety.",
                     RejectText = $"The temples of {realm} were refused. Sermons grow pointed about ungodly rulers.",
@@ -122,15 +127,43 @@ namespace AIROG_GrandStrategy
                 },
                 new PetitionData
                 {
+                    Role       = "MARSHAL",
                     Text       = $"A famed mercenary company offers its swords to {realm} — for a price, and winter quartering.",
                     AcceptText = $"The free company took {realm}'s coin — hardened blades now march under your banner.",
                     RejectText = $"The mercenaries shrugged and moved on; perhaps a rival paid better.",
                     AcceptGold = -30, AcceptArmy = +8, AcceptUnrest = +3,
                     RejectGold = 0,
                 },
+                new PetitionData
+                {
+                    Role       = "SPYMASTER",
+                    Text       = "Your spymaster requests coin to root out a conspiracy before it ripens — pay for silence, or let the plotters be dealt with in the open square?",
+                    AcceptText = $"Gold bought silence — the conspirators disappeared without a trace, and {realm}'s grip tightens unseen.",
+                    RejectText = $"The plotters were dragged into the square and made an example of — {realm} takes note, uneasily.",
+                    AcceptGold = -25, AcceptUnrest = -3,
+                    RejectUnrest = +10,
+                },
+                new PetitionData
+                {
+                    Role       = "SPYMASTER",
+                    Text       = $"Foreign agents offer to sell {realm} intelligence on a rival's war plans — for a price only your spymaster can vouch is honest.",
+                    AcceptText = $"The intelligence proved true — {realm}'s spymaster now holds a rival's secrets in hand.",
+                    RejectText = $"{realm} refused the offer — if it was true, the secrets went to someone else.",
+                    AcceptGold = -20, AcceptArmy = +2,
+                    RejectGold = 0,
+                },
             };
 
-            var pick = pool[rng.Next(pool.Count)];
+            // A recruited advisor triples the odds their own domain's petitions surface —
+            // the court reflects who actually has the sovereign's ear
+            var weighted = new List<PetitionData>();
+            foreach (var p in pool)
+            {
+                int weight = !string.IsNullOrEmpty(p.Role) && s.Advisors.Any(a => a.Role == p.Role) ? 3 : 1;
+                for (int i = 0; i < weight; i++) weighted.Add(p);
+            }
+
+            var pick = weighted[rng.Next(weighted.Count)];
             pick.ExpiresTurn = turn + PETITION_LIFETIME_TURNS;
             return pick;
         }

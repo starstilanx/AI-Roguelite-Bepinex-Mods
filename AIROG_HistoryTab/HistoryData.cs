@@ -43,13 +43,31 @@ namespace AIROG_HistoryTab
                 string filePath = Path.Combine(saveDir, "universe_history.json");
                 var dataList = new List<HistoryEntry>();
                 
-                // Note: ConditionalWeakTable is hard to iterate. 
-                // We might need to keep a separate list of weak references or handle this differently.
-                // For now, let's assume we can get all universes from the player.
                 var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
-                if (manager?.playerCharacter?.pcGameEntity?.universes != null)
+                if (manager != null)
                 {
-                    foreach (var uni in manager.playerCharacter.pcGameEntity.universes)
+                    var allUniverses = new HashSet<UniverseInfo>();
+                    
+                    var currentUni = manager.GetCurrentUniverse();
+                    if (currentUni != null) allUniverses.Add(currentUni);
+
+                    if (manager.scenarioState?.universes != null)
+                    {
+                        foreach (var uni in manager.scenarioState.universes)
+                        {
+                            if (uni != null) allUniverses.Add(uni);
+                        }
+                    }
+
+                    if (manager.playerCharacter?.pcGameEntity?.universes != null)
+                    {
+                        foreach (var uni in manager.playerCharacter.pcGameEntity.universes)
+                        {
+                            if (uni != null) allUniverses.Add(uni);
+                        }
+                    }
+
+                    foreach (var uni in allUniverses)
                     {
                         if (_universeHistoryMap.TryGetValue(uni, out var entry))
                         {
@@ -77,11 +95,32 @@ namespace AIROG_HistoryTab
                 if (dataList == null) return;
 
                 var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
-                if (manager?.playerCharacter?.pcGameEntity?.universes != null)
+                if (manager != null)
                 {
+                    var allUniverses = new List<UniverseInfo>();
+                    
+                    var currentUni = manager.GetCurrentUniverse();
+                    if (currentUni != null) allUniverses.Add(currentUni);
+
+                    if (manager.scenarioState?.universes != null)
+                    {
+                        foreach (var uni in manager.scenarioState.universes)
+                        {
+                            if (uni != null && !allUniverses.Contains(uni)) allUniverses.Add(uni);
+                        }
+                    }
+
+                    if (manager.playerCharacter?.pcGameEntity?.universes != null)
+                    {
+                        foreach (var uni in manager.playerCharacter.pcGameEntity.universes)
+                        {
+                            if (uni != null && !allUniverses.Contains(uni)) allUniverses.Add(uni);
+                        }
+                    }
+
                     foreach (var entry in dataList)
                     {
-                        var uni = manager.playerCharacter.pcGameEntity.universes.Find(u => u.uuid == entry.UniverseUuid);
+                        var uni = allUniverses.Find(u => u.uuid == entry.UniverseUuid);
                         if (uni != null)
                         {
                             SetHistory(uni, entry.HistoryText);

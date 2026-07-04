@@ -72,6 +72,7 @@ namespace AIROG_GrandStrategy
             if (s.Wonders == null)            s.Wonders            = new List<string>();
             if (string.IsNullOrEmpty(s.TaxPolicy)) s.TaxPolicy     = "NORMAL";
             if (s.Deeds == null)              s.Deeds              = new List<DominionDeed>();
+            if (s.CasusBelliExpiry == null)   s.CasusBelliExpiry   = new Dictionary<string, int>();
             foreach (var h in s.Holdings.Values)
                 if (h.Improvements == null) h.Improvements = new List<string>();
         }
@@ -94,6 +95,34 @@ namespace AIROG_GrandStrategy
             return AIROG_WorldExpansion.WorldData.CurrentState != null
                 ? AIROG_WorldExpansion.WorldData.CurrentState.CurrentTurn : 0;
         }
+
+        // ── Chronicle integration (soft dependency via reflection, same pattern as AIROG_Insight) ──
+        // Milestone dominion beats (founding, victory, wonders, vassalage) get recorded into
+        // Chronicle's chapter history if the mod is installed; a no-op otherwise.
+        public static void TryRecordChronicleBeat(string summary)
+        {
+            try
+            {
+                var mgrType = Type.GetType("AIROG_Chronicle.ChronicleManager, AIROG_Chronicle");
+                var beatType = Type.GetType("AIROG_Chronicle.ChronicleBeat, AIROG_Chronicle");
+                if (mgrType == null || beatType == null) return;
+
+                int turn = 0;
+                var state = mgrType.GetProperty("State")?.GetValue(null);
+                if (state != null)
+                    turn = (int)(state.GetType().GetProperty("GlobalTurn")?.GetValue(state) ?? 0);
+
+                var beat = Activator.CreateInstance(beatType);
+                beatType.GetProperty("Turn")?.SetValue(beat, turn);
+                beatType.GetProperty("Summary")?.SetValue(beat, summary);
+                beatType.GetProperty("IsMilestone")?.SetValue(beat, true);
+                mgrType.GetMethod("RecordBeat")?.Invoke(null, new[] { beat });
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[GrandStrategy] Chronicle beat integration failed: {e.Message}");
+            }
+        }
     }
 
     [Serializable]
@@ -114,8 +143,9 @@ namespace AIROG_GrandStrategy
         // placeUuid → holding detail (names cached at claim time so UIs/providers avoid uuid lookups)
         public Dictionary<string, HoldingData> Holdings = new Dictionary<string, HoldingData>();
 
-        public List<Advisor>   Advisors           = new List<Advisor>();      // Phase 2
+        public List<Advisor>   Advisors           = new List<Advisor>();      // recruited council members
         public HashSet<string> CasusBelli         = new HashSet<string>();    // faction uuids we hold claims against
+        public Dictionary<string, int> CasusBelliExpiry = new Dictionary<string, int>(); // uuid → WorldExpansion turn the claim goes stale
         public HashSet<string> VassalFactionUuids = new HashSet<string>();
         public Dictionary<string, string> VassalNames = new Dictionary<string, string>(); // uuid → name, cached at vassalization
 
@@ -144,7 +174,7 @@ namespace AIROG_GrandStrategy
     [Serializable]
     public class Advisor
     {
-        public string Role        = "";  // Marshal, Steward, Spymaster, Chancellor
+        public string Role        = "";  // MARSHAL, STEWARD, SPYMASTER, CHANCELLOR
         public string Name        = "";
         public string Personality = "";
         public int    Loyalty     = 50;
@@ -173,5 +203,6 @@ namespace AIROG_GrandStrategy
         public int RejectUnrest;
         public int RejectArmy;
         public int ExpiresTurn;          // WorldExpansion turn after which the petition lapses (ignored = unrest)
+        public string Role = "";         // MARSHAL/STEWARD/SPYMASTER/CHANCELLOR — biases selection toward a matching advisor
     }
 }

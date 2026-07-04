@@ -1,4 +1,4 @@
-# AIROG_GrandStrategy — 4X Layer Design (v0.3.1)
+# AIROG_GrandStrategy — 4X Layer Design (v0.4.0)
 
 A 4X experience layered on top of **AIROG_WorldExpansion** (hard dependency) and
 **AIROG_GenContext** (soft, file-based). The player stops being just an adventurer
@@ -51,10 +51,17 @@ The four X's, mapped onto what WorldExpansion already simulates:
 | PROJECT <wonder> | 1 CP + gold | Begin a great work in the capital (one at a time, 3 ticks) |
 | SCOUT <faction> | 1 CP + 15 | Spy mission reveals a rival's resources, population, and estimated combat strength (55% precise, 45% noisy) |
 | DISBAND | 1 CP | Demobilise 10 army → +50 population, −1 unrest per holding (trade military mass for civilian stability) |
+| PACT <faction> | 1 CP + 15 | Swear non-aggression (`DiplomaticTier.NonAggression`) — relations must already be Cold War or better |
+| TRADE_DEAL <faction> | 1 CP + 20 | Sign a trade pact (`DiplomaticTier.TradePact`) — standing income every strategic tick while it holds; needs PACT first |
+| COUNCIL <role> | 1 CP + 40 | Recruit an advisor (MARSHAL/STEWARD/SPYMASTER/CHANCELLOR, one per role) who triples the odds their domain's petitions reach the throne |
 
-Improvements: **FARM** (−unrest, +pop), **MINE** (+6 treasury), **MARKET**
-(+4 × market multiplier), **GARRISON** (+15 defense vs raids/campaign defense),
-**WATCHTOWER** (halves enemy raid success).
+Improvements (max 4/holding): **FARM** (−unrest, +pop), **MINE** (+6 treasury),
+**MARKET** (+4 × market multiplier), **GARRISON** (+15 defense vs raids/campaign
+defense), **WATCHTOWER** (halves enemy raid success), **SHRINE** (−2 unrest/tick),
+**BARRACKS** (+1 army strength/tick, passive).
+
+ANNEX and CAMPAIGN both accept an optional map-clicked target (DominionUI's 🎯
+pick mode) in place of the automatic nearest-unclaimed / random-adjacent pick.
 
 ## v0.2.0 systems
 - **Great works (wonders)** — capital-only, one under construction at a time:
@@ -74,10 +81,47 @@ Improvements: **FARM** (−unrest, +pop), **MINE** (+6 treasury), **MARKET**
   it); lapses after ~3 ticks → +5 unrest everywhere. Queued as DOMINION_PETITION
   and injected into prompts so courtiers can press the matter in-fiction.
 
+## v0.4.0 systems
+- **Two-sided war** — a decisive enemy win in `CheckRetaliation` (attack > defense × 1.5,
+  25% chance) seizes a non-capital border holding outright instead of just raiding it.
+  The capital can never fall this way, but ordinary holdings now carry real war risk —
+  the eXterminate axis finally cuts both directions.
+- **Overextension** — every non-capital holding accrues up to +3 unrest/tick scaled by
+  raw distance from the capital (~1 unrest per 300 world-units), a soft cap on sprawl
+  that rewards contiguous territory over scattered conquests.
+- **Espionage counter-play** — rivals holding grievance ≥ 3 against the dominion get a
+  15%/tick chance to SABOTAGE (gold) or incite unrest in a holding — the same tools the
+  player's own SABOTAGE/INCITE orders use, now aimed back.
+- **Diplomatic pacts** — PACT and TRADE_DEAL ride WorldExpansion's own
+  `DiplomaticTier.NonAggression`/`TradePact` tiers (already read by `WorldSimulation`'s
+  own grievance logic), so a trade pact is a real, sim-visible relationship, not
+  dominion-only bookkeeping. Trade income (+5g/tick/partner) is derived live from tier
+  each strategic tick — no separate state to desync.
+- **Stale claims** — fabricated casus belli now expire ~40 turns (~8 ticks) after
+  fabrication (`CasusBelliExpiry`) if never spent on a WAR declaration.
+- **Council of Advisors (a first slice of Phase 2)** — COUNCIL recruits one advisor per
+  role (Marshal/Steward/Spymaster/Chancellor, procedurally named, no AI call). A
+  recruited advisor triples the selection weight of `CourtSystem` petitions tagged with
+  their role; 8 templates now span all four roles (2 new Spymaster petitions added).
+  Advisors are injected into GenContext with name + role + personality so the narrative
+  AI can voice them.
+- **WONDER AGE** — 4th victory condition: all three wonders standing in the capital.
+- **Dominion map presence** — a gold "♛ Name  ⚔Army" label now floats above the
+  capital's icon on the world map regardless of whether WorldExpansion's POL lens is on.
+- **Map-click targeting** — a 🎯 toggle next to ANNEX/CAMPAIGN arms pick mode; the next
+  left-click on a `MapLocation` (intercepted via a Harmony prefix on `OnPointerUp`, which
+  also blocks the native travel-click while armed) supplies the specific place instead of
+  the automatic nearest/adjacent choice.
+- **GS_RENAME <name>** — rename an already-founded dominion.
+- Chronicle crossover: founding, wonder completions, vassalization, and victories are
+  recorded as milestone beats via the same soft reflection dependency AIROG_Insight uses
+  (`AIROG_Chronicle.ChronicleManager.RecordBeat`) — a no-op if Chronicle isn't installed.
+
 ## Victory conditions (non-ending — roguelite continues, legacy title awarded)
 - **DOMINATION** — own ≥ 50% of top-level places (min 5)
 - **HEGEMONY** — every surviving faction at Alliance tier or vassal
 - **GOLDEN AGE** — treasury ≥ 500, zero unrest, ≥ 5 holdings
+- **WONDER AGE** — all three great works (Citadel, Mint, Temple) built
 
 ## Prompt injection
 `AIROG_GenContext/ContextProviders/GrandStrategyProvider.cs` (Priority 75, right
@@ -102,19 +146,21 @@ GrandStrategy itself never injects prompts (same rule as WorldExpansion).
 - **Phase 0 (this scaffold)** — data model, founding, strategic tick, order
   engine, retaliation, rebellion, victories, GenContext provider. Console-driven:
   `GS_FOUND`, `GS_STATUS`, `GS_ORDERS`, `GS_ORDER <TYPE> [target]`, `GS_TICK`, `GS_CP`.
-- **Phase 1 — Dominion UI + map integration** (v0.3.0: panel DONE): `DominionUI.cs`
+- **Phase 1 — Dominion UI + map integration** (DONE as of v0.4.0): `DominionUI.cs`
   adds a "DOM" button on the world map beside the political lens button (same
   cloned-frame pattern), toggling a left-anchored control panel on `mapViewTrans`:
-  status readout, all 15 orders as buttons, improvement/wonder/target cycle
+  status readout, all 18 orders as buttons, improvement/wonder/advisor/target cycle
   selectors, tax cycler, petition ACCEPT/REJECT, founding button (default name
   "Dominion of <player>"; console GS_FOUND for custom names), last-result line.
-  Still open: click-a-cell to target ANNEX/CAMPAIGN; dominion label/army marker
-  on the lens overlay.
-- **Phase 2 — Council of Advisors**: 4 AI-generated advisors (Marshal, Steward,
-  Spymaster, Chancellor) with personalities and loyalty; standing-gated petitions
-  each strategic tick ("Marshal urges war with X — grievances mount"); AI-narrated
-  order outcomes via AIAsker instead of templated text. Also: sim factions can
-  target the dominion in their random actions (full two-sided warfare).
+  Map-click targeting (🎯 pick mode on ANNEX/CAMPAIGN) and the capital label/army
+  marker on the world map both shipped in v0.4.0.
+- **Phase 2 — Council of Advisors**: v0.4.0 shipped the recruitment half (COUNCIL
+  order, 4 procedurally-named roles, role-weighted petitions, GenContext voicing).
+  Still open: AI-narrated order outcomes via AIAsker instead of templated text, and
+  advisors initiating their own petitions proactively rather than only biasing
+  CourtSystem's random draw. Also still open: sim factions targeting the dominion
+  in their own random actions beyond the tick-based retaliation/espionage v0.4.0
+  added (i.e. AI-driven wars the dominion didn't provoke).
 - **Phase 3 — Free-text rule**: natural-language orders parsed via AIAsker into
   structured orders; advisor chat; succession/legacy events via Chronicle.
 

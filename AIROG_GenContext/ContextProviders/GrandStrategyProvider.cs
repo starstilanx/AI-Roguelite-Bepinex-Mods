@@ -35,11 +35,19 @@ namespace AIROG_GenContext.ContextProviders
             public PetitionStub PendingPetition;
             public List<DeedStub> Deeds;
             public string ActiveVictory;
+            public List<AdvisorStub> Advisors;
         }
 
         private class PetitionStub
         {
             public string Text;
+        }
+
+        private class AdvisorStub
+        {
+            public string Role;
+            public string Name;
+            public string Personality;
         }
 
         private class HoldingStub
@@ -88,6 +96,9 @@ namespace AIROG_GenContext.ContextProviders
             if (_cache.VassalNames != null && _cache.VassalNames.Count > 0)
                 sb.Append($"\nVassal realms sworn to the dominion: {string.Join(", ", _cache.VassalNames.Values)}");
 
+            if (_cache.Advisors != null && _cache.Advisors.Count > 0)
+                sb.Append($"\nCourt advisors: {string.Join(", ", _cache.Advisors.Select(a => $"{a.Name} the {a.Role}"))}");
+
             if (_cache.Deeds != null && _cache.Deeds.Count > 0)
             {
                 var recent = _cache.Deeds.Skip(Math.Max(0, _cache.Deeds.Count - 3)).Select(d => d.Description);
@@ -107,6 +118,8 @@ namespace AIROG_GenContext.ContextProviders
                 sb.Append($"\n• The {WonderName(_cache.WonderInProgress)} is under construction in the capital — scaffolds, artisans, and hauled stone are everywhere there.");
             if (_cache.PendingPetition != null && !string.IsNullOrEmpty(_cache.PendingPetition.Text))
                 sb.Append($"\n• A petition awaits the sovereign's judgment: \"{_cache.PendingPetition.Text}\" — courtiers and petitioners may press the matter.");
+            if (_cache.Advisors != null && _cache.Advisors.Count > 0)
+                sb.Append($"\n• Court advisors may appear and speak in character: {string.Join(" ", _cache.Advisors.Select(a => $"{a.Name} the {a.Role} — {a.Personality}"))}");
             if (!string.IsNullOrEmpty(_cache.ActiveVictory))
                 sb.Append($"\n• {_cache.DominionName} has achieved a legendary triumph ({_cache.ActiveVictory}) — its renown colors every interaction.");
 

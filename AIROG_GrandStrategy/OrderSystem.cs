@@ -13,7 +13,9 @@ namespace AIROG_GrandStrategy
     {
         private static readonly System.Random rng = new System.Random();
 
-        public static readonly string[] Improvements = { "FARM", "MINE", "MARKET", "GARRISON", "WATCHTOWER" };
+        public static readonly string[] Improvements = { "FARM", "MINE", "MARKET", "GARRISON", "WATCHTOWER", "SHRINE", "BARRACKS" };
+        public const int MAX_IMPROVEMENTS_PER_HOLDING = 4;
+        public static readonly string[] AdvisorRoles = { "MARSHAL", "STEWARD", "SPYMASTER", "CHANCELLOR" };
 
         public class OrderDef
         {
@@ -42,6 +44,9 @@ namespace AIROG_GrandStrategy
             new OrderDef { Type = "PROJECT",   Cp = 1, Gold = 0,  Usage = "PROJECT <CITADEL|MINT|TEMPLE> — begin a great work in the capital" },
             new OrderDef { Type = "SCOUT",     Cp = 1, Gold = 15, Usage = "SCOUT <faction> — spy mission reveals a rival's strength and resources" },
             new OrderDef { Type = "DISBAND",   Cp = 1, Gold = 0,  Usage = "DISBAND — demobilise 10 army → +50 population (reduces war-weariness pressure)" },
+            new OrderDef { Type = "PACT",       Cp = 1, Gold = 15, Usage = "PACT <faction> — swear non-aggression (relations must be Cold War or better)" },
+            new OrderDef { Type = "TRADE_DEAL", Cp = 1, Gold = 20, Usage = "TRADE_DEAL <faction> — sign a trade pact for standing income each tick (needs a non-aggression pact first)" },
+            new OrderDef { Type = "COUNCIL",    Cp = 1, Gold = 40, Usage = "COUNCIL <MARSHAL|STEWARD|SPYMASTER|CHANCELLOR> — recruit an advisor who biases which petitions reach the throne" },
         };
 
         // Great works: one under construction at a time, capital-only, passive effects once built.
@@ -62,7 +67,9 @@ namespace AIROG_GrandStrategy
         };
 
         // Returns a player-facing result string (also logged); null-safe on all native lookups.
-        public static string Issue(GameplayManager manager, string type, string arg)
+        // placeUuid: optional map-click target for ANNEX/CAMPAIGN (DominionUI's pick mode);
+        // null falls back to the automatic nearest/adjacent selection.
+        public static string Issue(GameplayManager manager, string type, string arg, string placeUuid = null)
         {
             var s = GrandStrategyData.State;
             if (!s.Founded) return "You have not founded a dominion yet. Use GS_FOUND <name>.";
@@ -75,14 +82,14 @@ namespace AIROG_GrandStrategy
             string result;
             switch (type)
             {
-                case "ANNEX":     result = ResolveAnnex(manager); break;
+                case "ANNEX":     result = ResolveAnnex(manager, placeUuid); break;
                 case "DEVELOP":   result = ResolveDevelop(arg); break;
                 case "LEVY":      result = ResolveLevy(); break;
                 case "TRADE":     result = ResolveTrade(); break;
                 case "ENVOY":     result = ResolveEnvoy(manager, arg); break;
                 case "FABRICATE": result = ResolveFabricate(manager, arg); break;
                 case "WAR":       result = ResolveWar(manager, arg); break;
-                case "CAMPAIGN":  result = ResolveCampaign(manager, arg); break;
+                case "CAMPAIGN":  result = ResolveCampaign(manager, arg, placeUuid); break;
                 case "INCITE":    result = ResolveIncite(manager, arg); break;
                 case "SABOTAGE":  result = ResolveSabotage(manager, arg); break;
                 case "PILLAGE":   result = ResolvePillage(manager, arg); break;
@@ -92,6 +99,9 @@ namespace AIROG_GrandStrategy
                 case "PROJECT":   result = ResolveProject(arg); break;
                 case "SCOUT":     result = ResolveScout(manager, arg); break;
                 case "DISBAND":   result = ResolveDisband(); break;
+                case "PACT":       result = ResolvePact(manager, arg); break;
+                case "TRADE_DEAL": result = ResolveTradeDeal(manager, arg); break;
+                case "COUNCIL":    result = ResolveCouncil(arg); break;
                 default:          result = null; break;
             }
 
@@ -110,7 +120,7 @@ namespace AIROG_GrandStrategy
 
         // ─── Resolution ───────────────────────────────────────────────────────────
 
-        private static string ResolveAnnex(GameplayManager manager)
+        private static string ResolveAnnex(GameplayManager manager, string preferredPlaceUuid = null)
         {
             var s = GrandStrategyData.State;
             List<Place> topPlaces;
@@ -127,19 +137,30 @@ namespace AIROG_GrandStrategy
                 .GroupBy(p => p.uuid).ToDictionary(g => g.Key, g => g.First());
 
             Place best = null;
-            float bestDist = float.MaxValue;
-            foreach (var ownUuid in s.Holdings.Keys)
+            if (!string.IsNullOrEmpty(preferredPlaceUuid))
             {
-                Place ownPl;
-                if (!placeByUuid.TryGetValue(ownUuid, out ownPl)) continue;
-                foreach (var cand in topPlaces)
-                {
-                    if (cand == null || owned.Contains(cand.uuid)) continue;
-                    float d = (cand.worldCoords - ownPl.worldCoords).sqrMagnitude;
-                    if (d < bestDist) { bestDist = d; best = cand; }
-                }
+                // A map-click target from DominionUI's pick mode overrides the nearest-place heuristic
+                if (!placeByUuid.TryGetValue(preferredPlaceUuid, out best) || best == null)
+                    return "!That place could not be found on the map.";
+                if (owned.Contains(preferredPlaceUuid))
+                    return $"!{best.GetPrettyName()} is already claimed.";
             }
-            if (best == null) return "!No unclaimed land borders your dominion.";
+            else
+            {
+                float bestDist = float.MaxValue;
+                foreach (var ownUuid in s.Holdings.Keys)
+                {
+                    Place ownPl;
+                    if (!placeByUuid.TryGetValue(ownUuid, out ownPl)) continue;
+                    foreach (var cand in topPlaces)
+                    {
+                        if (cand == null || owned.Contains(cand.uuid)) continue;
+                        float d = (cand.worldCoords - ownPl.worldCoords).sqrMagnitude;
+                        if (d < bestDist) { bestDist = d; best = cand; }
+                    }
+                }
+                if (best == null) return "!No unclaimed land borders your dominion.";
+            }
 
             ClaimPlace(manager, best);
             return $"The banners of {s.DominionName} now fly over {best.GetPrettyName()} — annexed without bloodshed.";
@@ -177,7 +198,8 @@ namespace AIROG_GrandStrategy
 
             if (holding.Improvements.Contains(imp)) return $"!{holding.Name} already has a {imp.ToLower()}."
                 ;
-            if (holding.Improvements.Count >= 3) return $"!{holding.Name} has no room for more improvements (max 3)."
+            if (holding.Improvements.Count >= MAX_IMPROVEMENTS_PER_HOLDING)
+                return $"!{holding.Name} has no room for more improvements (max {MAX_IMPROVEMENTS_PER_HOLDING})."
                 ;
 
             holding.Improvements.Add(imp);
@@ -237,6 +259,7 @@ namespace AIROG_GrandStrategy
             if (s.CasusBelli.Contains(target.uuid)) return $"!You already hold a claim against {target.GetPrettyName()}.";
 
             s.CasusBelli.Add(target.uuid);
+            s.CasusBelliExpiry[target.uuid] = GrandStrategyData.WorldExpansionTurn() + 40; // ~8 strategic ticks before the claim goes stale
             string key = WorldData.GetRelationshipKey(s.FactionUuid, target.uuid);
             WorldData.ShiftTier(key, -1, "fabricated claims", s.DominionName, target.GetPrettyName());
             return $"Scribes of {s.DominionName} have fabricated ancient claims against {target.GetPrettyName()}.";
@@ -263,7 +286,7 @@ namespace AIROG_GrandStrategy
             return $"{s.DominionName} has declared war on {target.GetPrettyName()} — {casus}!";
         }
 
-        private static string ResolveCampaign(GameplayManager manager, string arg)
+        private static string ResolveCampaign(GameplayManager manager, string arg, string preferredPlaceUuid = null)
         {
             var s = GrandStrategyData.State;
             Faction target = FindFaction(manager, arg);
@@ -313,9 +336,17 @@ namespace AIROG_GrandStrategy
                 {
                     adjacentEnemyPlaces = enemy.ClaimedPlaceUuids.ToList();
                 }
-                if (adjacentEnemyPlaces.Count > 0)
+
+                // A map-click target from DominionUI's pick mode overrides the random/adjacent pick,
+                // as long as the enemy still actually holds it
+                List<string> candidatePlaces =
+                    !string.IsNullOrEmpty(preferredPlaceUuid) && enemy.ClaimedPlaceUuids.Contains(preferredPlaceUuid)
+                        ? new List<string> { preferredPlaceUuid }
+                        : adjacentEnemyPlaces;
+
+                if (candidatePlaces.Count > 0)
                 {
-                    string seized = adjacentEnemyPlaces[rng.Next(adjacentEnemyPlaces.Count)];
+                    string seized = candidatePlaces[rng.Next(candidatePlaces.Count)];
                     enemy.ClaimedPlaceUuids.Remove(seized);
                     string placeName = ClaimPlaceByUuid(manager, seized) ?? "a territory";
                     WorldData.QueuePlayerEvent(
@@ -457,6 +488,7 @@ namespace AIROG_GrandStrategy
             WorldData.QueuePlayerEvent(
                 $"{tName} has bent the knee! They are now a vassal of {s.DominionName}, sworn to pay tribute.",
                 "DOMINION_VASSAL");
+            GrandStrategyData.TryRecordChronicleBeat($"{tName} bent the knee to {s.DominionName}, becoming a vassal realm.");
             return $"{tName} kneels before the throne of {s.DominionName} — a vassal realm, sworn to tribute and loyalty.";
         }
 
@@ -548,6 +580,91 @@ namespace AIROG_GrandStrategy
                 h.Unrest = Math.Max(0, h.Unrest - 1);
 
             return $"{s.DominionName} has demobilised a company of veterans — army strength {s.ArmyStrength}, population +50.";
+        }
+
+        private static string ResolvePact(GameplayManager manager, string arg)
+        {
+            var s = GrandStrategyData.State;
+            Faction target = FindFaction(manager, arg);
+            if (target == null) return "!No faction matches that name.";
+
+            string key = WorldData.GetRelationshipKey(s.FactionUuid, target.uuid);
+            if (WorldData.CurrentState.ActiveWars.ContainsKey(key))
+                return "!You cannot swear non-aggression with a faction you are at war with.";
+            var tier = WorldData.GetTier(key);
+            if (tier >= DiplomaticTier.NonAggression)
+                return $"!{target.GetPrettyName()} already honors a non-aggression pact with {s.DominionName}.";
+            if (tier < DiplomaticTier.ColdWar)
+                return $"!Relations with {target.GetPrettyName()} are too poisoned for a pact — improve them first (ENVOY).";
+
+            string tName = target.GetPrettyName();
+            WorldData.SetTier(key, DiplomaticTier.NonAggression, "non-aggression pact sworn",
+                WorldData.CurrentState.CurrentTurn, s.DominionName, tName);
+            return $"{s.DominionName} and {tName} swear a pact of non-aggression — swords stay sheathed between them.";
+        }
+
+        private static string ResolveTradeDeal(GameplayManager manager, string arg)
+        {
+            var s = GrandStrategyData.State;
+            Faction target = FindFaction(manager, arg);
+            if (target == null) return "!No faction matches that name.";
+
+            string key = WorldData.GetRelationshipKey(s.FactionUuid, target.uuid);
+            if (WorldData.CurrentState.ActiveWars.ContainsKey(key))
+                return "!You cannot open trade with a faction you are at war with.";
+            var tier = WorldData.GetTier(key);
+            if (tier >= DiplomaticTier.TradePact)
+                return $"!{s.DominionName} already trades freely with {target.GetPrettyName()}.";
+            if (tier < DiplomaticTier.NonAggression)
+                return $"!{target.GetPrettyName()} won't open trade routes without a non-aggression pact first (PACT).";
+
+            string tName = target.GetPrettyName();
+            WorldData.SetTier(key, DiplomaticTier.TradePact, "trade pact signed",
+                WorldData.CurrentState.CurrentTurn, s.DominionName, tName);
+            return $"Merchant caravans now flow freely between {s.DominionName} and {tName} — a standing trade pact, gold every tick.";
+        }
+
+        private static readonly string[] AdvisorNames = {
+            "Aldric", "Brennus", "Cassia", "Dorvan", "Elowen", "Faelan",
+            "Guinevra", "Halric", "Ithera", "Jorund", "Kestrel", "Lysandra"
+        };
+
+        private static string ResolveCouncil(string arg)
+        {
+            var s = GrandStrategyData.State;
+            string role = (arg ?? "").Trim().ToUpperInvariant();
+            if (!AdvisorRoles.Contains(role))
+                return "!Choose an advisor role: " + string.Join(", ", AdvisorRoles);
+            if (s.Advisors.Any(a => a.Role == role))
+                return $"!{s.DominionName} already retains a {role.ToLower()}.";
+
+            string name = AdvisorNames[rng.Next(AdvisorNames.Length)];
+            s.Advisors.Add(new Advisor { Role = role, Name = name, Personality = RolePersonality(role), Loyalty = 50 });
+            return $"{name} joins the court of {s.DominionName} as {RoleTitle(role)} — their counsel will shape which petitions reach the throne.";
+        }
+
+        private static string RoleTitle(string role)
+        {
+            switch (role)
+            {
+                case "MARSHAL":    return "Marshal";
+                case "STEWARD":    return "Steward";
+                case "SPYMASTER":  return "Spymaster";
+                case "CHANCELLOR": return "Chancellor";
+                default:           return role;
+            }
+        }
+
+        private static string RolePersonality(string role)
+        {
+            switch (role)
+            {
+                case "MARSHAL":    return "Blunt and battle-hardened; presses for strength over subtlety.";
+                case "STEWARD":    return "Frugal and pragmatic; watches the treasury like a hawk.";
+                case "SPYMASTER":  return "Guarded and watchful; trusts secrets more than soldiers.";
+                case "CHANCELLOR": return "Smooth-tongued and image-conscious; minds the crown's reputation.";
+                default:           return "";
+            }
         }
 
         // ─── Helpers ──────────────────────────────────────────────────────────────

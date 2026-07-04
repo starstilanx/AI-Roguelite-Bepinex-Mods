@@ -82,6 +82,7 @@ namespace AIROG_GrandStrategy
             WorldData.QueuePlayerEvent(
                 $"You have founded the dominion of {s.DominionName}, with {s.CapitalName} as its capital. The world's factions take note of a new sovereign.",
                 "DOMINION_FOUNDED");
+            GrandStrategyData.TryRecordChronicleBeat($"{s.DominionName} was founded, with {s.CapitalName} as its capital.");
             WorldEventsUI.MarkDirty();
             GrandStrategyData.SaveToCurrentDir();
             WorldData.SaveToCurrentDir();
@@ -127,6 +128,14 @@ namespace AIROG_GrandStrategy
                 // Tax edict: the crown's greed (or mercy) is felt everywhere, every tick
                 if (s.TaxPolicy == "HIGH")     h.Unrest += 3;
                 else if (s.TaxPolicy == "LOW") h.Unrest = Math.Max(0, h.Unrest - 2);
+
+                // Overextension: holdings far from the capital are harder to administer,
+                // naturally discouraging sprawl without an explicit distance cap
+                if (!h.IsCapital)
+                {
+                    int overextension = OverextensionUnrest(s, kvp.Key);
+                    if (overextension > 0) h.Unrest += overextension;
+                }
             }
             if (s.TaxPolicy == "HIGH")     income = income * 3 / 2;
             else if (s.TaxPolicy == "LOW") income = income / 2;
@@ -136,12 +145,87 @@ namespace AIROG_GrandStrategy
 
             TickWonder(s);
             TickVassals(s);
+            TickDiplomacy(manager, s);
             CourtSystem.Tick(s);
             CheckRetaliation(manager, s);
+            CheckEspionage(manager, s);
             CheckRebellion(manager, s, fac);
             CheckVictory(manager, s, fac);
 
             GrandStrategyData.SaveToCurrentDir();
+        }
+
+        // Distance-based unrest: 1 unrest per ~300 world-units from the capital, capped at 3/tick
+        private static int OverextensionUnrest(DominionState s, string holdingUuid)
+        {
+            try
+            {
+                if (SS.I?.uuidToGameEntityMap == null) return 0;
+                if (!SS.I.uuidToGameEntityMap.TryGetValue(s.CapitalPlaceUuid, out var capEnt) || !(capEnt is Place capPlace)) return 0;
+                if (!SS.I.uuidToGameEntityMap.TryGetValue(holdingUuid, out var hEnt) || !(hEnt is Place hPlace)) return 0;
+                float dist = Vector2.Distance(capPlace.worldCoords, hPlace.worldCoords);
+                return Math.Min(3, Mathf.FloorToInt(dist / 300f));
+            }
+            catch { return 0; }
+        }
+
+        // Fabricated claims go stale over time; standing trade pacts pay the treasury each tick
+        private static void TickDiplomacy(GameplayManager manager, DominionState s)
+        {
+            int turn = GrandStrategyData.WorldExpansionTurn();
+            foreach (var uuid in s.CasusBelli.ToList())
+            {
+                if (!s.CasusBelliExpiry.TryGetValue(uuid, out int exp) || turn < exp) continue;
+                s.CasusBelli.Remove(uuid);
+                s.CasusBelliExpiry.Remove(uuid);
+                string name = WorldData.CurrentState.Factions.TryGetValue(uuid, out var fd) ? fd.Name : "a rival power";
+                GrandStrategyData.LogDeed($"{s.DominionName}'s claims against {name} have grown stale and are abandoned.");
+            }
+
+            int tradeIncome = 0;
+            foreach (var f in manager.GetCurrentFactions() ?? new List<Faction>())
+            {
+                if (f == null || f.uuid == s.FactionUuid || f.GetPrettyName() == "Player") continue;
+                if (WorldData.CurrentState.EliminatedFactions.Contains(f.uuid)) continue;
+                string key = WorldData.GetRelationshipKey(s.FactionUuid, f.uuid);
+                if (WorldData.GetTier(key) >= DiplomaticTier.TradePact) tradeIncome += 5;
+            }
+            if (tradeIncome > 0) s.Treasury += tradeIncome;
+        }
+
+        // Rivals nursing a real grievance occasionally strike back — the dominion's own
+        // SABOTAGE/INCITE orders, mirrored, so hostility isn't purely one-directional
+        private static void CheckEspionage(GameplayManager manager, DominionState s)
+        {
+            var rivals = (manager.GetCurrentFactions() ?? new List<Faction>())
+                .Where(f => f != null && f.uuid != s.FactionUuid && f.GetPrettyName() != "Player"
+                            && !WorldData.CurrentState.EliminatedFactions.Contains(f.uuid))
+                .ToList();
+
+            foreach (var f in rivals)
+            {
+                string key = WorldData.GetRelationshipKey(s.FactionUuid, f.uuid);
+                if (WorldData.GetGrievance(key) < 3) continue; // needs real animosity to bother
+                if (rng.NextDouble() > 0.15) continue;         // 15%/tick per sufficiently aggrieved rival
+
+                string fName = f.GetPrettyName();
+                if (rng.NextDouble() < 0.5)
+                {
+                    int loss = Math.Min(s.Treasury, rng.Next(10, 26));
+                    s.Treasury -= loss;
+                    WorldData.LogEvent($"Agents of {fName} sabotaged the treasury of {s.DominionName}, making off with {loss} gold.", "DOMINION");
+                    WorldData.QueuePlayerEvent($"{fName}'s saboteurs struck at your treasury — {loss} gold lost.", "DOMINION_SABOTAGED");
+                }
+                else
+                {
+                    var holding = s.Holdings.Values.OrderBy(_ => rng.Next()).FirstOrDefault();
+                    if (holding == null) continue;
+                    holding.Unrest += 8;
+                    WorldData.LogEvent($"Agitators sent by {fName} stirred unrest in {holding.Name}.", "DOMINION");
+                    WorldData.QueuePlayerEvent($"{fName} has stirred discontent in {holding.Name}.", "DOMINION_INCITED");
+                }
+                WorldEventsUI.MarkDirty();
+            }
         }
 
         private static void TickWonder(DominionState s)
@@ -161,6 +245,7 @@ namespace AIROG_GrandStrategy
             WorldData.QueuePlayerEvent(
                 $"The {name} is complete! {s.CapitalName} is transformed{(def != null ? $" ({def.Effect})" : "")}.",
                 "DOMINION_WONDER");
+            GrandStrategyData.TryRecordChronicleBeat($"The {name} was completed in {s.CapitalName}, capital of {s.DominionName}.");
             WorldEventsUI.MarkDirty();
         }
 
@@ -238,13 +323,42 @@ namespace AIROG_GrandStrategy
 
                 if (attack > defense)
                 {
-                    int plunder = Math.Min(s.Treasury, rng.Next(10, 26));
-                    s.Treasury -= plunder;
-                    holding.Unrest += 10;
-                    WorldData.LogEvent($"{enemyName} raided {holding.Name}, plundering {plunder} gold from {s.DominionName}!", "DOMINION");
-                    WorldData.QueuePlayerEvent(
-                        $"{enemyName} has raided {holding.Name} — {plunder} gold plundered and the people are shaken.",
-                        "DOMINION_RAIDED");
+                    // A rout, not just a win, risks the holding itself — never the capital.
+                    // War-only, and only for non-capital holdings, so the dominion has skin
+                    // in every war it starts or is drawn into, not just gold to lose.
+                    if (!holding.IsCapital && attack > defense * 1.5f && rng.NextDouble() < 0.25)
+                    {
+                        s.Holdings.Remove(targetEntry.Key);
+                        var facLoss = WorldData.GetFactionData(s.FactionUuid);
+                        facLoss.ClaimedPlaceUuids.Remove(targetEntry.Key);
+                        enemy.ClaimedPlaceUuids.Add(targetEntry.Key);
+                        try
+                        {
+                            if (SS.I != null && SS.I.uuidToGameEntityMap != null
+                                && SS.I.uuidToGameEntityMap.TryGetValue(targetEntry.Key, out var e) && e is Place place)
+                            {
+                                var enemyFaction = (manager.GetCurrentFactions() ?? new List<Faction>())
+                                    .FirstOrDefault(f => f != null && f.uuid == enemyUuid);
+                                if (enemyFaction != null) place.faction = enemyFaction;
+                            }
+                        }
+                        catch { }
+
+                        GrandStrategyData.LogDeed($"{holding.Name} fell to {enemyName}'s armies — the dominion's banners are torn down.");
+                        WorldData.LogEvent($"{enemyName} has seized {holding.Name} from {s.DominionName}!", "DOMINION");
+                        WorldData.QueuePlayerEvent(
+                            $"{enemyName}'s armies overran {holding.Name} — the holding is lost.", "DOMINION_HOLDING_LOST");
+                    }
+                    else
+                    {
+                        int plunder = Math.Min(s.Treasury, rng.Next(10, 26));
+                        s.Treasury -= plunder;
+                        holding.Unrest += 10;
+                        WorldData.LogEvent($"{enemyName} raided {holding.Name}, plundering {plunder} gold from {s.DominionName}!", "DOMINION");
+                        WorldData.QueuePlayerEvent(
+                            $"{enemyName} has raided {holding.Name} — {plunder} gold plundered and the people are shaken.",
+                            "DOMINION_RAIDED");
+                    }
                 }
                 else
                 {
@@ -327,12 +441,20 @@ namespace AIROG_GrandStrategy
                 desc = $"{s.DominionName} has entered a golden age — coffers overflowing, its people content across every holding.";
             }
 
+            // WONDER_AGE — every great work raised in the capital
+            if (won == null && s.Wonders.Count >= OrderSystem.WonderDefs.Count)
+            {
+                won  = "WONDER_AGE";
+                desc = $"The Grand Citadel, the Royal Mint, and the High Temple all crown {s.CapitalName} — {s.DominionName} will be remembered in stone.";
+            }
+
             if (won == null) return;
 
             s.ActiveVictory = won;
             GrandStrategyData.LogDeed(desc);
             WorldData.LogEvent(desc, "DOMINION");
             WorldData.QueuePlayerEvent(desc + " Bards already sing of your reign.", "DOMINION_VICTORY");
+            GrandStrategyData.TryRecordChronicleBeat(desc);
             WorldEventsUI.MarkDirty();
         }
     }
