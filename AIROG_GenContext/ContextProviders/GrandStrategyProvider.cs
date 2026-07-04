@@ -36,6 +36,19 @@ namespace AIROG_GenContext.ContextProviders
             public List<DeedStub> Deeds;
             public string ActiveVictory;
             public List<AdvisorStub> Advisors;
+            public LexStub Lex;
+        }
+
+        // Mirrors ThemeLexicon in AIROG_GrandStrategy — setting-appropriate terminology,
+        // auto-detected from the world's description (null on legacy saves)
+        private class LexStub
+        {
+            public string Key;
+            public string RulerTitle;
+            public string DomainNoun;
+            public string CurrencyWord;
+            public Dictionary<string, string> RoleTitles;
+            public Dictionary<string, string> WonderNames;
         }
 
         private class PetitionStub
@@ -69,6 +82,18 @@ namespace AIROG_GenContext.ContextProviders
         private float _lastLoadTime;
         private const float CACHE_REFRESH_RATE = 8f;
 
+        // Setting-appropriate terms with safe fallbacks (legacy saves have no lexicon yet)
+        private string Ruler    => _cache?.Lex?.RulerTitle   ?? "leader";
+        private string Domain   => _cache?.Lex?.DomainNoun   ?? "domain";
+        private string Currency => _cache?.Lex?.CurrencyWord ?? "coin";
+
+        private string RoleTitle(string role)
+        {
+            string t = null;
+            if (_cache?.Lex?.RoleTitles != null) _cache.Lex.RoleTitles.TryGetValue(role ?? "", out t);
+            return string.IsNullOrEmpty(t) ? role : t;
+        }
+
         public string GetContext(string prompt, int maxTokens)
         {
             RefreshCacheIfNeeded();
@@ -76,8 +101,8 @@ namespace AIROG_GenContext.ContextProviders
 
             var sb = new System.Text.StringBuilder();
             sb.Append($"[DOMINION — {_cache.DominionName}]\n");
-            sb.Append($"The player is the sovereign ruler of {_cache.DominionName} (capital: {_cache.CapitalName}). ");
-            sb.Append($"Treasury: {_cache.Treasury} gold | Army strength: {_cache.ArmyStrength}");
+            sb.Append($"The player is the {Ruler} of {_cache.DominionName}, a territorial power in this world (capital: {_cache.CapitalName}). ");
+            sb.Append($"Treasury: {_cache.Treasury} {Currency} | Army strength: {_cache.ArmyStrength}");
 
             if (_cache.Holdings != null && _cache.Holdings.Count > 0)
             {
@@ -94,10 +119,10 @@ namespace AIROG_GenContext.ContextProviders
                 sb.Append($"\nGreat works of the capital: {string.Join(", ", _cache.Wonders.Select(WonderName))}");
 
             if (_cache.VassalNames != null && _cache.VassalNames.Count > 0)
-                sb.Append($"\nVassal realms sworn to the dominion: {string.Join(", ", _cache.VassalNames.Values)}");
+                sb.Append($"\nSubordinate powers sworn to the dominion: {string.Join(", ", _cache.VassalNames.Values)}");
 
             if (_cache.Advisors != null && _cache.Advisors.Count > 0)
-                sb.Append($"\nCourt advisors: {string.Join(", ", _cache.Advisors.Select(a => $"{a.Name} the {a.Role}"))}");
+                sb.Append($"\nAdvisors: {string.Join(", ", _cache.Advisors.Select(a => $"{a.Name} ({RoleTitle(a.Role)})"))}");
 
             if (_cache.Deeds != null && _cache.Deeds.Count > 0)
             {
@@ -106,33 +131,37 @@ namespace AIROG_GenContext.ContextProviders
             }
 
             sb.Append("\n[DOMINION GUIDANCE]");
-            sb.Append($"\n• The player rules {_cache.DominionName}. NPCs within its holdings know them as their liege and react accordingly (deference, petitions, resentment where unrest is high).");
-            sb.Append("\n• Rival factions treat the player as a sovereign power, not a mere wanderer — envoys, threats, and courtesies befit a ruler.");
+            sb.Append($"\n• Express all dominion matters in this world's own idiom, technology level, and tone — titles, wealth, forces, and ceremonies must fit the setting. Never default to medieval royal language (kings, thrones, crowns) unless this world is actually medieval.");
+            sb.Append($"\n• The player leads {_cache.DominionName}. NPCs within its holdings know them as its {Ruler} and react accordingly (respect, requests for help, resentment where unrest is high).");
+            sb.Append($"\n• Rival factions treat the player as the {Ruler} of a real power, not a mere wanderer — envoys, threats, and courtesies befit their standing.");
             if (_cache.Holdings != null && _cache.Holdings.Values.Any(h => h.Unrest >= 50))
                 sb.Append("\n• Discontent simmers in the restless holdings — let murmurs of dissent color scenes there.");
             if (_cache.TaxPolicy == "HIGH")
-                sb.Append("\n• The crown's taxes are punishing — commoners grumble about the levies, and tax collectors are unwelcome figures.");
+                sb.Append($"\n• {_cache.DominionName}'s taxes are punishing — ordinary people grumble under the levies, and its collectors are unwelcome figures.");
             else if (_cache.TaxPolicy == "LOW")
-                sb.Append("\n• The crown taxes lightly — the smallfolk speak of a generous sovereign.");
+                sb.Append($"\n• {_cache.DominionName} taxes lightly — its people speak of a generous {Ruler}.");
             if (!string.IsNullOrEmpty(_cache.WonderInProgress))
-                sb.Append($"\n• The {WonderName(_cache.WonderInProgress)} is under construction in the capital — scaffolds, artisans, and hauled stone are everywhere there.");
+                sb.Append($"\n• The {WonderName(_cache.WonderInProgress)} is under construction in the capital — its worksite and work crews dominate the area.");
             if (_cache.PendingPetition != null && !string.IsNullOrEmpty(_cache.PendingPetition.Text))
-                sb.Append($"\n• A petition awaits the sovereign's judgment: \"{_cache.PendingPetition.Text}\" — courtiers and petitioners may press the matter.");
+                sb.Append($"\n• A matter awaits the player's judgment: \"{_cache.PendingPetition.Text}\" — petitioners may press the issue.");
             if (_cache.Advisors != null && _cache.Advisors.Count > 0)
-                sb.Append($"\n• Court advisors may appear and speak in character: {string.Join(" ", _cache.Advisors.Select(a => $"{a.Name} the {a.Role} — {a.Personality}"))}");
+                sb.Append($"\n• The player's advisors may appear and speak in character: {string.Join(" ", _cache.Advisors.Select(a => $"{a.Name} the {RoleTitle(a.Role)} — {a.Personality}"))}");
             if (!string.IsNullOrEmpty(_cache.ActiveVictory))
                 sb.Append($"\n• {_cache.DominionName} has achieved a legendary triumph ({_cache.ActiveVictory}) — its renown colors every interaction.");
 
             return sb.ToString();
         }
 
-        private static string WonderName(string key)
+        private string WonderName(string key)
         {
+            string n = null;
+            if (_cache?.Lex?.WonderNames != null) _cache.Lex.WonderNames.TryGetValue(key ?? "", out n);
+            if (!string.IsNullOrEmpty(n)) return n;
             switch (key)
             {
-                case "CITADEL": return "Grand Citadel";
-                case "MINT":    return "Royal Mint";
-                case "TEMPLE":  return "High Temple";
+                case "CITADEL": return "Great Bastion";
+                case "MINT":    return "Grand Exchange";
+                case "TEMPLE":  return "Great Sanctum";
                 default:        return key;
             }
         }

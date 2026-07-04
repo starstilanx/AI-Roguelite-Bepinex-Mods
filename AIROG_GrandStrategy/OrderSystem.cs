@@ -46,7 +46,7 @@ namespace AIROG_GrandStrategy
             new OrderDef { Type = "DISBAND",   Cp = 1, Gold = 0,  Usage = "DISBAND — demobilise 10 army → +50 population (reduces war-weariness pressure)" },
             new OrderDef { Type = "PACT",       Cp = 1, Gold = 15, Usage = "PACT <faction> — swear non-aggression (relations must be Cold War or better)" },
             new OrderDef { Type = "TRADE_DEAL", Cp = 1, Gold = 20, Usage = "TRADE_DEAL <faction> — sign a trade pact for standing income each tick (needs a non-aggression pact first)" },
-            new OrderDef { Type = "COUNCIL",    Cp = 1, Gold = 40, Usage = "COUNCIL <MARSHAL|STEWARD|SPYMASTER|CHANCELLOR> — recruit an advisor who biases which petitions reach the throne" },
+            new OrderDef { Type = "COUNCIL",    Cp = 1, Gold = 40, Usage = "COUNCIL <MARSHAL|STEWARD|SPYMASTER|CHANCELLOR> — recruit an advisor who biases which petitions reach you" },
         };
 
         // Great works: one under construction at a time, capital-only, passive effects once built.
@@ -61,10 +61,21 @@ namespace AIROG_GrandStrategy
 
         public static readonly List<WonderDef> WonderDefs = new List<WonderDef>
         {
-            new WonderDef { Key = "CITADEL", Name = "Grand Citadel", Gold = 80,  Ticks = 3, Effect = "capital defense +30, capital unrest −2/tick" },
-            new WonderDef { Key = "MINT",    Name = "Royal Mint",    Gold = 100, Ticks = 3, Effect = "+50% dominion income" },
-            new WonderDef { Key = "TEMPLE",  Name = "High Temple",   Gold = 90,  Ticks = 3, Effect = "−3 unrest in every holding per tick" },
+            // Name is a fallback only — display goes through the theme lexicon (WonderDisplayName)
+            new WonderDef { Key = "CITADEL", Name = "Great Bastion",  Gold = 80,  Ticks = 3, Effect = "capital defense +30, capital unrest −2/tick" },
+            new WonderDef { Key = "MINT",    Name = "Grand Exchange", Gold = 100, Ticks = 3, Effect = "+50% dominion income" },
+            new WonderDef { Key = "TEMPLE",  Name = "Great Sanctum",  Gold = 90,  Ticks = 3, Effect = "−3 unrest in every holding per tick" },
         };
+
+        // Setting-appropriate wonder name (keys stay stable for save compatibility)
+        public static string WonderDisplayName(string key)
+        {
+            var L = GrandStrategyData.L;
+            string themed = L.WonderName(key);
+            if (themed != key) return themed;
+            var def = WonderDefs.FirstOrDefault(w => w.Key == key);
+            return def != null ? def.Name : key;
+        }
 
         // Returns a player-facing result string (also logged); null-safe on all native lookups.
         // placeUuid: optional map-click target for ANNEX/CAMPAIGN (DominionUI's pick mode);
@@ -163,7 +174,7 @@ namespace AIROG_GrandStrategy
             }
 
             ClaimPlace(manager, best);
-            return $"The banners of {s.DominionName} now fly over {best.GetPrettyName()} — annexed without bloodshed.";
+            return $"The {GrandStrategyData.L.BannersNoun} of {s.DominionName} are now raised over {best.GetPrettyName()} — annexed without bloodshed.";
         }
 
         private static string ResolveDevelop(string arg)
@@ -215,10 +226,10 @@ namespace AIROG_GrandStrategy
 
             fac.Population -= 100;
             s.ArmyStrength += 10;
-            // Conscription is felt across the whole realm, not just the capital
+            // Conscription is felt across all holdings, not just the capital
             foreach (var h in s.Holdings.Values)
                 h.Unrest += (h.IsCapital ? 5 : 2);
-            return $"{s.DominionName} has levied fresh troops — army strength is now {s.ArmyStrength}."
+            return $"{s.DominionName} has raised fresh {GrandStrategyData.L.SoldiersNoun} — army strength is now {s.ArmyStrength}."
                 ;
         }
 
@@ -228,7 +239,7 @@ namespace AIROG_GrandStrategy
             float mult = WorldData.CurrentState.Market != null ? WorldData.CurrentState.Market.SellMultiplier : 1f;
             int gain = Mathf.RoundToInt(rng.Next(15, 41) * Mathf.Max(0.5f, mult));
             s.Treasury += gain;
-            return $"A trade caravan from {s.DominionName} returns with {gain} gold for the treasury.";
+            return $"A trading venture by {s.DominionName} pays off — {gain} {GrandStrategyData.L.CurrencyWord} into the treasury.";
         }
 
         private static string ResolveEnvoy(GameplayManager manager, string arg)
@@ -262,7 +273,7 @@ namespace AIROG_GrandStrategy
             s.CasusBelliExpiry[target.uuid] = GrandStrategyData.WorldExpansionTurn() + 40; // ~8 strategic ticks before the claim goes stale
             string key = WorldData.GetRelationshipKey(s.FactionUuid, target.uuid);
             WorldData.ShiftTier(key, -1, "fabricated claims", s.DominionName, target.GetPrettyName());
-            return $"Scribes of {s.DominionName} have fabricated ancient claims against {target.GetPrettyName()}.";
+            return $"Agents of {s.DominionName} have manufactured a claim against {target.GetPrettyName()} — a pretext for war, should you want one.";
         }
 
         private static string ResolveWar(GameplayManager manager, string arg)
@@ -350,14 +361,14 @@ namespace AIROG_GrandStrategy
                     enemy.ClaimedPlaceUuids.Remove(seized);
                     string placeName = ClaimPlaceByUuid(manager, seized) ?? "a territory";
                     WorldData.QueuePlayerEvent(
-                        $"Your armies have seized {placeName} from {tName}!", "DOMINION_CONQUEST");
-                    return $"Victory! The armies of {s.DominionName} crushed {tName}'s defenders and seized {placeName}.";
+                        $"Your forces have seized {placeName} from {tName}!", "DOMINION_CONQUEST");
+                    return $"Victory! The forces of {s.DominionName} crushed {tName}'s defenders and seized {placeName}.";
                 }
                 return $"Victory! {s.DominionName} routed {tName}'s forces in the field and plundered their supplies.";
             }
 
             s.ArmyStrength = Math.Max(0, s.ArmyStrength - rng.Next(4, 9));
-            return $"Defeat — {tName} repelled the armies of {s.DominionName}. Your forces limp home (strength {s.ArmyStrength}).";
+            return $"Defeat — {tName} repelled the forces of {s.DominionName}. Your {GrandStrategyData.L.SoldiersNoun} limp home (strength {s.ArmyStrength}).";
         }
 
         private static string ResolveIncite(GameplayManager manager, string arg)
@@ -396,7 +407,7 @@ namespace AIROG_GrandStrategy
                 try { target.DeltaRep(-10f); } catch { }
                 return $"Saboteurs of {s.DominionName} crippled {tName}'s stores — but were identified. {tName} knows who sent them.";
             }
-            return $"Unmarked saboteurs razed {tName}'s granaries and supply lines. None can prove who sent them.";
+            return $"Unmarked saboteurs wrecked {tName}'s stockpiles and supply lines. None can prove who sent them.";
         }
 
         private static string ResolvePillage(GameplayManager manager, string arg)
@@ -422,7 +433,7 @@ namespace AIROG_GrandStrategy
                 enemy.Resources = Math.Max(0, enemy.Resources - 15);
                 s.ArmyStrength  = Math.Max(5, s.ArmyStrength - rng.Next(1, 4));
                 WorldData.AddGrievance(key, 1);
-                return $"The armies of {s.DominionName} put {tName}'s countryside to the torch, carrying off {loot} gold in plunder.";
+                return $"Raiders of {s.DominionName} stripped {tName}'s outlying holdings, carrying off {loot} {GrandStrategyData.L.CurrencyWord} in plunder.";
             }
 
             s.ArmyStrength = Math.Max(0, s.ArmyStrength - rng.Next(3, 7));
@@ -449,14 +460,14 @@ namespace AIROG_GrandStrategy
                 s.Treasury    += reparations;
                 enemy.Resources = Math.Max(0, enemy.Resources - reparations);
                 WorldData.EndWar(key, $"{tName} sued for peace and paid reparations to {s.DominionName}");
-                return $"{tName} accepted terms and paid {reparations} gold in reparations. The war is over."
+                return $"{tName} accepted terms and paid {reparations} {GrandStrategyData.L.CurrencyWord} in reparations. The war is over."
                     ;
             }
 
             // Even match or losing position: we pay reparations
             enemy.Resources += 10;
             WorldData.EndWar(key, $"{s.DominionName} sued for peace and paid reparations");
-            return $"{s.DominionName} has sued for peace with {tName}, paying reparations to end the war. The realm breathes easier."
+            return $"{s.DominionName} has sued for peace with {tName}, paying reparations to end the war. Your people breathe easier."
                 ;
         }
 
@@ -466,11 +477,11 @@ namespace AIROG_GrandStrategy
             Faction target = FindFaction(manager, arg);
             if (target == null) return "!No faction matches that name.";
             if (s.VassalFactionUuids.Contains(target.uuid))
-                return $"!{target.GetPrettyName()} already bends the knee to {s.DominionName}.";
+                return $"!{target.GetPrettyName()} already answers to {s.DominionName}.";
 
             string key = WorldData.GetRelationshipKey(s.FactionUuid, target.uuid);
             if (!WorldData.CurrentState.ActiveWars.ContainsKey(key))
-                return $"!Vassalage is dictated at swordpoint — you must be at war with {target.GetPrettyName()}.";
+                return $"!Submission is dictated by force — you must be at war with {target.GetPrettyName()}.";
 
             string tName = target.GetPrettyName();
             var enemy = WorldData.GetFactionData(target.uuid);
@@ -479,17 +490,18 @@ namespace AIROG_GrandStrategy
             if (s.ArmyStrength < 15)
                 return "!Your army is too weak to enforce vassalage (strength 15+ required).";
 
-            WorldData.EndWar(key, $"{tName} bent the knee to {s.DominionName}");
-            WorldData.SetTier(key, DiplomaticTier.Alliance, "vassalage sworn",
+            var L = GrandStrategyData.L;
+            WorldData.EndWar(key, $"{tName} submitted to {s.DominionName}");
+            WorldData.SetTier(key, DiplomaticTier.Alliance, "submission sworn",
                 WorldData.CurrentState.CurrentTurn, s.DominionName, tName);
             s.VassalFactionUuids.Add(target.uuid);
             s.VassalNames[target.uuid] = tName;
             s.CasusBelli.Remove(target.uuid);
             WorldData.QueuePlayerEvent(
-                $"{tName} has bent the knee! They are now a vassal of {s.DominionName}, sworn to pay tribute.",
+                $"{tName} has submitted! They are now a {L.VassalNoun} of {s.DominionName}, bound to pay tribute.",
                 "DOMINION_VASSAL");
-            GrandStrategyData.TryRecordChronicleBeat($"{tName} bent the knee to {s.DominionName}, becoming a vassal realm.");
-            return $"{tName} kneels before the throne of {s.DominionName} — a vassal realm, sworn to tribute and loyalty.";
+            GrandStrategyData.TryRecordChronicleBeat($"{tName} submitted to {s.DominionName}, becoming a {L.VassalNoun}.");
+            return $"{tName} yields to {s.DominionName} — a {L.VassalNoun}, bound to tribute and loyalty.";
         }
 
         private static string ResolveFestival()
@@ -500,7 +512,7 @@ namespace AIROG_GrandStrategy
 
             foreach (var h in s.Holdings.Values)
                 h.Unrest = Math.Max(0, h.Unrest - 15);
-            return $"Feasts, games, and pageantry sweep across {s.DominionName} — the people's grievances are drowned in wine and song.";
+            return $"Celebrations sweep across {s.DominionName} — for a night, at least, the people's grievances are set aside.";
         }
 
         private static string ResolveProject(string arg)
@@ -510,20 +522,17 @@ namespace AIROG_GrandStrategy
             var wonder = WonderDefs.FirstOrDefault(w => w.Key == key);
             if (wonder == null)
                 return "!Choose a great work: " + string.Join(" | ",
-                    WonderDefs.Select(w => $"{w.Key} ({w.Name}, {w.Gold}g — {w.Effect})"));
+                    WonderDefs.Select(w => $"{w.Key} ({WonderDisplayName(w.Key)}, {w.Gold}{GrandStrategyData.L.CurrencyShort} — {w.Effect})"));
 
-            if (s.Wonders.Contains(wonder.Key)) return $"!The {wonder.Name} already stands in {s.CapitalName}.";
+            if (s.Wonders.Contains(wonder.Key)) return $"!The {WonderDisplayName(wonder.Key)} already stands in {s.CapitalName}.";
             if (!string.IsNullOrEmpty(s.WonderInProgress))
-            {
-                var cur = WonderDefs.FirstOrDefault(w => w.Key == s.WonderInProgress);
-                return $"!Your artisans are already raising the {(cur != null ? cur.Name : s.WonderInProgress)} ({s.WonderTicksLeft} tick(s) remain).";
-            }
-            if (s.Treasury < wonder.Gold) return $"!Not enough treasury ({s.Treasury}/{wonder.Gold} needed for the {wonder.Name}).";
+                return $"!Your work crews are already raising the {WonderDisplayName(s.WonderInProgress)} ({s.WonderTicksLeft} tick(s) remain).";
+            if (s.Treasury < wonder.Gold) return $"!Not enough treasury ({s.Treasury}/{wonder.Gold} needed for the {WonderDisplayName(wonder.Key)}).";
 
             s.Treasury -= wonder.Gold; // wonders have per-project costs, deducted here rather than via def.Gold
             s.WonderInProgress = wonder.Key;
             s.WonderTicksLeft  = wonder.Ticks;
-            return $"Ground is broken in {s.CapitalName} — the {wonder.Name} rises ({wonder.Ticks} ticks to completion).";
+            return $"Ground is broken in {s.CapitalName} — the {WonderDisplayName(wonder.Key)} rises ({wonder.Ticks} ticks to completion).";
         }
 
         private static string ResolveScout(GameplayManager manager, string arg)
@@ -600,7 +609,7 @@ namespace AIROG_GrandStrategy
             string tName = target.GetPrettyName();
             WorldData.SetTier(key, DiplomaticTier.NonAggression, "non-aggression pact sworn",
                 WorldData.CurrentState.CurrentTurn, s.DominionName, tName);
-            return $"{s.DominionName} and {tName} swear a pact of non-aggression — swords stay sheathed between them.";
+            return $"{s.DominionName} and {tName} swear a pact of non-aggression — {GrandStrategyData.L.WeaponsNoun} stay lowered between them.";
         }
 
         private static string ResolveTradeDeal(GameplayManager manager, string arg)
@@ -621,38 +630,24 @@ namespace AIROG_GrandStrategy
             string tName = target.GetPrettyName();
             WorldData.SetTier(key, DiplomaticTier.TradePact, "trade pact signed",
                 WorldData.CurrentState.CurrentTurn, s.DominionName, tName);
-            return $"Merchant caravans now flow freely between {s.DominionName} and {tName} — a standing trade pact, gold every tick.";
+            return $"Trade now flows freely between {s.DominionName} and {tName} — a standing pact, {GrandStrategyData.L.CurrencyWord} every tick.";
         }
-
-        private static readonly string[] AdvisorNames = {
-            "Aldric", "Brennus", "Cassia", "Dorvan", "Elowen", "Faelan",
-            "Guinevra", "Halric", "Ithera", "Jorund", "Kestrel", "Lysandra"
-        };
 
         private static string ResolveCouncil(string arg)
         {
             var s = GrandStrategyData.State;
+            var L = GrandStrategyData.L;
             string role = (arg ?? "").Trim().ToUpperInvariant();
             if (!AdvisorRoles.Contains(role))
                 return "!Choose an advisor role: " + string.Join(", ", AdvisorRoles);
             if (s.Advisors.Any(a => a.Role == role))
-                return $"!{s.DominionName} already retains a {role.ToLower()}.";
+                return $"!{s.DominionName} already retains a {L.RoleTitle(role).ToLower()}.";
 
-            string name = AdvisorNames[rng.Next(AdvisorNames.Length)];
+            var pool = (L.AdvisorNames != null && L.AdvisorNames.Count > 0)
+                ? L.AdvisorNames : Themes.Build("GENERIC").AdvisorNames;
+            string name = pool[rng.Next(pool.Count)];
             s.Advisors.Add(new Advisor { Role = role, Name = name, Personality = RolePersonality(role), Loyalty = 50 });
-            return $"{name} joins the court of {s.DominionName} as {RoleTitle(role)} — their counsel will shape which petitions reach the throne.";
-        }
-
-        private static string RoleTitle(string role)
-        {
-            switch (role)
-            {
-                case "MARSHAL":    return "Marshal";
-                case "STEWARD":    return "Steward";
-                case "SPYMASTER":  return "Spymaster";
-                case "CHANCELLOR": return "Chancellor";
-                default:           return role;
-            }
+            return $"{name} joins {s.DominionName}'s {L.CourtNoun} as {L.RoleTitle(role)} — their counsel will shape which {L.PetitionNoun}s reach you.";
         }
 
         private static string RolePersonality(string role)
@@ -662,7 +657,7 @@ namespace AIROG_GrandStrategy
                 case "MARSHAL":    return "Blunt and battle-hardened; presses for strength over subtlety.";
                 case "STEWARD":    return "Frugal and pragmatic; watches the treasury like a hawk.";
                 case "SPYMASTER":  return "Guarded and watchful; trusts secrets more than soldiers.";
-                case "CHANCELLOR": return "Smooth-tongued and image-conscious; minds the crown's reputation.";
+                case "CHANCELLOR": return "Smooth-tongued and image-conscious; minds your reputation and public standing.";
                 default:           return "";
             }
         }

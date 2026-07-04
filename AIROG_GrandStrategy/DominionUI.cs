@@ -280,7 +280,7 @@ namespace AIROG_GrandStrategy
             var mrt = (RectTransform)markerObj.transform;
             mrt.localPosition = new Vector3(pos.x, pos.y + 34f, 0f); // sits just above the capital's icon
             if (label != null)
-                label.text = $"<color=#FFD34D>♛ {s.DominionName}</color> <color=#FF9E9E>⚔{s.ArmyStrength}</color>";
+                label.text = $"<color=#FFD34D>{GrandStrategyData.L.Icon} {s.DominionName}</color> <color=#FF9E9E>⚔{s.ArmyStrength}</color>";
             markerObj.transform.SetAsLastSibling();
         }
 
@@ -326,10 +326,13 @@ namespace AIROG_GrandStrategy
         {
             GameplayManager manager = modal.manager;
             var s = GrandStrategyData.State;
+            Themes.EnsureTheme(s, manager); // legacy saves: pick a theme the first time the panel opens
+            var L = GrandStrategyData.L;
+            string cs = L.CurrencyShort;
 
             if (!s.Founded)
             {
-                AddText(panel, font, "<b>♛ DOMINION</b>", 19, GOLD);
+                AddText(panel, font, $"<b>{L.Icon} DOMINION</b>", 19, GOLD);
                 AddText(panel, font,
                     "You rule no dominion yet. Found one here — your current region becomes the capital (it must be unclaimed).",
                     13, MUTED);
@@ -351,9 +354,9 @@ namespace AIROG_GrandStrategy
             var fac = WorldData.GetFactionData(s.FactionUuid);
 
             // ── Status ──
-            AddText(panel, font, $"<b>♛ {s.DominionName.ToUpperInvariant()}</b>", 19, GOLD);
+            AddText(panel, font, $"<b>{L.Icon} {s.DominionName.ToUpperInvariant()}</b>", 19, GOLD);
             AddText(panel, font,
-                $"Treasury {s.Treasury}g · Army {s.ArmyStrength} · CP {s.CommandPoints}/{s.MaxCommandPoints} · Pop {fac.Population}",
+                $"Treasury {s.Treasury}{cs} · Army {s.ArmyStrength} · CP {s.CommandPoints}/{s.MaxCommandPoints} · Pop {fac.Population}",
                 14, MUTED);
 
             int unrestTotal = s.Holdings.Values.Sum(h => h.Unrest);
@@ -375,21 +378,20 @@ namespace AIROG_GrandStrategy
 
             if (s.Advisors.Count > 0)
                 AddText(panel, font,
-                    $"Council: {string.Join(", ", s.Advisors.Select(a => $"{a.Name} ({a.Role.ToLower()})"))}",
+                    $"Council: {string.Join(", ", s.Advisors.Select(a => $"{a.Name} ({L.RoleTitle(a.Role).ToLower()})"))}",
                     12, MUTED);
 
             if (!string.IsNullOrEmpty(s.WonderInProgress))
             {
-                var wip = OrderSystem.WonderDefs.FirstOrDefault(w => w.Key == s.WonderInProgress);
                 AddText(panel, font,
-                    $"Building: {(wip != null ? wip.Name : s.WonderInProgress)} — {s.WonderTicksLeft} tick(s) left",
+                    $"Building: {OrderSystem.WonderDisplayName(s.WonderInProgress)} — {s.WonderTicksLeft} tick(s) left",
                     13, new Color(0.75f, 0.85f, 1f));
             }
 
-            // ── Realm orders ──
-            AddText(panel, font, "── REALM ──", 12, DIVIDER);
+            // ── Domain orders ──
+            AddText(panel, font, $"── {L.DomainNoun.ToUpperInvariant()} ──", 12, DIVIDER);
             var r1 = AddRow(panel);
-            AddButton(r1, font, string.IsNullOrEmpty(_pickedAnnexUuid) ? "ANNEX 25g" : "ANNEX ▸ picked",
+            AddButton(r1, font, string.IsNullOrEmpty(_pickedAnnexUuid) ? $"ANNEX 25{cs}" : "ANNEX ▸ picked",
                 () => DoOrder(modal, "ANNEX", "", _pickedAnnexUuid));
             AddButton(r1, font, _pickMode == PickMode.Annex ? "🎯 CLICK MAP…" : "🎯 pick",
                 () =>
@@ -404,7 +406,7 @@ namespace AIROG_GrandStrategy
             AddButton(r1, font, "DISBAND",       () => DoOrder(modal, "DISBAND", ""));
             var r2 = AddRow(panel);
             AddButton(r2, font, "LEVY",          () => DoOrder(modal, "LEVY", ""));
-            AddButton(r2, font, "FESTIVAL 25g",  () => DoOrder(modal, "FESTIVAL", ""));
+            AddButton(r2, font, $"FESTIVAL 25{cs}",  () => DoOrder(modal, "FESTIVAL", ""));
 
             // Holding cycle: determines which holding DEVELOP targets (default: capital)
             var holdingList = s.Holdings.Values.ToList();
@@ -425,29 +427,39 @@ namespace AIROG_GrandStrategy
                 AddButton(r3, font, $"@ {selectedHolding} ▸",
                     () => { _holdingIdx++; Click(modal); BuildPanel(modal); },
                     new Color(0.12f, 0.20f, 0.16f, 0.95f));
-            AddButton(r3, font, "DEVELOP 30g", () => DoOrder(modal, "DEVELOP", devArg));
+            AddButton(r3, font, $"DEVELOP 30{cs}", () => DoOrder(modal, "DEVELOP", devArg));
 
             var wd = OrderSystem.WonderDefs[_wonderIdx % OrderSystem.WonderDefs.Count];
             var r4 = AddRow(panel);
-            AddButton(r4, font, $"{wd.Key} ▸", () => { _wonderIdx++; Click(modal); BuildPanel(modal); });
-            AddButton(r4, font, $"PROJECT {wd.Gold}g", () => DoOrder(modal, "PROJECT", wd.Key));
+            AddButton(r4, font, $"{OrderSystem.WonderDisplayName(wd.Key)} ▸", () => { _wonderIdx++; Click(modal); BuildPanel(modal); });
+            AddButton(r4, font, $"PROJECT {wd.Gold}{cs}", () => DoOrder(modal, "PROJECT", wd.Key));
 
             var r5 = AddRow(panel);
             AddButton(r5, font, $"TAX: {s.TaxPolicy} ▸", () =>
             {
                 s.TaxPolicy = s.TaxPolicy == "LOW" ? "NORMAL" : s.TaxPolicy == "NORMAL" ? "HIGH" : "LOW";
-                GrandStrategyData.LogDeed($"{s.DominionName} decreed {s.TaxPolicy.ToLower()} taxation across the realm.");
+                GrandStrategyData.LogDeed($"{s.DominionName} set {s.TaxPolicy.ToLower()} taxation across its {L.DomainNoun}.");
                 GrandStrategyData.SaveToCurrentDir();
                 Click(modal);
                 BuildPanel(modal);
             });
+            AddButton(r5, font, $"THEME: {L.Key} ▸", () =>
+            {
+                // Cycle terminology presets; the world's native currency name is re-applied each time
+                int idx = Array.IndexOf(Themes.Keys, L.Key);
+                string next = Themes.Keys[(idx + 1 + Themes.Keys.Length) % Themes.Keys.Length];
+                Themes.Apply(s, next, manager);
+                GrandStrategyData.SaveToCurrentDir();
+                Click(modal);
+                BuildPanel(modal);
+            }, new Color(0.20f, 0.16f, 0.28f, 0.95f));
 
             // ── Council ──
             var role = OrderSystem.AdvisorRoles[_advisorRoleIdx % OrderSystem.AdvisorRoles.Length];
             var r6 = AddRow(panel);
-            AddButton(r6, font, $"{role} ▸", () => { _advisorRoleIdx++; Click(modal); BuildPanel(modal); },
+            AddButton(r6, font, $"{L.RoleTitle(role).ToUpperInvariant()} ▸", () => { _advisorRoleIdx++; Click(modal); BuildPanel(modal); },
                 new Color(0.12f, 0.20f, 0.16f, 0.95f));
-            AddButton(r6, font, "COUNCIL 40g", () => DoOrder(modal, "COUNCIL", role));
+            AddButton(r6, font, $"COUNCIL 40{cs}", () => DoOrder(modal, "COUNCIL", role));
 
             // ── Targeted orders (Diplomacy & War) ──
             var targets = EligibleTargets(manager);
@@ -458,15 +470,15 @@ namespace AIROG_GrandStrategy
                 () => { _targetIdx++; Click(modal); BuildPanel(modal); },
                 new Color(0.12f, 0.20f, 0.16f, 0.95f));
             // Also show SCOUT inline with target selector
-            AddButton(tr, font, "SCOUT 15g", () => DoOrder(modal, "SCOUT", tName));
+            AddButton(tr, font, $"SCOUT 15{cs}", () => DoOrder(modal, "SCOUT", tName));
 
             var d1 = AddRow(panel);
-            AddButton(d1, font, "ENVOY 20g",      () => DoOrder(modal, "ENVOY", tName));
+            AddButton(d1, font, $"ENVOY 20{cs}",      () => DoOrder(modal, "ENVOY", tName));
             AddButton(d1, font, "FABRICATE 2CP",  () => DoOrder(modal, "FABRICATE", tName));
-            AddButton(d1, font, "PEACE 25g",      () => DoOrder(modal, "PEACE", tName));
+            AddButton(d1, font, $"PEACE 25{cs}",      () => DoOrder(modal, "PEACE", tName));
             var d1b = AddRow(panel);
-            AddButton(d1b, font, "PACT 15g",       () => DoOrder(modal, "PACT", tName));
-            AddButton(d1b, font, "TRADE_DEAL 20g", () => DoOrder(modal, "TRADE_DEAL", tName));
+            AddButton(d1b, font, $"PACT 15{cs}",       () => DoOrder(modal, "PACT", tName));
+            AddButton(d1b, font, $"TRADE_DEAL 20{cs}", () => DoOrder(modal, "TRADE_DEAL", tName));
             var d2 = AddRow(panel);
             AddButton(d2, font, "WAR 2CP",      () => DoOrder(modal, "WAR", tName), BTN_WARM);
             AddButton(d2, font, string.IsNullOrEmpty(_pickedCampaignUuid) ? "CAMPAIGN 2CP" : "CAMPAIGN ▸ picked",
@@ -482,14 +494,14 @@ namespace AIROG_GrandStrategy
                 }, new Color(0.20f, 0.16f, 0.28f, 0.95f));
             AddButton(d2, font, "PILLAGE 2CP",  () => DoOrder(modal, "PILLAGE", tName), BTN_WARM);
             var d3 = AddRow(panel);
-            AddButton(d3, font, "INCITE 30g",    () => DoOrder(modal, "INCITE", tName));
+            AddButton(d3, font, $"INCITE 30{cs}",    () => DoOrder(modal, "INCITE", tName));
             AddButton(d3, font, "SABOTAGE 2CP",  () => DoOrder(modal, "SABOTAGE", tName));
             AddButton(d3, font, "VASSAL 2CP",    () => DoOrder(modal, "VASSAL", tName));
 
             // ── Petition ──
             if (s.PendingPetition != null)
             {
-                AddText(panel, font, "── PETITION ──", 12, DIVIDER);
+                AddText(panel, font, $"── {L.PetitionNoun.ToUpperInvariant()} ──", 12, DIVIDER);
                 AddText(panel, font, s.PendingPetition.Text, 13, new Color(0.92f, 0.88f, 0.75f));
                 var pr = AddRow(panel);
                 AddButton(pr, font, "ACCEPT", () => DoPetition(modal, true));

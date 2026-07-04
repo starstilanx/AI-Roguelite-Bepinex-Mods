@@ -53,7 +53,11 @@ namespace AIROG_GrandStrategy
             catch { }
             if (capital == null) return "You must be somewhere in the world to found a dominion.";
             if (capital.faction != null && capital.faction.uuid != playerUuid)
-                return $"This land already belongs to {capital.faction.GetPrettyName()} — found your dominion on unclaimed soil, or take it by other means.";
+                return $"This territory already belongs to {capital.faction.GetPrettyName()} — found your dominion on unclaimed ground, or take it by other means.";
+
+            // Detect the world's genre up front so every string from here on is voiced correctly
+            string themeKey = Themes.Apply(s, "AUTO", manager);
+            Debug.Log($"[GrandStrategy] Dominion theme: {themeKey}");
 
             s.Founded          = true;
             s.DominionName     = name.Trim();
@@ -80,7 +84,7 @@ namespace AIROG_GrandStrategy
             GrandStrategyData.LogDeed($"{s.DominionName} was founded, with {s.CapitalName} as its capital.");
             WorldData.LogEvent($"A new power has risen: {s.DominionName}, seated at {s.CapitalName}.", "DOMINION");
             WorldData.QueuePlayerEvent(
-                $"You have founded the dominion of {s.DominionName}, with {s.CapitalName} as its capital. The world's factions take note of a new sovereign.",
+                $"You have founded the dominion of {s.DominionName}, with {s.CapitalName} as its capital. The world's factions take note of a new power.",
                 "DOMINION_FOUNDED");
             GrandStrategyData.TryRecordChronicleBeat($"{s.DominionName} was founded, with {s.CapitalName} as its capital.");
             WorldEventsUI.MarkDirty();
@@ -95,6 +99,7 @@ namespace AIROG_GrandStrategy
         {
             var s = GrandStrategyData.State;
             if (!s.Founded) return;
+            Themes.EnsureTheme(s, manager); // legacy saves: detect a theme on first tick
 
             s.CommandPoints = Math.Min(s.MaxCommandPoints, s.CommandPoints + CP_REGEN);
 
@@ -125,7 +130,7 @@ namespace AIROG_GrandStrategy
                 // War-weariness: capped to +4/tick so multi-war spirals don't rebel in a single cycle
                 h.Unrest += Math.Min(4, CountActiveWars(s) * 2);
 
-                // Tax edict: the crown's greed (or mercy) is felt everywhere, every tick
+                // Tax policy: the leadership's greed (or mercy) is felt everywhere, every tick
                 if (s.TaxPolicy == "HIGH")     h.Unrest += 3;
                 else if (s.TaxPolicy == "LOW") h.Unrest = Math.Max(0, h.Unrest - 2);
 
@@ -213,8 +218,9 @@ namespace AIROG_GrandStrategy
                 {
                     int loss = Math.Min(s.Treasury, rng.Next(10, 26));
                     s.Treasury -= loss;
-                    WorldData.LogEvent($"Agents of {fName} sabotaged the treasury of {s.DominionName}, making off with {loss} gold.", "DOMINION");
-                    WorldData.QueuePlayerEvent($"{fName}'s saboteurs struck at your treasury — {loss} gold lost.", "DOMINION_SABOTAGED");
+                    string cur = GrandStrategyData.L.CurrencyWord;
+                    WorldData.LogEvent($"Agents of {fName} sabotaged the treasury of {s.DominionName}, making off with {loss} {cur}.", "DOMINION");
+                    WorldData.QueuePlayerEvent($"{fName}'s saboteurs struck at your treasury — {loss} {cur} lost.", "DOMINION_SABOTAGED");
                 }
                 else
                 {
@@ -235,13 +241,13 @@ namespace AIROG_GrandStrategy
             if (s.WonderTicksLeft > 0) return;
 
             var def = OrderSystem.WonderDefs.FirstOrDefault(w => w.Key == s.WonderInProgress);
-            string name = def != null ? def.Name : s.WonderInProgress;
+            string name = OrderSystem.WonderDisplayName(s.WonderInProgress);
             s.Wonders.Add(s.WonderInProgress);
             s.WonderInProgress = "";
             s.WonderTicksLeft  = 0;
 
             GrandStrategyData.LogDeed($"The {name} was completed in {s.CapitalName} — a wonder of the age.");
-            WorldData.LogEvent($"The {name} now crowns {s.CapitalName}, seat of {s.DominionName}. Travelers speak of it in distant lands.", "DOMINION");
+            WorldData.LogEvent($"The {name} now stands at {s.CapitalName}, seat of {s.DominionName}. Travelers speak of it in distant lands.", "DOMINION");
             WorldData.QueuePlayerEvent(
                 $"The {name} is complete! {s.CapitalName} is transformed{(def != null ? $" ({def.Effect})" : "")}.",
                 "DOMINION_WONDER");
@@ -256,13 +262,13 @@ namespace AIROG_GrandStrategy
 
             foreach (var uuid in s.VassalFactionUuids.ToList())
             {
-                string name = s.VassalNames.TryGetValue(uuid, out var n) ? n : "a vassal realm";
+                string name = s.VassalNames.TryGetValue(uuid, out var n) ? n : $"a {GrandStrategyData.L.VassalNoun}";
 
                 if (WorldData.CurrentState.EliminatedFactions.Contains(uuid))
                 {
                     s.VassalFactionUuids.Remove(uuid);
                     s.VassalNames.Remove(uuid);
-                    WorldData.LogEvent($"{name}, vassal of {s.DominionName}, has ceased to exist. Its tribute ends with it.", "DOMINION");
+                    WorldData.LogEvent($"{name}, {GrandStrategyData.L.VassalNoun} of {s.DominionName}, has ceased to exist. Its tribute ends with it.", "DOMINION");
                     continue;
                 }
 
@@ -272,9 +278,9 @@ namespace AIROG_GrandStrategy
                 {
                     s.VassalFactionUuids.Remove(uuid);
                     s.VassalNames.Remove(uuid);
-                    GrandStrategyData.LogDeed($"{name} renounced its oaths and broke free of {s.DominionName}.");
+                    GrandStrategyData.LogDeed($"{name} renounced its obligations and broke free of {s.DominionName}.");
                     WorldData.QueuePlayerEvent(
-                        $"{name} has renounced its vassalage to {s.DominionName}! Their envoys return your charters torn.",
+                        $"{name} has renounced its allegiance to {s.DominionName}! Their envoys cut all ties.",
                         "DOMINION_VASSAL_REVOLT");
                     WorldEventsUI.MarkDirty();
                     continue;
@@ -344,19 +350,20 @@ namespace AIROG_GrandStrategy
                         }
                         catch { }
 
-                        GrandStrategyData.LogDeed($"{holding.Name} fell to {enemyName}'s armies — the dominion's banners are torn down.");
+                        GrandStrategyData.LogDeed($"{holding.Name} fell to {enemyName}'s forces — {s.DominionName}'s {GrandStrategyData.L.BannersNoun} are torn down.");
                         WorldData.LogEvent($"{enemyName} has seized {holding.Name} from {s.DominionName}!", "DOMINION");
                         WorldData.QueuePlayerEvent(
-                            $"{enemyName}'s armies overran {holding.Name} — the holding is lost.", "DOMINION_HOLDING_LOST");
+                            $"{enemyName}'s forces overran {holding.Name} — the holding is lost.", "DOMINION_HOLDING_LOST");
                     }
                     else
                     {
                         int plunder = Math.Min(s.Treasury, rng.Next(10, 26));
                         s.Treasury -= plunder;
                         holding.Unrest += 10;
-                        WorldData.LogEvent($"{enemyName} raided {holding.Name}, plundering {plunder} gold from {s.DominionName}!", "DOMINION");
+                        string cur2 = GrandStrategyData.L.CurrencyWord;
+                        WorldData.LogEvent($"{enemyName} raided {holding.Name}, plundering {plunder} {cur2} from {s.DominionName}!", "DOMINION");
                         WorldData.QueuePlayerEvent(
-                            $"{enemyName} has raided {holding.Name} — {plunder} gold plundered and the people are shaken.",
+                            $"{enemyName} has raided {holding.Name} — {plunder} {cur2} plundered and the people are shaken.",
                             "DOMINION_RAIDED");
                     }
                 }
@@ -390,7 +397,7 @@ namespace AIROG_GrandStrategy
                 GrandStrategyData.LogDeed($"{h.Name} rose in rebellion and broke away from {s.DominionName}.");
                 WorldData.LogEvent($"{h.Name} has risen in open rebellion against {s.DominionName} and declared independence!", "DOMINION");
                 WorldData.QueuePlayerEvent(
-                    $"Rebellion! {h.Name} has thrown off the rule of {s.DominionName}. Your governors flee the province.",
+                    $"Rebellion! {h.Name} has thrown off the rule of {s.DominionName}. Your officials flee the area.",
                     "DOMINION_REBELLION");
                 WorldEventsUI.MarkDirty();
             }
@@ -444,8 +451,10 @@ namespace AIROG_GrandStrategy
             // WONDER_AGE — every great work raised in the capital
             if (won == null && s.Wonders.Count >= OrderSystem.WonderDefs.Count)
             {
+                string wonderList = string.Join(", ",
+                    OrderSystem.WonderDefs.Select(w => "the " + OrderSystem.WonderDisplayName(w.Key)));
                 won  = "WONDER_AGE";
-                desc = $"The Grand Citadel, the Royal Mint, and the High Temple all crown {s.CapitalName} — {s.DominionName} will be remembered in stone.";
+                desc = $"{wonderList} — every great work now stands at {s.CapitalName}. {s.DominionName} will be remembered for ages.";
             }
 
             if (won == null) return;
@@ -453,7 +462,7 @@ namespace AIROG_GrandStrategy
             s.ActiveVictory = won;
             GrandStrategyData.LogDeed(desc);
             WorldData.LogEvent(desc, "DOMINION");
-            WorldData.QueuePlayerEvent(desc + " Bards already sing of your reign.", "DOMINION_VICTORY");
+            WorldData.QueuePlayerEvent(desc + " Your renown spreads far beyond your borders.", "DOMINION_VICTORY");
             GrandStrategyData.TryRecordChronicleBeat(desc);
             WorldEventsUI.MarkDirty();
         }

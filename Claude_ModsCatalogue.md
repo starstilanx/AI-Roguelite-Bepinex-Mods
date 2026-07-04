@@ -42,6 +42,7 @@ Mods are separated into discrete `.csproj` solutions, generally prefixed with `A
 **Purpose:** 4X grand-strategy layer — the player founds a Dominion and explores/expands/exploits/exterminates as a sovereign power inside WorldExpansion's sim.
 *   **Architecture:** Hard dependency on `AIROG_WorldExpansion`; registers the native "Player" faction into the world sim; strategic tick rides `WorldSimulation.RunMinorTick` via Harmony postfix.
 *   **Key Hooks:** Order engine (annex/develop/levy/war/campaign/espionage) mutating real `Place.faction` ownership; retaliation raids, rebellions, victory conditions; `GrandStrategyProvider` in GenContext injects `[DOMINION]` state + ruler directives from `grand_strategy_data.json`.
+*   **Theme system (v0.5.0):** all flavor text is voiced through a `ThemeLexicon` (Themes.cs) — ruler title, currency, advisor titles/names, wonder names — auto-detected from the world's description (MEDIEVAL/POSTAPOC/SCIFI/MODERN/GENERIC), overridable via `GS_THEME` or the panel's THEME cycler; the world's native AI-generated currency name overrides the preset.
 
 ### 🏰 AIROG_Settlement
 **Purpose:** Transforms the game into a structural town builder and faction simulator.

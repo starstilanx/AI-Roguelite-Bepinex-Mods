@@ -10,6 +10,10 @@ namespace AIROG_GrandStrategy
     {
         public static DominionState State = new DominionState();
 
+        // Null-safe lexicon accessor: GENERIC wording until a theme is detected/applied,
+        // so no flavor string ever NREs on a pre-theme save.
+        public static ThemeLexicon L => State?.Lex ?? Themes.Build("GENERIC");
+
         public static void Reset()
         {
             State = new DominionState();
@@ -150,6 +154,10 @@ namespace AIROG_GrandStrategy
         public Dictionary<string, string> VassalNames = new Dictionary<string, string>(); // uuid → name, cached at vassalization
 
         public string TaxPolicy = "NORMAL";  // LOW | NORMAL | HIGH — persistent edict, applied every tick
+
+        // Setting-appropriate terminology (auto-detected at founding, GS_THEME overrides).
+        // Null on legacy saves until Themes.EnsureTheme runs.
+        public ThemeLexicon Lex = null;
 
         public List<string> Wonders          = new List<string>(); // completed great works (capital)
         public string       WonderInProgress = "";

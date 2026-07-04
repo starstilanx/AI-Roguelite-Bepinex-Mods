@@ -171,3 +171,26 @@ GrandStrategy itself never injects prompts (same rule as WorldExpansion).
 - `[BepInDependency(com.airog.worldexpansion)]` enforces load order.
 - Save file: `{save}/grand_strategy_data.json`, written every strategic tick and
   on order resolution (GenContext reads from disk).
+
+## Theme system (v0.5.0)
+The dominion layer is setting-agnostic. `Themes.cs` defines a `ThemeLexicon`
+(ruler title, domain noun, banners/colors, currency word + short suffix, weapons,
+soldiers, court noun, petition noun, vassal noun, panel icon, advisor role titles,
+advisor name pools, wonder display names) with five presets: MEDIEVAL, POSTAPOC,
+SCIFI, MODERN, GENERIC. Every player-facing string in OrderSystem, CourtSystem,
+DominionManager, GrandStrategyPlugin, DominionUI, and the GenContext provider is
+voiced through the lexicon; mechanical keys (MINT, MARSHAL, ...) stay stable for
+save compatibility.
+
+- **Auto-detection:** at founding (and lazily for legacy saves via
+  `Themes.EnsureTheme` on the first tick / panel open / GS_STATUS), the universe
+  name+description and world backstory are keyword-scored; zero hits fall back to
+  GENERIC. The world's own AI-generated currency name
+  (`manager.GetCurrentOrDefaultCurrency().nme`) overrides the preset currency.
+- **Overrides:** `GS_THEME <MEDIEVAL|POSTAPOC|SCIFI|MODERN|GENERIC|AUTO>` console
+  command, plus a `THEME: <key> >` cycler button in the Dominion panel.
+- **Persistence:** the resolved lexicon is serialized inside
+  `grand_strategy_data.json`, so `GrandStrategyProvider` (separate assembly) reads
+  the exact same terms via its `LexStub` and never hardcodes flavor. The provider
+  also emits a standing directive telling the AI to express dominion matters in
+  the world's own idiom and never assume medieval royalty.

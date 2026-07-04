@@ -13,7 +13,7 @@ namespace AIROG_GrandStrategy
     {
         public const string PLUGIN_GUID = "com.airog.grandstrategy";
         public const string PLUGIN_NAME = "Grand Strategy";
-        public const string PLUGIN_VERSION = "0.4.0";
+        public const string PLUGIN_VERSION = "0.5.0";
 
         public static GrandStrategyPlugin Instance { get; private set; }
 
@@ -59,15 +59,43 @@ namespace AIROG_GrandStrategy
 
             if (upper == "GS_STATUS")
             {
+                Themes.EnsureTheme(GrandStrategyData.State, __instance);
                 __instance.MessageModal().ShowModal(BuildStatus(), false, true);
                 return false;
             }
             if (upper == "GS_ORDERS")
             {
+                string cs = GrandStrategyData.L.CurrencyShort;
                 string list = string.Join("\n", OrderSystem.Defs.Select(d =>
-                    $"[{d.Cp} CP{(d.Gold > 0 ? $" + {d.Gold}g" : "")}] {d.Usage}"));
+                    $"[{d.Cp} CP{(d.Gold > 0 ? $" + {d.Gold}{cs}" : "")}] {d.Usage}"));
                 __instance.MessageModal().ShowModal(
-                    $"Decrees of the realm (GS_ORDER <TYPE> [target]):\n{list}", false, true);
+                    $"Available orders (GS_ORDER <TYPE> [target]):\n{list}", false, true);
+                return false;
+            }
+            if (upper.StartsWith("GS_THEME"))
+            {
+                var s = GrandStrategyData.State;
+                string want = cmd.Length > 8 ? cmd.Substring(8).Trim().ToUpperInvariant() : "";
+                if (string.IsNullOrEmpty(want))
+                {
+                    string current = s.Lex != null ? s.Lex.Key : "(not set — auto-detects at founding)";
+                    __instance.MessageModal().ShowModal(
+                        $"Dominion theme: {current}\nGS_THEME <{string.Join("|", Themes.Keys)}|AUTO>\n" +
+                        "Controls the terminology of all dominion text (ruler title, currency, advisor titles, great-work names). " +
+                        "AUTO re-detects from the world's description.", false, true);
+                    return false;
+                }
+                if (want != "AUTO" && !Themes.Keys.Contains(want))
+                {
+                    __instance.MessageModal().ShowModal(
+                        $"Unknown theme '{want}'. Options: {string.Join(", ", Themes.Keys)}, AUTO", false, true);
+                    return false;
+                }
+                string picked = Themes.Apply(s, want, __instance);
+                GrandStrategyData.SaveToCurrentDir();
+                __instance.MessageModal().ShowModal(
+                    $"Dominion theme set to {picked}{(want == "AUTO" ? " (auto-detected)" : "")}. " +
+                    $"Ruler: {GrandStrategyData.L.RulerTitle} | currency: {GrandStrategyData.L.CurrencyWord}.", false, true);
                 return false;
             }
             if (upper.StartsWith("GS_FOUND"))
@@ -88,7 +116,7 @@ namespace AIROG_GrandStrategy
                 }
                 string old = s.DominionName;
                 s.DominionName = name.Trim();
-                GrandStrategyData.LogDeed($"{old} was renamed {s.DominionName} by decree of its sovereign.");
+                GrandStrategyData.LogDeed($"{old} was renamed {s.DominionName} by order of its {GrandStrategyData.L.RulerTitle}.");
                 GrandStrategyData.SaveToCurrentDir();
                 __instance.MessageModal().ShowModal($"{old} shall henceforth be known as {s.DominionName}.", false, true);
                 return false;
@@ -117,9 +145,9 @@ namespace AIROG_GrandStrategy
                     return false;
                 }
                 s.TaxPolicy = pol;
-                GrandStrategyData.LogDeed($"{s.DominionName} decreed {pol.ToLower()} taxation across the realm.");
+                GrandStrategyData.LogDeed($"{s.DominionName} set {pol.ToLower()} taxation across its {GrandStrategyData.L.DomainNoun}.");
                 GrandStrategyData.SaveToCurrentDir();
-                __instance.MessageModal().ShowModal($"Tax edict set to {pol}. The realm will feel it each strategic tick.", false, true);
+                __instance.MessageModal().ShowModal($"Tax policy set to {pol}. The whole {GrandStrategyData.L.DomainNoun} will feel it each strategic tick.", false, true);
                 return false;
             }
             if (upper.StartsWith("GS_PETITION"))
@@ -135,7 +163,7 @@ namespace AIROG_GrandStrategy
                 if (choice != "ACCEPT" && choice != "REJECT")
                 {
                     __instance.MessageModal().ShowModal(
-                        $"A petition awaits the sovereign:\n\n{p.Text}\n\nGS_PETITION ACCEPT or GS_PETITION REJECT", false, true);
+                        $"A {GrandStrategyData.L.PetitionNoun} awaits your judgment:\n\n{p.Text}\n\nGS_PETITION ACCEPT or GS_PETITION REJECT", false, true);
                     return false;
                 }
                 string outcome = CourtSystem.Resolve(s, choice == "ACCEPT");
@@ -179,22 +207,21 @@ namespace AIROG_GrandStrategy
                 .Select(u => WorldData.CurrentState.Factions.TryGetValue(u, out var f) ? f.Name : u));
             string victory = string.IsNullOrEmpty(s.ActiveVictory) ? "" : $"\nVICTORY ACHIEVED: {s.ActiveVictory}";
 
-            string wonders = string.Join(", ", s.Wonders
-                .Select(k => OrderSystem.WonderDefs.FirstOrDefault(w => w.Key == k)?.Name ?? k));
+            var L = GrandStrategyData.L;
+            string wonders = string.Join(", ", s.Wonders.Select(OrderSystem.WonderDisplayName));
             if (!string.IsNullOrEmpty(s.WonderInProgress))
             {
-                var wd = OrderSystem.WonderDefs.FirstOrDefault(w => w.Key == s.WonderInProgress);
                 wonders += (wonders.Length > 0 ? ", " : "") +
-                           $"{wd?.Name ?? s.WonderInProgress} (building, {s.WonderTicksLeft} tick(s) left)";
+                           $"{OrderSystem.WonderDisplayName(s.WonderInProgress)} (building, {s.WonderTicksLeft} tick(s) left)";
             }
             string vassals  = string.Join(", ", s.VassalNames.Values);
-            string petition = s.PendingPetition != null ? "\n⚖ A petition awaits (GS_PETITION)" : "";
+            string petition = s.PendingPetition != null ? $"\n⚖ A {L.PetitionNoun} awaits (GS_PETITION)" : "";
             string advisors = s.Advisors.Count > 0
-                ? string.Join(", ", s.Advisors.Select(a => $"{a.Name} ({a.Role.ToLower()})"))
+                ? string.Join(", ", s.Advisors.Select(a => $"{a.Name} ({L.RoleTitle(a.Role).ToLower()})"))
                 : "none";
 
-            return $"═ {s.DominionName} ═ (founded turn {s.FoundedTurn})\n" +
-                   $"Treasury: {s.Treasury}g | Army: {s.ArmyStrength} | CP: {s.CommandPoints}/{s.MaxCommandPoints} | Pop: {fac.Population} | Tax: {s.TaxPolicy}\n" +
+            return $"═ {s.DominionName} ═ (founded turn {s.FoundedTurn}, theme {L.Key})\n" +
+                   $"Treasury: {s.Treasury}{L.CurrencyShort} | Army: {s.ArmyStrength} | CP: {s.CommandPoints}/{s.MaxCommandPoints} | Pop: {fac.Population} | Tax: {s.TaxPolicy}\n" +
                    $"Holdings ({s.Holdings.Count}):\n{holdings}\n" +
                    $"Great works: {(string.IsNullOrEmpty(wonders) ? "none" : wonders)}\n" +
                    $"Vassals: {(string.IsNullOrEmpty(vassals) ? "none" : vassals)}\n" +
