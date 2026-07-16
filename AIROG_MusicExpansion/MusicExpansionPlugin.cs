@@ -4,13 +4,12 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
 using UnityEngine;
 using UnityEngine.Networking;
 
 namespace AIROG_MusicExpansion
 {
-    [BepInPlugin("com.airog.musicexpansion", "AI Roguelite Music Expansion", "1.0.0")]
+    [BepInPlugin("com.airog.musicexpansion", "AI Roguelite Music Expansion", "1.1.0")]
     public class MusicExpansionPlugin : BaseUnityPlugin
     {
         private void Awake()
@@ -24,12 +23,27 @@ namespace AIROG_MusicExpansion
     [HarmonyPatch(typeof(GameMusicManager), "Awake")]
     public static class GameMusicManager_Awake_Patch
     {
+        // GameMusicManager is a scene object, so its Awake fires again on every save/scene
+        // load. AudioClips created from UnityWebRequest are NOT scene objects, so they survive
+        // those reloads. We therefore decode each track from disk exactly once and keep the
+        // clip references in these static caches; every subsequent load just re-splices the
+        // cached references into the fresh manager (a cheap array copy) with zero re-decoding.
+        private static List<AudioClip> s_ambientCache;
+        private static List<AudioClip> s_combatCache;
+
         public static void Postfix(GameMusicManager __instance)
         {
-            // buffer: Prevent game from starting music immediately so we can inject our tracks first
+            if (s_ambientCache != null)
+            {
+                // Cache is warm: inject the already-decoded clips synchronously and keep playing.
+                // No buffering needed — this completes within the same frame as Awake.
+                InjectCached(__instance);
+                return;
+            }
+
+            // First Main Scene entry this session: hold playback while we decode from disk once.
             SetShouldPlay(__instance, false);
-            
-            __instance.StartCoroutine(LoadCustomMusic(__instance));
+            __instance.StartCoroutine(FirstLoad(__instance));
         }
 
         private static void SetShouldPlay(GameMusicManager manager, bool shouldPlay)
@@ -50,30 +64,28 @@ namespace AIROG_MusicExpansion
             }
         }
 
-        private static IEnumerator LoadCustomMusic(GameMusicManager manager)
+        private static IEnumerator FirstLoad(GameMusicManager manager)
         {
+            s_ambientCache = new List<AudioClip>();
+            s_combatCache = new List<AudioClip>();
+
             string musicPath = Path.Combine(Application.streamingAssetsPath, "Music");
-            if (!Directory.Exists(musicPath))
+            if (Directory.Exists(musicPath))
             {
-                // If no folder, just restore playback immediately
-                SetShouldPlay(manager, true);
-                yield break;
+                yield return DecodeFolder(Path.Combine(musicPath, "Ambient"), s_ambientCache);
+                yield return DecodeFolder(Path.Combine(musicPath, "Encounter"), s_combatCache);
             }
 
-            // Load them
-            yield return LoadTracks(Path.Combine(musicPath, "Ambient"), manager, true);
-            yield return LoadTracks(Path.Combine(musicPath, "Encounter"), manager, false);
+            InjectCached(manager);
 
-            // Now that we are done buffering, let the game play music (it will pick from the new verified shuffled list)
+            // Buffering done — let the game play from the freshly-extended, shuffled lists.
             SetShouldPlay(manager, true);
-            Debug.Log("[MusicExpansion] Custom tracks buffered. Enabling playback.");
+            Debug.Log($"[MusicExpansion] Decoded {s_ambientCache.Count} ambient + {s_combatCache.Count} encounter tracks once; cached for all future loads.");
         }
 
-        private static IEnumerator LoadTracks(string folder, GameMusicManager manager, bool isAmbient)
+        private static IEnumerator DecodeFolder(string folder, List<AudioClip> into)
         {
             if (!Directory.Exists(folder)) yield break;
-
-            var clips = new List<AudioClip>();
 
             foreach (string file in Directory.GetFiles(folder))
             {
@@ -83,6 +95,11 @@ namespace AIROG_MusicExpansion
 
                 using (var www = UnityWebRequestMultimedia.GetAudioClip("file://" + file, type))
                 {
+                    // Keep the audio compressed in memory instead of expanding every track to
+                    // raw PCM. With 47 tracks that is the difference between tens of MB and
+                    // potentially hundreds; the small per-play decode is negligible for music.
+                    ((DownloadHandlerAudioClip)www.downloadHandler).compressed = true;
+
                     yield return www.SendWebRequest();
 
                     if (www.result != UnityWebRequest.Result.Success)
@@ -95,22 +112,29 @@ namespace AIROG_MusicExpansion
                     if (clip != null)
                     {
                         clip.name = Path.GetFileNameWithoutExtension(file);
-                        clips.Add(clip);
+                        into.Add(clip);
                     }
                 }
             }
+        }
 
-            if (clips.Count == 0) yield break;
-
-            // Single batch insert — one array allocation, two reflection calls total
-            AddTracksToManager(manager, clips, isAmbient);
-            ReshufflePlaylist(manager, isAmbient);
-            Debug.Log($"[MusicExpansion] Loaded {clips.Count} {(isAmbient ? "ambient" : "encounter")} tracks.");
+        private static void InjectCached(GameMusicManager manager)
+        {
+            if (s_ambientCache.Count > 0)
+            {
+                AddTracksToManager(manager, s_ambientCache, true);
+                ReshufflePlaylist(manager, true);
+            }
+            if (s_combatCache.Count > 0)
+            {
+                AddTracksToManager(manager, s_combatCache, false);
+                ReshufflePlaylist(manager, false);
+            }
         }
 
         private static void ReshufflePlaylist(GameMusicManager manager, bool isAmbient)
         {
-            try 
+            try
             {
                 string fieldName = isAmbient ? "ambientAudioPojo" : "combatAudioPojo";
                 var pojoField = AccessTools.Field(typeof(GameMusicManager), fieldName);
@@ -121,10 +145,10 @@ namespace AIROG_MusicExpansion
                     Type pojoType = pojoInstance.GetType();
                     var tracksField = AccessTools.Field(pojoType, "tracks");
                     AudioClip[] currentTracks = (AudioClip[])tracksField.GetValue(pojoInstance);
-                    
+
                     // Use the game's built-in shuffle
                     AudioClip[] shuffledTracks = Utils.AdvancedShuffle(currentTracks);
-                    
+
                     tracksField.SetValue(pojoInstance, shuffledTracks);
                     Debug.Log($"[MusicExpansion] Reshuffled {(isAmbient ? "Ambient" : "Encounter")} playlist with {shuffledTracks.Length} tracks.");
                 }

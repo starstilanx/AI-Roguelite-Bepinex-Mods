@@ -6,9 +6,64 @@ using UnityEngine;
 namespace AIROG_RandomOrg
 {
     // -----------------------------------------------------------------------
+    // Roll-scope tracking
+    // The game funnels every dice/skill-check roll through
+    // Utils.GetRollOutcome(GameplayManager, ...) and
+    // Utils.GetRollOutcomeForAttrOnly(...). We mark a scope while either is on
+    // the call stack; the Rand patches below only spend Random.org numbers
+    // inside that scope (unless DiceRollsOnly is turned off). Everything else
+    // (colors, voice picks, world gen, UI) keeps the vanilla System.Random,
+    // so the daily API quota is spent on actual rolls only.
+    // -----------------------------------------------------------------------
+
+    public static class RollScope
+    {
+        [ThreadStatic] private static int _depth;
+
+        public static bool Active => _depth > 0;
+
+        public static void Enter() { _depth++; }
+
+        public static void Exit() { if (_depth > 0) _depth--; }
+
+        /// <summary>True when this Rand call is allowed to consume the buffer.</summary>
+        public static bool AllowTrueRandom =>
+            !RandomOrgPlugin.DiceRollsOnly.Value || Active;
+    }
+
+    [HarmonyPatch(typeof(Utils), "GetRollOutcome", new Type[]
+    {
+        typeof(GameplayManager), typeof(SS.PlayerAttribute), typeof(long),
+        typeof(PlayerSkill), typeof(InteractionInfo), typeof(PlausV2), typeof(SS.RollOutcome)
+    })]
+    public static class Patch_Utils_GetRollOutcome_Scope
+    {
+        [HarmonyPrefix]
+        public static void Prefix() => RollScope.Enter();
+
+        [HarmonyFinalizer]
+        public static void Finalizer() => RollScope.Exit();
+    }
+
+    [HarmonyPatch(typeof(Utils), "GetRollOutcomeForAttrOnly", new Type[]
+    {
+        typeof(GameplayManager), typeof(SS.PlayerAttribute), typeof(long),
+        typeof(long), typeof(SS.GameDifficulty), typeof(SS.RollOutcome), typeof(double)
+    })]
+    public static class Patch_Utils_GetRollOutcomeForAttrOnly_Scope
+    {
+        [HarmonyPrefix]
+        public static void Prefix() => RollScope.Enter();
+
+        [HarmonyFinalizer]
+        public static void Finalizer() => RollScope.Exit();
+    }
+
+    // -----------------------------------------------------------------------
     // Dice-roll patches
-    // These replace every call to Utils.RandDouble / RandInt / RandIntInclusive
-    // with a value from the Random.org buffer when the mod is enabled.
+    // These replace calls to Utils.RandDouble / RandInt / RandIntInclusive
+    // with a value from the Random.org buffer when the mod is enabled and
+    // (by default) a dice roll is in progress — see RollScope above.
     // If the buffer is empty the original System.Random path is used as fallback.
     // -----------------------------------------------------------------------
 
@@ -19,6 +74,7 @@ namespace AIROG_RandomOrg
         public static bool Prefix(double high, ref double __result)
         {
             if (!RandomOrgPlugin.Enabled.Value) return true;
+            if (!RollScope.AllowTrueRandom) return true;
             if (!RandomOrgClient.TryGetRandom(out double val)) return true;
 
             __result = val * high;
@@ -36,6 +92,7 @@ namespace AIROG_RandomOrg
         public static bool Prefix(int n, ref int __result)
         {
             if (!RandomOrgPlugin.Enabled.Value) return true;
+            if (!RollScope.AllowTrueRandom) return true;
             if (!RandomOrgClient.TryGetRandom(out double val)) return true;
 
             __result = Math.Min((int)(val * n), n - 1);
@@ -50,6 +107,7 @@ namespace AIROG_RandomOrg
         public static bool Prefix(int low, int high, ref int __result)
         {
             if (!RandomOrgPlugin.Enabled.Value) return true;
+            if (!RollScope.AllowTrueRandom) return true;
             if (!RandomOrgClient.TryGetRandom(out double val)) return true;
 
             __result = Math.Min(low + (int)(val * (high - low + 1)), high);
@@ -103,6 +161,23 @@ namespace AIROG_RandomOrg
                 list.Add(Activator.CreateInstance(toggleType, new object[]
                 {
                     $"True Randomness (Random.org) [{keyInfo}, buf: {RandomOrgClient.BufferCount}]",
+                    enabled,
+                    onToggle
+                }));
+            }
+
+            // --- Dice-rolls-only toggle ---
+            {
+                bool enabled = RandomOrgPlugin.DiceRollsOnly.Value;
+                Action<bool> onToggle = val =>
+                {
+                    RandomOrgPlugin.DiceRollsOnly.Value = val;
+                    RandomOrgPlugin.Log.LogInfo($"[RandomOrg] DiceRollsOnly → {val}");
+                };
+
+                list.Add(Activator.CreateInstance(toggleType, new object[]
+                {
+                    "  └ Dice rolls only (saves daily API quota)",
                     enabled,
                     onToggle
                 }));

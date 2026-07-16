@@ -155,7 +155,7 @@ namespace AIROG_PresetExporter
 
             if (presets == null || presets.Count == 0)
             {
-                MainMenu.MessageModal()?.ShowModal("No presets found to export.");
+                MessageModal.I?.ShowModal("No presets found to export.");
                 return;
             }
 
@@ -175,7 +175,7 @@ namespace AIROG_PresetExporter
                 catch {}
             }
             
-            MainMenu.MessageModal()?.ShowModal($"Exported {count} presets to:\n{exportDir}");
+            MessageModal.I?.ShowModal($"Exported {count} presets to:\n{exportDir}");
         }
     }
 }

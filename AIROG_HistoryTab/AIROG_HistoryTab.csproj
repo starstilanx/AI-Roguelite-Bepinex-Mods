@@ -70,4 +70,10 @@
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\AIROG_Core\AIROG_Core.csproj">
+      <Private>False</Private>
+    </ProjectReference>
+  </ItemGroup>
+
 </Project>

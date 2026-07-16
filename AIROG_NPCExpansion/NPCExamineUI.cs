@@ -51,7 +51,12 @@ namespace AIROG_NPCExpansion
         private void Show(GameCharacter npc, GameplayManager manager)
         {
             _currentNpc = npc;
-            _manager = manager;
+            _manager = manager ?? SS.I?.hackyManager;
+            if (_manager == null || _manager.canvasTransform == null)
+            {
+                Debug.LogWarning("[AIROG_NPCExpansion] Cannot open NPCExamineUI: no valid GameplayManager/canvas available.");
+                return;
+            }
 
             if (_window == null) CreateUI();
 

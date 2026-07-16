@@ -135,7 +135,7 @@ namespace AIROG_GrandStrategy
         {
             var s = GrandStrategyData.State;
             List<Place> topPlaces;
-            try { topPlaces = manager.GetAllTopLvlPlaces() ?? new List<Place>(); }
+            try { topPlaces = manager.GetCurrentVoronoiWorld()?.GetAllTopLvlPlaces() ?? new List<Place>(); }
             catch { return "!Could not survey the region."; }
 
             var owned = new HashSet<string>();
@@ -323,7 +323,7 @@ namespace AIROG_GrandStrategy
                 List<string> adjacentEnemyPlaces;
                 try
                 {
-                    var topPlaces = manager.GetAllTopLvlPlaces() ?? new System.Collections.Generic.List<Place>();
+                    var topPlaces = manager.GetCurrentVoronoiWorld()?.GetAllTopLvlPlaces() ?? new System.Collections.Generic.List<Place>();
                     var placeByUuid = topPlaces.Where(p => p != null)
                         .GroupBy(p => p.uuid).ToDictionary(g => g.Key, g => g.First());
 
@@ -701,7 +701,7 @@ namespace AIROG_GrandStrategy
                 s.Holdings[place.uuid] = new HoldingData { Name = place.GetPrettyName(), IsCapital = isCapital };
         }
 
-        private static string ClaimPlaceByUuid(GameplayManager manager, string placeUuid)
+        public static string ClaimPlaceByUuid(GameplayManager manager, string placeUuid)
         {
             try
             {

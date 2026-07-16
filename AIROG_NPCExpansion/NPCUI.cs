@@ -280,7 +280,7 @@ namespace AIROG_NPCExpansion
 
             try
             {
-                var modal = manager.NTextPromptModal();
+                var modal = NTextPromptModal.I;
                 if (modal == null)
                 {
                     Debug.LogError("[AIROG_NPCExpansion] NTextPromptModal returned null.");

@@ -9,33 +9,32 @@ using System.Threading.Tasks;
 namespace AIROG_SkillWeb
 {
     [BepInPlugin(PLUGIN_GUID, PLUGIN_NAME, PLUGIN_VERSION)]
-    public class SkillWebPlugin : BaseUnityPlugin
+    public partial class SkillWebPlugin : BaseUnityPlugin
     {
         public const string PLUGIN_GUID = "com.airog.skillweb";
         public const string PLUGIN_NAME = "Skill Web";
-        public const string PLUGIN_VERSION = "3.1.0";
+        public const string PLUGIN_VERSION = "4.1.1";
 
         public static SkillWebPlugin Instance { get; private set; }
         public SkillWebData Data { get; private set; }
         public SkillWebConfig SkillConfig { get; private set; }
 
-        /// <summary>True while a RefineViaAI drain pass is in flight (only one runs at a time).</summary>
+        /// <summary>True while a RefineViaAI drain pass is in flight.</summary>
         private bool _aiRefinementRunning;
 
-        /// <summary>Perks awaiting AI refinement. SyncBonuses enqueues; the drain pass consumes.</summary>
+        /// <summary>Perks awaiting AI refinement.</summary>
         private readonly Queue<PerkNode> _refineQueue = new Queue<PerkNode>();
 
         private void Awake()
         {
             Instance = this;
-            Logger.LogInfo($"[SkillWeb] Plugin {PLUGIN_GUID} v{PLUGIN_VERSION} (native-perk bridge) starting...");
+            Logger.LogInfo($"[SkillWeb] Plugin {PLUGIN_GUID} v{PLUGIN_VERSION} (Constellation Overhaul) starting...");
             LoadConfig();
             var harmony = new Harmony(PLUGIN_GUID);
             harmony.PatchAll(typeof(SkillWebPatches));
             Logger.LogInfo("[SkillWeb] Patched successfully.");
         }
 
-        /// <summary>Full path to the per-save SkillWeb.json file.</summary>
         public static string GetSavePath()
             => Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "SkillWeb.json");
 
@@ -57,59 +56,54 @@ namespace AIROG_SkillWeb
             Data.Save(GetSavePath());
         }
 
-        // ── Native-perk bridge ────────────────────────────────────────────────────
-
-        /// <summary>The character whose attributes the game computes (and we augment).</summary>
         private static GameCharacter CurrentActor()
             => SS.I?.hackyManager?.playerCharacter?.GetCurrentActor();
 
         /// <summary>
-        /// Reads the current actor's native perk trees, ensures every learned perk has a derived
-        /// bonus (heuristic immediately, AI refinement queued if enabled), recomputes the cached
-        /// attribute totals, and saves. Safe to call on load and after every perk-tree interaction.
+        /// TurnHappenedEvent callback tracking survival and exploration milestones.
         /// </summary>
-        public void SyncBonuses()
+        public void OnTurnHappened(int numTurns, long secs)
         {
             if (Data == null) return;
-            var pdata = CurrentActor()?.playableData;
-            if (pdata?.perkTrees == null) return;
 
-            var snapshots = new List<PerkSnapshot>();
-            var newlyDerived = new List<PerkNode>();
+            // Increment survival turns
+            Data.turnsSurvived += numTurns;
 
-            foreach (var pt in pdata.perkTrees)
+            // 1. Check survival milestone: 1 Resonance per 25 turns survived
+            int milestone = Data.turnsSurvived / 25;
+            for (int m = 1; m <= milestone; m++)
             {
-                if (pt?.rootPerkNode == null) continue;
-                foreach (var pn in pt.GetAllPerkNodes())
+                string key = $"turns:{m * 25}";
+                AwardResonance(key, 1, $"surviving {m * 25} turns");
+            }
+
+            // 2. Check level ups: 2 Resonance per level
+            var character = SS.I?.hackyManager?.playerCharacter;
+            if (character != null)
+            {
+                int currentLevel = character.playerLevel;
+                for (int l = 2; l <= currentLevel; l++)
                 {
-                    if (pn == null || !pn.isLearned) continue;
-
-                    string name = pn.GetPrettyName();
-                    string desc = pn.GetPotentiallyNullDescription() ?? "";
-                    var pb = Data.GetOrCreate(pn.uuid, name);
-
-                    if (!pb.derived)
-                    {
-                        pb.stats = PerkStatDeriver.Heuristic(name, desc, SkillConfig.HeuristicBudget);
-                        pb.derived = true;
-                        if (SkillConfig.UseAIStatDerivation) newlyDerived.Add(pn);
-                    }
-
-                    snapshots.Add(new PerkSnapshot { uuid = pn.uuid, isActivated = pn.isActivated });
+                    string key = $"level:{l}";
+                    AwardResonance(key, 2, $"reaching level {l}");
                 }
             }
 
-            Data.RecalculateStats(snapshots, SkillConfig);
-            SaveData();
-
-            if (newlyDerived.Count > 0)
+            // 3. First visit to a new Place: 1 Resonance
+            var place = SS.I?.hackyManager?.currentPlace;
+            if (place != null && !string.IsNullOrEmpty(place.uuid))
             {
-                // Always enqueue — a pass already in flight will drain these too, so perks
-                // learned mid-pass are no longer dropped from refinement.
-                foreach (var pn in newlyDerived) _refineQueue.Enqueue(pn);
-                if (!_aiRefinementRunning)
-                    _ = RefineViaAIAsync();
+                string key = $"place:{place.uuid}";
+                AwardResonance(key, 1, $"visiting place '{place.GetPrettyName()}'");
             }
+
+            // 4. Cross-mod sources: Chronicle chapters, NPCExpansion quests, Settlement buildings, Reverie dreams
+            CheckCrossModResonance();
+
+            // 5. Persist granted-ability cooldowns (native GameAbility.TurnHappened already ticked them
+            //    down this turn; copy the live value back onto the owning nodes so it survives save/load).
+            PersistAbilityCooldowns();
+            SkillAbilityBar.Instance?.RefreshIfShowing();
         }
 
         private async Task RefineViaAIAsync()
@@ -131,7 +125,7 @@ namespace AIROG_SkillWeb
                         pn.GetPotentiallyNullDescription() ?? "");
                     if (stats != null)
                     {
-                        pb.stats = stats;        // AI result replaces the heuristic estimate
+                        pb.stats = stats;
                         pb.aiRefined = true;
                         changed = true;
                     }
@@ -139,21 +133,7 @@ namespace AIROG_SkillWeb
 
                 if (changed)
                 {
-                    // Rebuild from the live tree so newly-toggled active states are reflected too.
-                    var pdata = CurrentActor()?.playableData;
-                    var snapshots = new List<PerkSnapshot>();
-                    if (pdata?.perkTrees != null)
-                    {
-                        foreach (var pt in pdata.perkTrees)
-                        {
-                            if (pt?.rootPerkNode == null) continue;
-                            foreach (var p in pt.GetAllPerkNodes())
-                                if (p != null && p.isLearned)
-                                    snapshots.Add(new PerkSnapshot { uuid = p.uuid, isActivated = p.isActivated });
-                        }
-                    }
-                    Data.RecalculateStats(snapshots, SkillConfig);
-                    SaveData();
+                    SyncBonuses();
                 }
             }
             catch (Exception ex)
@@ -193,18 +173,23 @@ namespace AIROG_SkillWeb
 
     public static class SkillWebPatches
     {
-        // ── Game lifecycle ──────────────────────────────────────────────────────
-
         [HarmonyPatch(typeof(GameplayManager), "AfterLoadOrNewGame")]
         [HarmonyPostfix]
         public static void AfterLoadOrNewGame_Postfix()
         {
             SkillWebPlugin.Instance.LoadSaveData();
             SkillWebPlugin.Instance.SyncBonuses();
-        }
 
-        // ── Keep the sidecar in sync with the native perk tree ──────────────────
-        // RefreshView fires after every learn/activate/respec/regen in the native modal.
+            // Register economy hooks on turn tick
+            GameplayManager.TurnHappenedEvent -= SkillWebPlugin.Instance.OnTurnHappened;
+            GameplayManager.TurnHappenedEvent += SkillWebPlugin.Instance.OnTurnHappened;
+
+            // Register with GenContext if available
+            if (BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("com.airog.gencontext"))
+            {
+                GenContextIntegration.Register();
+            }
+        }
 
         [HarmonyPatch(typeof(ViewPerksModal), "RefreshView")]
         [HarmonyPostfix]
@@ -213,8 +198,6 @@ namespace AIROG_SkillWeb
             if (SkillWebPlugin.Instance?.Data == null) SkillWebPlugin.Instance?.LoadSaveData();
             SkillWebPlugin.Instance?.SyncBonuses();
         }
-
-        // ── Stat injection (the mechanical layer native perks lack) ─────────────
 
         [HarmonyPatch(typeof(GameplayManager), "GetAttributeValAfterItemBonuses")]
         [HarmonyPostfix]
@@ -225,8 +208,6 @@ namespace AIROG_SkillWeb
             if (plugin.Data.CachedStats.TryGetValue(attr, out float bonus))
                 __result += (long)bonus;
         }
-
-        // ── Equipment-panel button → "Skill Web Bonuses" summary ────────────────
 
         [HarmonyPatch(typeof(ItemPanel), "Start")]
         [HarmonyPostfix]
@@ -250,7 +231,7 @@ namespace AIROG_SkillWeb
             var tObj = new GameObject("Text", typeof(RectTransform), typeof(TMPro.TextMeshProUGUI));
             tObj.transform.SetParent(btnObj.transform, false);
             var tmp  = tObj.GetComponent<TMPro.TextMeshProUGUI>();
-            tmp.text = "✦ Skill Web Bonuses";
+            tmp.text = "✦ Skill Web";
             tmp.fontSize  = 14;
             tmp.alignment = TMPro.TextAlignmentOptions.Center;
             var tRect = tObj.GetComponent<RectTransform>();
@@ -265,6 +246,81 @@ namespace AIROG_SkillWeb
                     SkillWebPlugin.Instance.LoadSaveData();
                 SkillWebPlugin.Instance.SyncBonuses();
                 SkillWebUI.Open(ep.manager, SkillWebPlugin.Instance.Data);
+            });
+
+            // "✦ Abilities" button — opens the usable-ability bar (Keystone/Confluence grants).
+            if (SkillWebPlugin.Instance.SkillConfig.GrantUsableAbilities
+                && __instance.transform.Find("OpenSkillAbilitiesBtn") == null)
+            {
+                var abilObj = new GameObject("OpenSkillAbilitiesBtn",
+                    typeof(RectTransform), typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.Button));
+                abilObj.transform.SetParent(ep.transform, false);
+
+                var arect = abilObj.GetComponent<RectTransform>();
+                arect.anchorMin = new Vector2(0.5f, 0f);
+                arect.anchorMax = new Vector2(0.5f, 0f);
+                arect.pivot     = new Vector2(0.5f, 0f);
+                arect.anchoredPosition = new Vector2(0f, 46f); // just above the Skill Web button
+                arect.sizeDelta = new Vector2(150f, 34f);
+                abilObj.GetComponent<UnityEngine.UI.Image>().color = new Color(0.20f, 0.10f, 0.24f);
+
+                var atObj = new GameObject("Text", typeof(RectTransform), typeof(TMPro.TextMeshProUGUI));
+                atObj.transform.SetParent(abilObj.transform, false);
+                var atmp = atObj.GetComponent<TMPro.TextMeshProUGUI>();
+                atmp.text = "✦ Abilities";
+                atmp.fontSize  = 14;
+                atmp.alignment = TMPro.TextAlignmentOptions.Center;
+                var atRect = atObj.GetComponent<RectTransform>();
+                atRect.anchorMin = Vector2.zero;
+                atRect.anchorMax = Vector2.one;
+                atRect.sizeDelta = Vector2.zero;
+
+                abilObj.GetComponent<UnityEngine.UI.Button>().onClick.AddListener(() =>
+                {
+                    if (SkillWebPlugin.Instance.Data == null)
+                        SkillWebPlugin.Instance.LoadSaveData();
+                    SkillWebPlugin.Instance.SyncBonuses();
+                    SkillAbilityBar.Open(ep.manager);
+                });
+            }
+        }
+
+        [HarmonyPatch(typeof(ViewPerksModal), "PresentSelf")]
+        [HarmonyPostfix]
+        public static void ViewPerksModal_PresentSelf_Postfix(ViewPerksModal __instance)
+        {
+            if (__instance == null) return;
+            if (__instance.transform.Find("OpenConstellationBtn") != null) return;
+
+            var btnObj = new GameObject("OpenConstellationBtn",
+                typeof(RectTransform), typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.Button));
+            btnObj.transform.SetParent(__instance.transform, false);
+
+            var rect = btnObj.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0.04f, 0.03f);
+            rect.anchorMax = new Vector2(0.22f, 0.08f);
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            btnObj.GetComponent<UnityEngine.UI.Image>().color = new Color(0.15f, 0.07f, 0.25f);
+
+            var tObj = new GameObject("Text", typeof(RectTransform), typeof(TMPro.TextMeshProUGUI));
+            tObj.transform.SetParent(btnObj.transform, false);
+            var tmp  = tObj.GetComponent<TMPro.TextMeshProUGUI>();
+            tmp.text = "✦ View Constellation";
+            tmp.fontSize  = 13;
+            tmp.alignment = TMPro.TextAlignmentOptions.Center;
+            var tRect = tObj.GetComponent<RectTransform>();
+            tRect.anchorMin = Vector2.zero;
+            tRect.anchorMax = Vector2.one;
+            tRect.sizeDelta = Vector2.zero;
+
+            var btn = btnObj.GetComponent<UnityEngine.UI.Button>();
+            btn.onClick.AddListener(() =>
+            {
+                if (SkillWebPlugin.Instance.Data == null)
+                    SkillWebPlugin.Instance.LoadSaveData();
+                SkillWebPlugin.Instance.SyncBonuses();
+                SkillWebUI.Open(__instance.manager, SkillWebPlugin.Instance.Data);
             });
         }
     }

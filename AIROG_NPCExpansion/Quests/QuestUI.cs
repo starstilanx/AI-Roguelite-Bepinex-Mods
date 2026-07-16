@@ -44,7 +44,12 @@ namespace AIROG_NPCExpansion
 
         private void Show(GameplayManager manager)
         {
-            _manager = manager;
+            _manager = manager ?? SS.I?.hackyManager;
+            if (_manager == null || _manager.canvasTransform == null)
+            {
+                Debug.LogWarning("[AIROG_NPCExpansion] Cannot open QuestUI: no valid GameplayManager/canvas available.");
+                return;
+            }
 
             // Rebuild UI if stale (e.g. scene reload destroyed scroll content but not the window)
             if (_window == null || _scrollContent == null)
@@ -57,8 +62,8 @@ namespace AIROG_NPCExpansion
             else
             {
                 // Re-parent to the current manager's canvas (handles manager changes between opens)
-                _window.transform.SetParent(manager.canvasTransform, false);
-                if (_modalBlocker != null) _modalBlocker.transform.SetParent(manager.canvasTransform, false);
+                _window.transform.SetParent(_manager.canvasTransform, false);
+                if (_modalBlocker != null) _modalBlocker.transform.SetParent(_manager.canvasTransform, false);
             }
 
             if (_modalBlocker != null) _modalBlocker.SetActive(true);
@@ -175,7 +180,7 @@ namespace AIROG_NPCExpansion
             var quests = QuestManager.AllQuests;
             if (quests.Count == 0)
             {
-                AddSectionHeader("No quests yet.");
+                QuestEntryRenderer.AddSectionHeader(_scrollContent, "No quests yet.");
                 return;
             }
 
@@ -185,103 +190,23 @@ namespace AIROG_NPCExpansion
 
             if (active.Count > 0)
             {
-                AddSectionHeader("── Active Quests ──");
-                foreach (var q in active) AddQuestEntry(q);
+                QuestEntryRenderer.AddSectionHeader(_scrollContent, "── Active Quests ──");
+                foreach (var q in active) QuestEntryRenderer.AddQuestEntry(_scrollContent, q);
             }
             if (completed.Count > 0)
             {
-                AddSectionHeader("── Completed ──");
-                foreach (var q in completed) AddQuestEntry(q);
+                QuestEntryRenderer.AddSectionHeader(_scrollContent, "── Completed ──");
+                foreach (var q in completed) QuestEntryRenderer.AddQuestEntry(_scrollContent, q);
             }
             if (failed.Count > 0)
             {
-                AddSectionHeader("── Failed ──");
-                foreach (var q in failed) AddQuestEntry(q);
+                QuestEntryRenderer.AddSectionHeader(_scrollContent, "── Failed ──");
+                foreach (var q in failed) QuestEntryRenderer.AddQuestEntry(_scrollContent, q);
             }
 
             // Force immediate layout recalculation so entries are visible on first open
             UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(
                 _scrollContent.GetComponent<RectTransform>());
-        }
-
-        private void AddSectionHeader(string text)
-        {
-            var go = new GameObject("Header", typeof(RectTransform));
-            go.transform.SetParent(_scrollContent, false);
-            go.GetComponent<RectTransform>().sizeDelta = new Vector2(0, 22);
-            var txt = go.AddComponent<TextMeshProUGUI>();
-            txt.text = text;
-            txt.fontSize = 12;
-            txt.color = new Color(0.8f, 0.7f, 0.3f, 1f);
-            txt.fontStyle = FontStyles.Bold;
-            txt.alignment = TextAlignmentOptions.Center;
-        }
-
-        private void AddQuestEntry(QuestData quest)
-        {
-            var card = new GameObject("QuestCard", typeof(RectTransform));
-            card.transform.SetParent(_scrollContent, false);
-            var cardRect = card.GetComponent<RectTransform>();
-            cardRect.sizeDelta = new Vector2(0, 80);
-
-            var cardBg = card.AddComponent<Image>();
-            cardBg.color = quest.Status switch
-            {
-                QuestStatus.Completed => new Color(0.05f, 0.15f, 0.05f, 0.9f),
-                QuestStatus.Failed    => new Color(0.15f, 0.05f, 0.05f, 0.9f),
-                _                     => new Color(0.08f, 0.08f, 0.15f, 0.9f)
-            };
-
-            var vlg = card.AddComponent<VerticalLayoutGroup>();
-            vlg.padding = new RectOffset(8, 8, 6, 6);
-            vlg.spacing = 3;
-            vlg.childControlWidth = true;
-            vlg.childControlHeight = false;
-            vlg.childForceExpandWidth = true;
-            vlg.childForceExpandHeight = false;
-            card.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-            // Giver + status badge
-            string statusColor = quest.Status switch
-            {
-                QuestStatus.Completed => "#55ff55",
-                QuestStatus.Failed    => "#ff5555",
-                _                     => "#ffd700"
-            };
-            string statusLabel = quest.Status switch
-            {
-                QuestStatus.Completed => "[DONE]",
-                QuestStatus.Failed    => "[FAILED]",
-                _                     => "[ACTIVE]"
-            };
-            AddCardLine(card.transform,
-                $"<color={statusColor}>{statusLabel}</color> <b>{quest.GiverName}</b>", 11);
-
-            AddCardLine(card.transform, quest.ObjectiveText, 10);
-
-            if (!string.IsNullOrEmpty(quest.CompletionCondition))
-                AddCardLine(card.transform, $"<color=#aaaaaa>Condition: {quest.CompletionCondition}</color>", 9);
-
-            if (!string.IsNullOrEmpty(quest.RewardText) || quest.RewardGold > 0)
-            {
-                string reward = quest.RewardText ?? "";
-                if (quest.RewardGold > 0) reward += $" (+{quest.RewardGold}g)";
-                AddCardLine(card.transform, $"<color=#aaaaff>Reward: {reward.Trim()}</color>", 9);
-            }
-        }
-
-        private void AddCardLine(Transform parent, string text, int fontSize)
-        {
-            var go = new GameObject("Line", typeof(RectTransform));
-            go.transform.SetParent(parent, false);
-            var txt = go.AddComponent<TextMeshProUGUI>();
-            txt.text = text;
-            txt.fontSize = fontSize;
-            txt.color = Color.white;
-            txt.enableWordWrapping = true;
-            var le = go.AddComponent<LayoutElement>();
-            le.preferredHeight = fontSize * 1.8f;
-            le.flexibleWidth = 1;
         }
 
         // ─── UI helpers ────────────────────────────────────────────────────────────

@@ -93,6 +93,159 @@ namespace AIROG_GrandStrategy
             return $"The dominion of {s.DominionName} is founded! Capital: {s.CapitalName}. Use GS_ORDERS to see what you can decree.";
         }
 
+        // ─── Usurpation ───────────────────────────────────────────────────────────
+
+        public const int USURP_WINDOW_TURNS = 30; // turns after a leader's death near the player
+
+        /// True if the player can currently take over this faction, with the reason exposed
+        /// so UI and console can explain eligibility the same way.
+        public static bool CanUsurp(Faction faction, FactionExtData facData, out bool byAcclaim)
+        {
+            byAcclaim = false;
+            if (faction == null || facData == null) return false;
+            try { byAcclaim = faction.GetStanding() >= Faction.FactionStanding.REVERED; } catch { }
+            if (byAcclaim) return true;
+            int turn = GrandStrategyData.WorldExpansionTurn();
+            return facData.LeaderSlainTurn >= 0 && turn - facData.LeaderSlainTurn <= USURP_WINDOW_TURNS;
+        }
+
+        /// Takes over an existing faction as the player's dominion — either by acclamation
+        /// (REVERED standing) or by right of conquest (its leader recently died before the
+        /// player's eyes). Inherits territory, wars, diplomacy, and surviving lieutenants.
+        public static string UsurpFaction(GameplayManager manager, string arg)
+        {
+            var s = GrandStrategyData.State;
+            if (s.Founded) return $"You already rule {s.DominionName}.";
+            if (string.IsNullOrWhiteSpace(arg)) return "Usage: GS_USURP <faction name>";
+
+            var target = OrderSystem.FindFaction(manager, arg);
+            if (target == null) return $"No living faction matches '{arg}'.";
+            string facName = target.GetPrettyName();
+            var facData = WorldData.GetFactionData(target.uuid);
+
+            if (!CanUsurp(target, facData, out bool byAcclaim))
+                return $"{facName} will not accept your rule. Either earn REVERED standing with them, " +
+                       $"or claim the seat within {USURP_WINDOW_TURNS} turns of their leader falling in your presence.";
+
+            // Resolve the capital BEFORE mutating any state so failure leaves nothing half-done
+            var claimed = (facData.ClaimedPlaceUuids ?? new List<string>()).ToList();
+            string curTop = null;
+            try { curTop = manager.currentPlace?.GetTopLvlPlace()?.uuid; } catch { }
+            string capitalUuid = claimed.Contains(curTop) ? curTop : claimed.FirstOrDefault();
+            if (capitalUuid == null) capitalUuid = curTop; // landless faction: seat power where you stand
+            Place capitalPlace = null;
+            try
+            {
+                if (capitalUuid != null && SS.I?.uuidToGameEntityMap != null
+                    && SS.I.uuidToGameEntityMap.TryGetValue(capitalUuid, out var capEnt) && capEnt is Place p)
+                    capitalPlace = p;
+            }
+            catch { }
+            if (capitalPlace == null) return "You must be somewhere in the world to seize a faction's seat of power.";
+
+            var allFactions = manager.GetCurrentFactions() ?? new List<Faction>();
+            var playerFaction = allFactions.FirstOrDefault(f => f != null && f.GetPrettyName() == "Player");
+            const string FALLBACK_PLAYER_UUID = "player-dominion-uuid-static-0001";
+            string playerUuid = playerFaction?.uuid ?? FALLBACK_PLAYER_UUID;
+            int turn = GrandStrategyData.WorldExpansionTurn();
+
+            string themeKey = Themes.Apply(s, "AUTO", manager);
+            Debug.Log($"[GrandStrategy] Usurped dominion theme: {themeKey}");
+
+            s.Founded          = true;
+            s.DominionName     = facName;
+            s.FactionUuid      = playerUuid;
+            s.CapitalPlaceUuid = capitalPlace.uuid;
+            s.CapitalName      = capitalPlace.GetPrettyName();
+            s.FoundedTurn      = turn;
+            s.Treasury         = 50 + facData.Resources / 2;
+            s.ArmyStrength     = Math.Min(40, 10 + facData.Resources / 10);
+            s.CommandPoints    = 2;
+
+            // Register the player's dominion in the sim, inheriting the old faction's weight
+            var fac = WorldData.GetFactionData(playerUuid);
+            fac.Name       = s.DominionName;
+            fac.Tag        = "Player Dominion";
+            fac.Resources  = Math.Max(100, facData.Resources);
+            fac.Population = Math.Max(300, facData.Population);
+            fac.PopState   = facData.PopState == "Razed" ? "Struggling" : facData.PopState;
+            fac.Seeded     = true;
+
+            // Territory: every claimed place becomes a holding; a forced seizure starts restive
+            OrderSystem.ClaimPlace(manager, capitalPlace, isCapital: true);
+            foreach (var uuid in claimed)
+                if (uuid != capitalPlace.uuid) OrderSystem.ClaimPlaceByUuid(manager, uuid);
+            int startUnrest = byAcclaim ? 5 : 20;
+            foreach (var h in s.Holdings.Values) h.Unrest = Math.Max(h.Unrest, startUnrest);
+            facData.ClaimedPlaceUuids.Clear();
+
+            // The old faction is absorbed — the sim stops driving it
+            WorldData.CurrentState.EliminatedFactions.Add(target.uuid);
+
+            // Inherit diplomacy: standing pacts and rivalries carry over to the new ruler
+            foreach (var f in allFactions)
+            {
+                if (f == null || f.uuid == target.uuid || f.uuid == playerUuid || f.GetPrettyName() == "Player") continue;
+                if (WorldData.CurrentState.EliminatedFactions.Contains(f.uuid)) continue;
+                var oldTier = WorldData.GetTier(WorldData.GetRelationshipKey(target.uuid, f.uuid));
+                if (oldTier == DiplomaticTier.Neutral || oldTier == DiplomaticTier.War) continue;
+                WorldData.SetTier(WorldData.GetRelationshipKey(playerUuid, f.uuid), oldTier,
+                    $"inherited from {facName}", turn, s.DominionName, f.GetPrettyName());
+            }
+
+            // Inherit wars: enemies of the old regime are now the player's problem
+            foreach (var kvp in WorldData.CurrentState.ActiveWars.ToList())
+            {
+                var war = kvp.Value;
+                if (war.ActorUuid != target.uuid && war.TargetUuid != target.uuid) continue;
+                string otherUuid = war.ActorUuid == target.uuid ? war.TargetUuid : war.ActorUuid;
+                string otherName = war.ActorUuid == target.uuid ? war.TargetName : war.ActorName;
+                WorldData.CurrentState.ActiveWars.Remove(kvp.Key);
+                WorldData.DeclareWar(playerUuid, s.DominionName, otherUuid, otherName, war.CasusBelli);
+            }
+
+            // Court crossover: the old leader's fate, and surviving lieutenants join the council
+            if (byAcclaim && facData.Leader != null && !facData.Leader.IsDead)
+            {
+                facData.FormerLeaders.Add(facData.Leader.Display);
+                WorldData.LogEvent($"{facData.Leader.Display} has stepped aside, yielding {facName} to its new {GrandStrategyData.L.RulerTitle}.", "COURT");
+            }
+            int recruited = 0;
+            foreach (var lt in (facData.Lieutenants ?? new List<FactionFigure>()).Where(l => !l.IsDead))
+            {
+                string role = OrderSystem.AdvisorRoles.FirstOrDefault(r => s.Advisors.All(a => a.Role != r));
+                if (role == null) break;
+                s.Advisors.Add(new Advisor
+                {
+                    Role        = role,
+                    Name        = lt.Name,
+                    Personality = string.IsNullOrEmpty(lt.Trait) ? "loyal to the old regime" : lt.Trait,
+                    Loyalty     = byAcclaim ? 60 : 35,
+                });
+                recruited++;
+            }
+
+            string how = byAcclaim
+                ? $"acclaimed by its people as their rightful {GrandStrategyData.L.RulerTitle}"
+                : "seized by right of conquest, its old leadership dead";
+            string desc = $"The player has taken control of {facName} — {how}.";
+            GrandStrategyData.LogDeed(desc);
+            WorldData.LogEvent($"[USURPATION] {desc}", "MAJOR");
+            WorldData.CurrentState.MajorEventHistory.Add(desc);
+            WorldData.QueuePlayerEvent(
+                $"You now rule {facName}. {(byAcclaim ? "The people cheer their new leader." : "The old guard watches you warily.")}" +
+                $"{(recruited > 0 ? $" {recruited} of its lieutenants now sit on your council." : "")}",
+                "DOMINION_USURPED");
+            GrandStrategyData.TryRecordChronicleBeat(desc);
+            WorldEventsUI.MarkDirty();
+            GrandStrategyData.SaveToCurrentDir();
+            WorldData.SaveToCurrentDir();
+
+            return $"You now rule {facName} ({s.Holdings.Count} holding(s), {s.Treasury}{GrandStrategyData.L.CurrencyShort} treasury" +
+                   $"{(recruited > 0 ? $", {recruited} council advisor(s) inherited" : "")}). " +
+                   (byAcclaim ? "The transition is peaceful — for now." : "Power taken by force breeds unrest. Watch your holdings.");
+        }
+
         // ─── Strategic tick ───────────────────────────────────────────────────────
 
         public static void StrategicTick(GameplayManager manager)
@@ -413,7 +566,7 @@ namespace AIROG_GrandStrategy
             // DOMINATION — own half the known world
             try
             {
-                var topPlaces = manager.GetAllTopLvlPlaces();
+                var topPlaces = manager.GetCurrentVoronoiWorld()?.GetAllTopLvlPlaces();
                 if (topPlaces != null && topPlaces.Count >= 5
                     && s.Holdings.Count >= 5 && s.Holdings.Count * 2 >= topPlaces.Count)
                 {

@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using AIROG_Core;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
@@ -99,16 +100,17 @@ namespace AIROG_RandomOrg
         private static async Task<int[]> FetchAsync(int count)
         {
             string apiKey = RandomOrgPlugin.ApiKey.Value?.Trim() ?? "";
+            HttpClient http = SingletonHttpClient.Instance;
 
-            using (var http = new HttpClient())
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
             {
-                http.Timeout = TimeSpan.FromSeconds(20);
-
                 if (string.IsNullOrEmpty(apiKey))
                 {
                     // ---- Anonymous mode: plain-text HTTP ----
                     string url = string.Format(BASIC_URL, count);
-                    string body = await http.GetStringAsync(url);
+                    var getResponse = await http.GetAsync(url, cts.Token);
+                    getResponse.EnsureSuccessStatusCode();
+                    string body = await getResponse.Content.ReadAsStringAsync();
 
                     var lines = body.Trim().Split(
                         new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
@@ -137,7 +139,7 @@ namespace AIROG_RandomOrg
                     };
 
                     var content  = new StringContent(req.ToString(), Encoding.UTF8, "application/json");
-                    var response = await http.PostAsync(RPC_URL, content);
+                    var response = await http.PostAsync(RPC_URL, content, cts.Token);
                     string json  = await response.Content.ReadAsStringAsync();
 
                     var jObj = JObject.Parse(json);

@@ -54,7 +54,7 @@ namespace AIROG_Reverie
                 {
                     // Force a dream to begin immediately (bypasses roll + cooldown)
                     if (ReverieManager.State.Phase == DreamPhase.Dreaming)
-                        __instance.MessageModal().ShowModal("Already dreaming.", false, true);
+                    MessageModal.I.ShowModal("Already dreaming.", false, true);
                     else
                         ReverieManager.BeginDream();
                     return false;
@@ -70,7 +70,7 @@ namespace AIROG_Reverie
                             null);
                     }
                     else
-                        __instance.MessageModal().ShowModal("Not dreaming.", false, true);
+                        MessageModal.I.ShowModal("Not dreaming.", false, true);
                     return false;
                 }
 
@@ -87,7 +87,7 @@ namespace AIROG_Reverie
                         ? string.Join("\n", ReverieManager.LiveOmens().Select(o => $"  \"{o.Text}\" (until turn {o.ExpiresTurn})"))
                         : "  none";
                     var haunting = ReverieManager.LiveHaunting();
-                    __instance.MessageModal().ShowModal(
+                    MessageModal.I.ShowModal(
                         $"Turn {st.GlobalTurn} — {dreamLine}\n" +
                         $"Live omens:\n{omens}\n" +
                         $"Haunting: {(haunting != null ? haunting.Text : "none")}\n" +

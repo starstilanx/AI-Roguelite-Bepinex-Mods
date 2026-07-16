@@ -28,7 +28,7 @@ namespace AIROG_NPCExpansion
         public static void PromoteKiller(GameCharacter killer, GameplayManager manager = null)
         {
             if (killer == null) return;
-            if (manager == null) manager = killer.manager;
+            if (manager == null) manager = killer.manager as GameplayManager;
 
             // 1. Load or Create Data
             NPCData data = NPCData.Load(killer.uuid);

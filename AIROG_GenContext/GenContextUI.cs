@@ -146,7 +146,7 @@ namespace AIROG_GenContext
         private static void OpenConfigMenu()
         {
             Debug.Log("[GenContext] Opening Config Menu");
-            var modal = MainMenu.NTextPromptModal();
+            var modal = NTextPromptModal.I;
             if (modal == null) return;
 
             try

@@ -56,6 +56,17 @@ namespace AIROG_GenContext.ContextProviders
             public string Tag;
             public int Population;
             public string PopState;
+            public FactionFigureStub Leader;
+            public List<FactionFigureStub> Lieutenants;
+        }
+
+        private class FactionFigureStub
+        {
+            public string Name;
+            public string Title;
+            public string Role;
+            public string Trait;
+            public bool   IsDead;
         }
 
         private class WorldEventStub
@@ -135,7 +146,8 @@ namespace AIROG_GenContext.ContextProviders
                         string regions = f.ClaimedPlaceUuids?.Count > 0 ? $", {f.ClaimedPlaceUuids.Count}r" : "";
                         string pop = !string.IsNullOrEmpty(f.PopState) && f.PopState != "Normal"
                             ? $", {f.PopState.ToLower()}" : "";
-                        return $"{f.Name} [{f.Tag}{regions}{pop}]";
+                        string led = LeaderStr(f);
+                        return $"{f.Name} [{f.Tag}{regions}{pop}]{led}";
                     });
                 if (notable.Any())
                     data += $"Factions: {string.Join(", ", notable)}\n";
@@ -164,6 +176,12 @@ namespace AIROG_GenContext.ContextProviders
                 if (owner != null && topPlace != null)
                 {
                     string line = $"Current Location: {topPlace.GetPrettyName()} — territory of {owner.GetPrettyName()} (disposition toward player: {owner.GetStandingPromptStr()})";
+                    if (_cache.Factions != null && _cache.Factions.TryGetValue(owner.uuid, out var ownerData))
+                    {
+                        var l = ownerData.Leader;
+                        if (l != null && !l.IsDead && !string.IsNullOrEmpty(l.Name))
+                            line += $", ruled by {FigureDisplay(l)}{(string.IsNullOrEmpty(l.Trait) ? "" : $" ({l.Trait})")}";
+                    }
                     var warHere = _cache.ActiveWars?.Values.FirstOrDefault(
                         w => w.ActorUuid == owner.uuid || w.TargetUuid == owner.uuid);
                     if (warHere != null)
@@ -227,6 +245,11 @@ namespace AIROG_GenContext.ContextProviders
             if (locationDirective != null)
                 directives.Add(locationDirective);
 
+            // Faction courts exist — the named figures are real, persistent characters
+            if (_cache.Factions != null && _cache.Factions.Values.Any(
+                    f => f?.Leader != null && !string.IsNullOrEmpty(f.Leader.Name)))
+                directives.Add("faction leaders/lieutenants named above are real characters in this world — NPCs know of them, they can appear in person, and their names/titles must stay consistent");
+
             // Active bounties on the player make the world dangerous in specific ways
             if (_cache.PlayerBounties != null && _cache.PlayerBounties.Count > 0 && _cache.Factions != null)
             {
@@ -275,6 +298,18 @@ namespace AIROG_GenContext.ContextProviders
                 result = result.Substring(0, maxChars) + "...";
 
             return "\n" + result;
+        }
+
+        private static string FigureDisplay(FactionFigureStub f) =>
+            string.IsNullOrEmpty(f.Title) ? f.Name : $"{f.Title} {f.Name}";
+
+        // ", led by Warlord Kessek (ruthless)" or "" when the faction has no living leader
+        private static string LeaderStr(FactionExtDataStub f)
+        {
+            var l = f.Leader;
+            if (l == null || l.IsDead || string.IsNullOrEmpty(l.Name)) return "";
+            string trait = !string.IsNullOrEmpty(l.Trait) ? $" ({l.Trait})" : "";
+            return $", led by {FigureDisplay(l)}{trait}";
         }
 
         private static string TierLabel(int tier)

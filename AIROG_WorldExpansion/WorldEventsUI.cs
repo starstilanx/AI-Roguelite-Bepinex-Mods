@@ -114,22 +114,25 @@ namespace AIROG_WorldExpansion
                 _contentObj = view.Find("Scroll View/Viewport/Content")?.gameObject;
             }
 
-            // Hijack / inject the 8th journal tab
-            if (modal.tabBtnsHolder.childCount < 8)
+            // Inject our tab button, and RE-WIRE it on every Init: the native Init()
+            // rewires ALL tab buttons by index (RemoveAllListeners + index-paired
+            // listener), so any journal re-init silently steals our button — clicking
+            // it then activates the view without ever calling RefreshView (empty black
+            // panel). No tab-count assumptions: pre-07/11 builds had 7 native tabs,
+            // the 07/11 build has 6.
+            Transform btnTrans = modal.tabBtnsHolder.Find("WorldNewsTabButton");
+            GameObject btnObj;
+            if (btnTrans == null)
             {
-                if (modal.tabBtnsHolder.Find("WorldNewsTabButton") == null)
-                {
-                    Transform refBtn = modal.tabBtnsHolder.GetChild(0);
-                    GameObject newBtn = Object.Instantiate(refBtn.gameObject, modal.tabBtnsHolder);
-                    newBtn.name = "WorldNewsTabButton";
-                    SetupTabButton(newBtn.GetComponent<Button>(), modal);
-                }
-                return;
+                Transform refBtn = modal.tabBtnsHolder.GetChild(0);
+                btnObj = Object.Instantiate(refBtn.gameObject, modal.tabBtnsHolder);
+                btnObj.name = "WorldNewsTabButton";
             }
-
-            Transform tab8 = modal.tabBtnsHolder.GetChild(7);
-            tab8.name = "WorldNewsTabButton";
-            SetupTabButton(tab8.GetComponent<Button>(), modal);
+            else
+            {
+                btnObj = btnTrans.gameObject;
+            }
+            SetupTabButton(btnObj.GetComponent<Button>(), modal);
         }
 
         private static void SetupTabButton(Button btn, JournalModal modal)
@@ -137,17 +140,46 @@ namespace AIROG_WorldExpansion
             var loc = btn.GetComponentInChildren<UnityEngine.Localization.Components.LocalizeStringEvent>();
             if (loc != null) Object.DestroyImmediate(loc);
 
-            var btnText = btn.GetComponentInChildren<TMP_Text>();
+            var btnText = btn.GetComponentInChildren<TMP_Text>(true);
             if (btnText != null)
             {
                 btnText.text = "World News";
                 _commonFont  = btnText.font;
             }
+            else
+            {
+                // 07/11 build: tab buttons are icon-only, so the clone has no label —
+                // overlay our own so the tab is distinguishable from the Quests tab.
+                if (modal.currentQuestDetailsTitle != null)
+                    _commonFont = modal.currentQuestDetailsTitle.font;
+                if (btn.transform.Find("WorldNewsLabel_Mod") == null)
+                {
+                    var labelObj = new GameObject("WorldNewsLabel_Mod", typeof(RectTransform));
+                    labelObj.transform.SetParent(btn.transform, false);
+                    labelObj.layer = btn.gameObject.layer;
+                    var lrt = (RectTransform)labelObj.transform;
+                    lrt.anchorMin = Vector2.zero;
+                    lrt.anchorMax = Vector2.one;
+                    lrt.offsetMin = Vector2.zero;
+                    lrt.offsetMax = Vector2.zero;
+                    var lbl = labelObj.AddComponent<TextMeshProUGUI>();
+                    lbl.text          = "NEWS";
+                    lbl.fontSize      = 18;
+                    lbl.fontStyle     = FontStyles.Bold;
+                    lbl.alignment     = TextAlignmentOptions.Center;
+                    lbl.color         = new Color(0.2f, 0.12f, 0.05f);
+                    lbl.raycastTarget = false;
+                    if (_commonFont != null) lbl.font = _commonFont;
+                }
+            }
 
             btn.onClick.RemoveAllListeners();
             btn.onClick.AddListener(() =>
             {
-                modal.manager.soundManager.smallClickSoundFxObj.PlayNextSound();
+                // 07/11 build: JournalModal.manager.soundManager is no longer wired —
+                // native tab code uses the SoundManager.I singleton. Sound is cosmetic,
+                // so never let it kill the listener.
+                try { SoundManager.I.smallClickSoundFxObj.PlayNextSound(); } catch { }
                 modal.UnsetTabTransesAndBtns();
                 var img = btn.GetComponentInChildren<Image>();
                 if (img != null) img.color = Utils.GetColorFromStr(JournalModal.SELECTED_TAB_COLOR_STR);
@@ -156,7 +188,8 @@ namespace AIROG_WorldExpansion
                 {
                     v.gameObject.SetActive(true);
                     _isDirty = true;
-                    RefreshView();
+                    try { RefreshView(); }
+                    catch (System.Exception ex) { Debug.LogError("[WorldExpansion] World News refresh failed: " + ex); }
                 }
             });
         }
@@ -289,6 +322,14 @@ namespace AIROG_WorldExpansion
 
                     Color rowColor = eliminated ? new Color(0.4f, 0.4f, 0.4f) : new Color(0.7f, 0.9f, 0.7f);
                     CreateTextEntry($"  {rank}. {nameStr}{tag}  —  {f.Resources} res{popStr}{regions}{youStr}", 21, rowColor);
+
+                    // Court line: who leads this faction (v1.4)
+                    if (!eliminated && f.Leader != null && !string.IsNullOrEmpty(f.Leader.Name))
+                    {
+                        string traitStr = !string.IsNullOrEmpty(f.Leader.Trait) ? $", {f.Leader.Trait}" : "";
+                        string deadStr  = f.Leader.IsDead ? " †" : "";
+                        CreateTextEntry($"      led by {f.Leader.Display}{deadStr}{traitStr}", 18, new Color(0.75f, 0.7f, 0.55f));
+                    }
                     rank++;
                 }
                 CreateSeparator();
@@ -330,7 +371,7 @@ namespace AIROG_WorldExpansion
         // ─── Filter Bar ───────────────────────────────────────────────────────────
         private static void CreateFilterBar()
         {
-            string[] filters = { "All", "MAJOR", "WAR", "PLAYER", "TERRITORY", "TRADE", "ECONOMY", "DIPLOMACY", "POPULATION", "RUMOR", "SEASON" };
+            string[] filters = { "All", "MAJOR", "WAR", "PLAYER", "COURT", "TERRITORY", "TRADE", "ECONOMY", "DIPLOMACY", "POPULATION", "RUMOR", "SEASON" };
 
             GameObject barObj = new GameObject("FilterBar", typeof(RectTransform));
             barObj.transform.SetParent(_contentObj.transform, false);
@@ -414,6 +455,7 @@ namespace AIROG_WorldExpansion
                 case "MAJOR":      return new Color(1f,    0.8f,  0f);
                 case "WAR":        return new Color(1f,    0.4f,  0.4f);
                 case "PLAYER":     return new Color(1f,    0.7f,  0.9f);
+                case "COURT":      return new Color(0.9f,  0.75f, 0.45f);
                 case "TERRITORY":  return new Color(0.85f, 0.75f, 0.5f);
                 case "TRADE":      return new Color(0.4f,  1f,    0.6f);
                 case "ECONOMY":    return new Color(0.6f,  1f,    1f);

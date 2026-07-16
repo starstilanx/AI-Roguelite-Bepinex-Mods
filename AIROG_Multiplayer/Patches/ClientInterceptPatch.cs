@@ -40,7 +40,7 @@ namespace AIROG_Multiplayer.Patches
         // -----------------------------------------------------------------------
         private static void ShowBlockedToast(GameplayManager manager, string hint)
         {
-            try { manager?.toast?.ShowToast(hint, "ff7722"); } catch { }
+            try { Toast.I.ShowToast(hint, "ff7722"); } catch { }
             try { CoopStatusOverlay.Instance?.ShowNotification(hint, 3f); } catch { }
         }
 

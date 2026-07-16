@@ -20,7 +20,7 @@ namespace AIROG_NPCExpansion
     {
         public const string PLUGIN_GUID = "com.airog.npcexpansion";
         public const string PLUGIN_NAME = "NPC Expansion";
-        public const string PLUGIN_VERSION = "4.2.0";
+        public const string PLUGIN_VERSION = "4.3.0";
 
         public static NPCExpansionPlugin Instance { get; private set; }
         public static string NPCDataPath => Path.Combine(Paths.PluginPath, "AIROG_NPCExpansion", "NPCData");
@@ -128,12 +128,11 @@ namespace AIROG_NPCExpansion
                 NPCData.Save(npc.uuid, data);
                 Debug.Log($"[NPCExpansion] Seeded NPCData from native importantData for {npc.GetPrettyName()}.");
 
-                // Kick off extended generation (attributes, skills, abilities, secrets) if not already done
                 bool needsExtended = data.Attributes == null || data.Attributes.Count == 0
                                   || data.Attributes.Values.All(v => v == 10);
                 if (needsExtended)
                 {
-                    string context = npc.manager?.GetContextForQuickActions() ?? "";
+                    string context = (npc.manager as GameplayManager)?.GetContextForQuickActions() ?? "";
                     await NPCGenerator.GenerateLore(npc, context);
                 }
             }
@@ -505,7 +504,7 @@ namespace AIROG_NPCExpansion
             _pendingNpcForMenu = null;
             if (npc != null)
             {
-                var manager = __instance.manager;
+                var manager = __instance.manager ?? SS.I?.hackyManager;
                 var npcData = NPCData.Load(npc.uuid);
                 bool hasLore = NPCData.HasProfile(npc, npcData);
                 bool isAlive = npc.corpseState == GameCharacter.CorpseState.NONE;
@@ -589,7 +588,7 @@ namespace AIROG_NPCExpansion
                 return;
             }
 
-            var itemManager = __instance.manager;
+            var itemManager = __instance.manager ?? SS.I?.hackyManager;
             var currentNpc = GetCurrentlySelectedNpc(itemManager);
 
             if (currentNpc != null && !currentNpc.IsEnemyType())

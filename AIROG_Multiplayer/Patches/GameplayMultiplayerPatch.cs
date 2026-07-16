@@ -411,7 +411,7 @@ namespace AIROG_Multiplayer.Patches
 
             if (MultiplayerPlugin.ShouldBlockTurn(out string reason))
             {
-                __instance.toast?.ShowToast($"⏳ {reason}");
+                Toast.I.ShowToast($"⏳ {reason}");
                 return false;
             }
 

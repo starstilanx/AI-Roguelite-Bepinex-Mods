@@ -12,7 +12,7 @@ namespace AIROG_WorldExpansion
     {
         public const string PLUGIN_GUID = "com.airog.worldexpansion";
         public const string PLUGIN_NAME = "World Expansion";
-        public const string PLUGIN_VERSION = "1.3.0";
+        public const string PLUGIN_VERSION = "1.4.1";
 
         public static WorldExpansionPlugin Instance { get; private set; }
 
@@ -29,6 +29,7 @@ namespace AIROG_WorldExpansion
             Harmony.CreateAndPatchAll(typeof(WorldLoreExpansion));
             Harmony.CreateAndPatchAll(typeof(PlayerWorldActor));
             Harmony.CreateAndPatchAll(typeof(StrategicMapUI));
+            Harmony.CreateAndPatchAll(typeof(FactionCourtSystem));
         }
 
         [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]
@@ -83,7 +84,7 @@ namespace AIROG_WorldExpansion
                 string bounties = st.PlayerBounties.Count > 0
                     ? string.Join(", ", st.PlayerBounties.Select(u => st.Factions.TryGetValue(u, out var f) && !string.IsNullOrEmpty(f.Name) ? f.Name : u))
                     : "none";
-                __instance.MessageModal().ShowModal(
+                MessageModal.I.ShowModal(
                     $"Turn {st.CurrentTurn} — {st.CurrentSeason}\n" +
                     $"Economy: {st.Market.GlobalCondition} (×{st.Market.PriceMultiplier:0.##} buy, ×{st.Market.SellMultiplier:0.##} sell)\n" +
                     $"Active wars:\n{wars}\n" +
@@ -100,6 +101,11 @@ namespace AIROG_WorldExpansion
                     StrategicMapUI.LensRequested = true;
                     __instance.mapModal.ShowMapModal();
                 }
+                return false;
+            }
+            if (cmd == "WORLD_COURT")
+            {
+                MessageModal.I.ShowModal(FactionCourtSystem.BuildCourtReport(), false, true);
                 return false;
             }
             if (cmd == "WORLD_BOUNTY_TEST")

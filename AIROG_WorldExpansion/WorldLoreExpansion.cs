@@ -321,7 +321,7 @@ namespace AIROG_WorldExpansion
              {
                  Debug.LogError("[WorldLoreExpansion] Lore image gen failed: " + ex);
                  btnText.text = "Gen Img";
-                 Object.FindObjectOfType<GameplayManager>().MessageModal().ShowModal("Image generation failed.\n\nError: " + ex.Message, false, true);
+                 MessageModal.I.ShowModal("Image generation failed.\n\nError: " + ex.Message, false, true);
              }
         }
 
@@ -342,7 +342,7 @@ namespace AIROG_WorldExpansion
 
             if (!System.IO.File.Exists(path))
             {
-                Object.FindObjectOfType<GameplayManager>().MessageModal().ShowModal("Image file not found.\nIt may not have generated yet.", false, true);
+                MessageModal.I.ShowModal("Image file not found.\nIt may not have generated yet.", false, true);
                 return;
             }
 
@@ -439,8 +439,9 @@ namespace AIROG_WorldExpansion
         [HarmonyPrefix]
         public static bool Prefix_OnAiGenLoreEntry(LorebookView __instance)
         {
-            __instance.manager.soundManager.smallClickSoundFxObj.PlayNextSound();
-            MainMenu.ConfirmationModal().ShowTextPromptModal(LS.I.GetLocStr("key-input-topic-for-lore-entry") ?? "", textInputActive: true, showCancelButton: true, async delegate
+            // 07/11 build: manager.soundManager is no longer wired — use the singleton.
+            try { SoundManager.I.smallClickSoundFxObj.PlayNextSound(); } catch { }
+            ModalWindow.I.ShowTextPromptModal(LS.I.GetLocStr("key-input-topic-for-lore-entry") ?? "", textInputActive: true, showCancelButton: true, async delegate
             {
                 Lorebook.LoreEntry loreEntry = null;
                 bool success = true;
@@ -466,7 +467,7 @@ namespace AIROG_WorldExpansion
                     default: focusPrompt = "Focus on unique details, cultural significance, and obscure facts."; break;
                 }
 
-                string originalInput = MainMenu.ConfirmationModal().textInput1.text;
+                string originalInput = ModalWindow.I.textInput1.text;
                 string augmentedInput = $"{originalInput}. {focusPrompt} Ensure this entry is distinct and highlights specific details relevant to {aimCategory}. (Uniqueness ID: {UnityEngine.Random.Range(0, 99999)})";
 
                 await Utils.DoTaskWLoadScrn(async delegate
@@ -508,7 +509,7 @@ namespace AIROG_WorldExpansion
                 }
                 else if (!success)
                 {
-                    __instance.manager.MessageModal().ShowModal("Failed to generate lore entry. The AI response was malformed or timed out.\n\nError: " + errorMsg, false, true);
+                    MessageModal.I.ShowModal("Failed to generate lore entry. The AI response was malformed or timed out.\n\nError: " + errorMsg, false, true);
                 }
             });
             return false;

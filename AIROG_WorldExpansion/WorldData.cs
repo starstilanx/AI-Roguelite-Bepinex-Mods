@@ -108,6 +108,8 @@ namespace AIROG_WorldExpansion
                 if (f.ClaimedPlaceUuids == null) f.ClaimedPlaceUuids = new List<string>();
                 if (f.ClaimedPlaceUuids.RemoveAll(u => u != null && u.StartsWith("territory_")) > 0)
                     f.Seeded = false;
+                if (f.Lieutenants == null)   f.Lieutenants   = new List<FactionFigure>();
+                if (f.FormerLeaders == null) f.FormerLeaders = new List<string>();
             }
 
             // Migrate legacy FactionRelationships → DiplomaticRelations for old saves
@@ -254,6 +256,17 @@ namespace AIROG_WorldExpansion
             }
         }
 
+        // ─── Faction Court API (v1.4) ─────────────────────────────────────────────
+
+        /// "Title Name" of a faction's living leader, or null if no court exists yet.
+        public static string GetLeaderTag(string factionUuid)
+        {
+            if (string.IsNullOrEmpty(factionUuid)) return null;
+            if (!CurrentState.Factions.TryGetValue(factionUuid, out var data)) return null;
+            var l = data.Leader;
+            return (l != null && !l.IsDead && !string.IsNullOrEmpty(l.Name)) ? l.Display : null;
+        }
+
         // ─── War API ──────────────────────────────────────────────────────────────
 
         public static void DeclareWar(string actorUuid, string actorName, string targetUuid, string targetName, string casusBelli)
@@ -271,8 +284,17 @@ namespace AIROG_WorldExpansion
                 StartTurn  = CurrentState.CurrentTurn
             };
             SetTier(key, DiplomaticTier.War, "war declared", CurrentState.CurrentTurn, actorName, targetName);
-            LogEvent($"{actorName} has formally declared war on {targetName}! Casus belli: {casusBelli}.", "WAR");
-            QueuePlayerEvent($"{actorName} has declared war on {targetName} ({casusBelli}).", "WAR_DECLARED");
+
+            // Wars get a face when the courts are known
+            string actorLeader  = GetLeaderTag(actorUuid);
+            string targetLeader = GetLeaderTag(targetUuid);
+            string declaration = actorLeader != null
+                ? $"At the command of {actorLeader}, {actorName} has formally declared war on {targetName}{(targetLeader != null ? $" and its leader {targetLeader}" : "")}! Casus belli: {casusBelli}."
+                : $"{actorName} has formally declared war on {targetName}! Casus belli: {casusBelli}.";
+            LogEvent(declaration, "WAR");
+            QueuePlayerEvent(actorLeader != null
+                ? $"{actorLeader} of {actorName} has declared war on {targetName} ({casusBelli})."
+                : $"{actorName} has declared war on {targetName} ({casusBelli}).", "WAR_DECLARED");
         }
 
         public static void EndWar(string key, string reason)
@@ -366,6 +388,32 @@ namespace AIROG_WorldExpansion
         // Per-faction lazy seeding (replaces the one-shot TerritoriesInitialized flag,
         // so factions generated mid-game still get territory + population)
         public bool         Seeded            = false;
+
+        // Faction court (v1.4): named leader + lieutenants that events reference and
+        // the AI can portray as real characters
+        public FactionFigure       Leader        = null;
+        public List<FactionFigure> Lieutenants   = new List<FactionFigure>();
+        public List<string>        FormerLeaders = new List<string>();
+        // WorldExpansion turn the leader last died in the player's current place
+        // (-1 = never); GrandStrategy reads this for the seize-the-throne usurpation window
+        public int                 LeaderSlainTurn = -1;
+    }
+
+    // A named member of a faction's court. Figures exist as narrative state first;
+    // BoundNpcUuid is filled in if/when a real GameCharacter with a matching name and
+    // faction shows up in the world, at which point its death drives succession.
+    [Serializable]
+    public class FactionFigure
+    {
+        public string Name         = "";
+        public string Title        = "";      // setting-appropriate ("Warlord", "Guildmaster", …)
+        public string Role         = "Leader"; // Leader | Lieutenant
+        public string Trait        = "";      // one-word personality hook for the AI
+        public string BoundNpcUuid = "";      // real GameCharacter uuid once one is matched
+        public bool   IsDead       = false;
+        public int    SinceTurn    = 0;       // turn this figure took the role
+
+        public string Display => string.IsNullOrEmpty(Title) ? Name : $"{Title} {Name}";
     }
 
     [Serializable]

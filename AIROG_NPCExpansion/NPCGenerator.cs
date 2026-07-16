@@ -61,7 +61,7 @@ namespace AIROG_NPCExpansion
                 // Truncate context for scenario updates but keep enough for local history
                 if (context.Length > 3000) context = context.Substring(context.Length - 3000);
 
-                string playerName = npc.manager?.playerCharacter?.pcGameEntity?.name ?? "the player";
+                string playerName = (npc.manager as GameplayManager)?.playerCharacter?.pcGameEntity?.name ?? "the player";
                 string prompt = $"You are a creative writer for a fantasy RPG. You are updating the situation for an NPC named '{npc.GetPrettyName()}'.\n" +
                                 $"IMPORTANT: In the context below, 'You' refers to the player character, '{playerName}'. " +
                                 $"The NPC '{npc.GetPrettyName()}' is a separate entity. Do NOT confuse the NPC with the player.\n\n" +
@@ -93,7 +93,7 @@ namespace AIROG_NPCExpansion
                     RumorNetwork.AddFact(npc.uuid, factSnippet);
 
                     // Log situation update to game chat so players see NPC reactions without opening profiles
-                    var gameLog = npc.manager?.gameLogView;
+                    var gameLog = (npc.manager as GameplayManager)?.gameLogView;
                     if (gameLog != null)
                         _ = gameLog.LogTextCompat(GameLogView.AiDecision($"[{npc.GetPrettyName()}] {data.Scenario}"));
 
@@ -115,7 +115,7 @@ namespace AIROG_NPCExpansion
 
         private static string ConstructPrompt(GameCharacter npc, NPCData data, string context)
         {
-            string playerName = npc.manager?.playerCharacter?.pcGameEntity?.name ?? "the player";
+            string playerName = (npc.manager as GameplayManager)?.playerCharacter?.pcGameEntity?.name ?? "the player";
             
             string extraInstructions = "";
             if (!string.IsNullOrEmpty(data.GenerationInstructions))

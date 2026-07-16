@@ -2,6 +2,16 @@
 
 ---
 
+## v4.3.0 — *Word on the Street*
+
+> *"Did you hear? The Iron Pact marches again."*
+
+### Added
+
+- **World news enters the rumor mill.** If AIROG_WorldExpansion is installed, recent world-simulation events (wars, successions, conquests, dominion news) are periodically seeded as `News:` facts on nearby NPCs via the rumor tick. They then spread NPC-to-NPC through the existing `RumorNetwork` and surface in conversations via GenContext's per-NPC known-facts injection — the background world sim now reaches the player through NPC mouths, not just the World News tab. Soft dependency: reads `world_expansion_data.json` from the save directory (the same file-based contract GenContext uses); a no-op when WorldExpansion isn't present. (`Systems/WorldNewsGossip.cs`)
+
+---
+
 ## v4.2.0 — *Refinement Pass*
 
 > *"A hundred small gears, each now turning true."*

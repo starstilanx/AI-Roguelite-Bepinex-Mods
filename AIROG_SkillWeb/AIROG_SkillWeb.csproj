@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_SkillWeb</AssemblyName>
     <Description>Mechanical attribute-bonus layer that bridges onto the game's native perk tree.</Description>
-    <Version>3.1.0</Version>
+    <Version>4.1.1</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
@@ -65,6 +65,14 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="AIROG_GenContext">
       <HintPath>..\AIROG_GenContext\bin\Debug\net472\AIROG_GenContext.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="AIROG_Core">
+      <HintPath>..\AIROG_Core\bin\Debug\net472\AIROG_Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Net.Http">
+      <HintPath>..\AIRL\libs\System.Net.Http.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

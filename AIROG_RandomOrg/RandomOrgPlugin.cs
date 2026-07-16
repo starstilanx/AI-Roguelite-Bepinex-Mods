@@ -7,7 +7,7 @@ using HarmonyLib;
 
 namespace AIROG_RandomOrg
 {
-    [BepInPlugin("com.airog.randomorg", "AIROG True Randomness (Random.org)", "1.0.0")]
+    [BepInPlugin("com.airog.randomorg", "AIROG True Randomness (Random.org)", "1.1.0")]
     // Soft-dep: if GenContext is present we inject into its Mods menu; not required.
     [BepInDependency("com.airog.gencontext", BepInDependency.DependencyFlags.SoftDependency)]
     public class RandomOrgPlugin : BaseUnityPlugin
@@ -19,6 +19,7 @@ namespace AIROG_RandomOrg
         public static ConfigEntry<string> ApiKey;
         public static ConfigEntry<bool>   ShowNotification;
         public static ConfigEntry<int>    BufferSize;
+        public static ConfigEntry<bool>   DiceRollsOnly;
 
         private Harmony _harmony;
 
@@ -44,6 +45,14 @@ namespace AIROG_RandomOrg
                 "How many integers to pre-fetch per Random.org request. " +
                 "Higher = fewer network calls. Valid range: 1–10000.");
 
+            DiceRollsOnly = Config.Bind(
+                "General", "DiceRollsOnly", true,
+                "Only spend Random.org numbers on actual in-game dice/skill-check rolls " +
+                "(the ones shown in the game log). All other randomness (visuals, world gen, " +
+                "misc utility rolls) uses the normal pseudo-RNG. Dramatically reduces daily " +
+                "API quota usage. Turn off to restore the old behavior of true-randomizing " +
+                "every random call.");
+
             // --- Harmony patches ------------------------------------------------
             _harmony = new Harmony("com.airog.randomorg");
 
@@ -51,6 +60,11 @@ namespace AIROG_RandomOrg
             _harmony.PatchAll(typeof(Patch_Utils_RandDouble));
             _harmony.PatchAll(typeof(Patch_Utils_RandInt));
             _harmony.PatchAll(typeof(Patch_Utils_RandIntInclusive));
+
+            // Roll-scope markers: flag when Utils.GetRollOutcome* is on the
+            // call stack so the Rand patches only fire for real dice rolls
+            _harmony.PatchAll(typeof(Patch_Utils_GetRollOutcome_Scope));
+            _harmony.PatchAll(typeof(Patch_Utils_GetRollOutcomeForAttrOnly_Scope));
 
             // GenContext Mods-menu injection (runtime method lookup)
             TryPatchGenContextMenu();

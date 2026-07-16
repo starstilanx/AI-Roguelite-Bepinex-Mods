@@ -42,10 +42,15 @@ namespace AIROG_NPCExpansion
         {
             Debug.Log($"[AIROG_NPCExpansion] Opening NPCEquipmentUI for {npc?.GetPrettyName() ?? "null"}");
             _currentNpc = npc;
-            _manager = manager;
+            _manager = manager ?? SS.I?.hackyManager;
+            if (_manager == null || _manager.canvasTransform == null)
+            {
+                Debug.LogWarning("[AIROG_NPCExpansion] Cannot open NPCEquipmentUI: no valid GameplayManager/canvas available.");
+                return;
+            }
 
             if (_window == null) CreateUI();
-            
+
             _window.SetActive(true);
             _window.transform.SetAsLastSibling(); // Ensure it's on top
             Refresh();
@@ -398,7 +403,6 @@ namespace AIROG_NPCExpansion
             obj.name = "Slot_" + slotType;
             
             var slot = obj.GetComponent<ItemSlot>();
-            slot.manager = _manager;
             UpdateSlot(slot, null);
             
             var btn = obj.GetComponent<Button>();
@@ -446,7 +450,6 @@ namespace AIROG_NPCExpansion
 
                 var slotObj = Instantiate(prefab, _npcInvGrid, false);
                 var slot = slotObj.GetComponent<ItemSlot>();
-                slot.manager = _manager;
                 UpdateSlot(slot, item);
                 
                 var btn = slotObj.GetComponent<Button>();

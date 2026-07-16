@@ -13,7 +13,7 @@ namespace AIROG_GrandStrategy
     {
         public const string PLUGIN_GUID = "com.airog.grandstrategy";
         public const string PLUGIN_NAME = "Grand Strategy";
-        public const string PLUGIN_VERSION = "0.5.0";
+        public const string PLUGIN_VERSION = "0.6.0";
 
         public static GrandStrategyPlugin Instance { get; private set; }
 
@@ -60,7 +60,7 @@ namespace AIROG_GrandStrategy
             if (upper == "GS_STATUS")
             {
                 Themes.EnsureTheme(GrandStrategyData.State, __instance);
-                __instance.MessageModal().ShowModal(BuildStatus(), false, true);
+                MessageModal.I.ShowModal(BuildStatus(), false, true);
                 return false;
             }
             if (upper == "GS_ORDERS")
@@ -68,7 +68,7 @@ namespace AIROG_GrandStrategy
                 string cs = GrandStrategyData.L.CurrencyShort;
                 string list = string.Join("\n", OrderSystem.Defs.Select(d =>
                     $"[{d.Cp} CP{(d.Gold > 0 ? $" + {d.Gold}{cs}" : "")}] {d.Usage}"));
-                __instance.MessageModal().ShowModal(
+                MessageModal.I.ShowModal(
                     $"Available orders (GS_ORDER <TYPE> [target]):\n{list}", false, true);
                 return false;
             }
@@ -79,7 +79,7 @@ namespace AIROG_GrandStrategy
                 if (string.IsNullOrEmpty(want))
                 {
                     string current = s.Lex != null ? s.Lex.Key : "(not set — auto-detects at founding)";
-                    __instance.MessageModal().ShowModal(
+                    MessageModal.I.ShowModal(
                         $"Dominion theme: {current}\nGS_THEME <{string.Join("|", Themes.Keys)}|AUTO>\n" +
                         "Controls the terminology of all dominion text (ruler title, currency, advisor titles, great-work names). " +
                         "AUTO re-detects from the world's description.", false, true);
@@ -87,13 +87,13 @@ namespace AIROG_GrandStrategy
                 }
                 if (want != "AUTO" && !Themes.Keys.Contains(want))
                 {
-                    __instance.MessageModal().ShowModal(
+                    MessageModal.I.ShowModal(
                         $"Unknown theme '{want}'. Options: {string.Join(", ", Themes.Keys)}, AUTO", false, true);
                     return false;
                 }
                 string picked = Themes.Apply(s, want, __instance);
                 GrandStrategyData.SaveToCurrentDir();
-                __instance.MessageModal().ShowModal(
+                MessageModal.I.ShowModal(
                     $"Dominion theme set to {picked}{(want == "AUTO" ? " (auto-detected)" : "")}. " +
                     $"Ruler: {GrandStrategyData.L.RulerTitle} | currency: {GrandStrategyData.L.CurrencyWord}.", false, true);
                 return false;
@@ -101,24 +101,40 @@ namespace AIROG_GrandStrategy
             if (upper.StartsWith("GS_FOUND"))
             {
                 string name = cmd.Length > 8 ? cmd.Substring(8).Trim() : "";
-                __instance.MessageModal().ShowModal(DominionManager.FoundDominion(__instance, name), false, true);
+                MessageModal.I.ShowModal(DominionManager.FoundDominion(__instance, name), false, true);
+                return false;
+            }
+            if (upper.StartsWith("GS_USURP"))
+            {
+                string name = cmd.Length > 8 ? cmd.Substring(8).Trim() : "";
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    MessageModal.I.ShowModal(
+                        "GS_USURP <faction name> — take over an existing faction as your dominion.\n" +
+                        "Paths to the seat of power:\n" +
+                        $"  • Acclamation — reach REVERED standing with the faction\n" +
+                        $"  • Conquest — their leader dies in your presence (within {DominionManager.USURP_WINDOW_TURNS} turns)\n" +
+                        "You inherit their territory, wars, diplomacy, and surviving lieutenants.", false, true);
+                    return false;
+                }
+                MessageModal.I.ShowModal(DominionManager.UsurpFaction(__instance, name), false, true);
                 return false;
             }
             if (upper.StartsWith("GS_RENAME"))
             {
                 var s = GrandStrategyData.State;
-                if (!s.Founded) { __instance.MessageModal().ShowModal("No dominion founded yet.", false, true); return false; }
+                if (!s.Founded) { MessageModal.I.ShowModal("No dominion founded yet.", false, true); return false; }
                 string name = cmd.Length > 9 ? cmd.Substring(9).Trim() : "";
                 if (string.IsNullOrWhiteSpace(name))
                 {
-                    __instance.MessageModal().ShowModal("Usage: GS_RENAME <new name>", false, true);
+                    MessageModal.I.ShowModal("Usage: GS_RENAME <new name>", false, true);
                     return false;
                 }
                 string old = s.DominionName;
                 s.DominionName = name.Trim();
                 GrandStrategyData.LogDeed($"{old} was renamed {s.DominionName} by order of its {GrandStrategyData.L.RulerTitle}.");
                 GrandStrategyData.SaveToCurrentDir();
-                __instance.MessageModal().ShowModal($"{old} shall henceforth be known as {s.DominionName}.", false, true);
+                MessageModal.I.ShowModal($"{old} shall henceforth be known as {s.DominionName}.", false, true);
                 return false;
             }
             if (upper.StartsWith("GS_ORDER"))
@@ -127,17 +143,17 @@ namespace AIROG_GrandStrategy
                 string[] parts = rest.Split(new[] { ' ' }, 2);
                 string type = parts.Length > 0 ? parts[0].ToUpperInvariant() : "";
                 string arg  = parts.Length > 1 ? parts[1] : "";
-                __instance.MessageModal().ShowModal(OrderSystem.Issue(__instance, type, arg), false, true);
+                MessageModal.I.ShowModal(OrderSystem.Issue(__instance, type, arg), false, true);
                 return false;
             }
             if (upper.StartsWith("GS_TAX"))
             {
                 var s = GrandStrategyData.State;
-                if (!s.Founded) { __instance.MessageModal().ShowModal("No dominion founded yet.", false, true); return false; }
+                if (!s.Founded) { MessageModal.I.ShowModal("No dominion founded yet.", false, true); return false; }
                 string pol = upper.Length > 6 ? upper.Substring(6).Trim() : "";
                 if (pol != "LOW" && pol != "NORMAL" && pol != "HIGH")
                 {
-                    __instance.MessageModal().ShowModal(
+                    MessageModal.I.ShowModal(
                         $"Current tax edict: {s.TaxPolicy}\nGS_TAX <LOW|NORMAL|HIGH>\n" +
                         "  LOW — half income, people grow content (−2 unrest/tick)\n" +
                         "  NORMAL — standard levies\n" +
@@ -147,7 +163,7 @@ namespace AIROG_GrandStrategy
                 s.TaxPolicy = pol;
                 GrandStrategyData.LogDeed($"{s.DominionName} set {pol.ToLower()} taxation across its {GrandStrategyData.L.DomainNoun}.");
                 GrandStrategyData.SaveToCurrentDir();
-                __instance.MessageModal().ShowModal($"Tax policy set to {pol}. The whole {GrandStrategyData.L.DomainNoun} will feel it each strategic tick.", false, true);
+                MessageModal.I.ShowModal($"Tax policy set to {pol}. The whole {GrandStrategyData.L.DomainNoun} will feel it each strategic tick.", false, true);
                 return false;
             }
             if (upper.StartsWith("GS_PETITION"))
@@ -157,31 +173,31 @@ namespace AIROG_GrandStrategy
                 string choice = upper.Length > 11 ? upper.Substring(11).Trim() : "";
                 if (p == null)
                 {
-                    __instance.MessageModal().ShowModal("No petition awaits your judgment.", false, true);
+                    MessageModal.I.ShowModal("No petition awaits your judgment.", false, true);
                     return false;
                 }
                 if (choice != "ACCEPT" && choice != "REJECT")
                 {
-                    __instance.MessageModal().ShowModal(
+                    MessageModal.I.ShowModal(
                         $"A {GrandStrategyData.L.PetitionNoun} awaits your judgment:\n\n{p.Text}\n\nGS_PETITION ACCEPT or GS_PETITION REJECT", false, true);
                     return false;
                 }
                 string outcome = CourtSystem.Resolve(s, choice == "ACCEPT");
                 if (outcome != null && outcome.StartsWith("!")) outcome = outcome.Substring(1);
-                __instance.MessageModal().ShowModal(outcome ?? "No petition awaits your judgment.", false, true);
+                MessageModal.I.ShowModal(outcome ?? "No petition awaits your judgment.", false, true);
                 return false;
             }
             if (upper == "GS_TICK")
             {
                 DominionManager.StrategicTick(__instance);
-                __instance.MessageModal().ShowModal("Strategic tick forced.\n\n" + BuildStatus(), false, true);
+                MessageModal.I.ShowModal("Strategic tick forced.\n\n" + BuildStatus(), false, true);
                 return false;
             }
             if (upper == "GS_CP")
             {
                 GrandStrategyData.State.CommandPoints = GrandStrategyData.State.MaxCommandPoints;
                 GrandStrategyData.State.Treasury += 100;
-                __instance.MessageModal().ShowModal("Command points refilled, +100 treasury (test).", false, true);
+                MessageModal.I.ShowModal("Command points refilled, +100 treasury (test).", false, true);
                 return false;
             }
             return true;
@@ -191,7 +207,8 @@ namespace AIROG_GrandStrategy
         {
             var s = GrandStrategyData.State;
             if (!s.Founded)
-                return "No dominion founded. Travel to unclaimed land and use GS_FOUND <name>.";
+                return "No dominion founded. Travel to unclaimed land and use GS_FOUND <name>, " +
+                       "or take over an existing faction with GS_USURP <faction>.";
 
             var fac = WorldData.GetFactionData(s.FactionUuid);
             string holdings = s.Holdings.Count > 0

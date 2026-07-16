@@ -9,11 +9,12 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using TMPro;
+using AIROG_Core;
 
 namespace AIROG_HistoryTab
 {
     [BepInPlugin(PLUGIN_GUID, PLUGIN_NAME, PLUGIN_VERSION)]
-    public class HistoryTabPlugin : BaseUnityPlugin
+    public class HistoryTabPlugin : BaseModPlugin
     {
         public const string PLUGIN_GUID = "com.airog.historytab";
         public const string PLUGIN_NAME = "History Tab";
@@ -22,141 +23,81 @@ namespace AIROG_HistoryTab
         public static HistoryTabPlugin Instance { get; private set; }
         public static ConfigEntry<bool> EnableLogTruncation;
 
-        private void Awake()
+        // Each hook below is patched independently via SafePatch: if the game renames or
+        // changes the signature of any one of these methods, only that hook is skipped
+        // (logged as a warning) instead of an exception aborting the rest of Awake and
+        // silently taking the unrelated fixes (log truncation, token fix, import/export,
+        // prompt injection) down with it.
+        protected override void Awake()
         {
-            try {
-                Instance = this;
-                Logger.LogInfo($"Plugin {PLUGIN_GUID} is starting Awake...");
+            base.Awake();
+            Instance = this;
+            Logger.LogInfo($"Plugin {PLUGIN_GUID} is starting Awake...");
 
-                var harmony = new Harmony(PLUGIN_GUID);
-                Logger.LogInfo("Harmony instance created.");
-                
-                // 2. NewWorldModal.PresentSelf
-                Logger.LogInfo("Attempting to find NewWorldModal.PresentSelf...");
-                var presentSelfMethod = AccessTools.Method(typeof(NewWorldModal), "PresentSelf");
-                if (presentSelfMethod != null)
-                {
-                    harmony.Patch(presentSelfMethod, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_NewWorldModal_PresentSelf))));
-                    Logger.LogInfo("Patched NewWorldModal.PresentSelf successfully.");
-                }
-                else Logger.LogError("Failed to find NewWorldModal.PresentSelf!");
+            SafePatch(typeof(NewWorldModal), "PresentSelf",
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_NewWorldModal_PresentSelf))));
 
-                // 3. MainMenu.NewGame
-                Logger.LogInfo("Attempting to find MainMenu.NewGame...");
-                var newGameMethod = AccessTools.Method(typeof(MainMenu), "NewGame");
-                if (newGameMethod != null)
-                {
-                    harmony.Patch(newGameMethod, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_MainMenu_NewGame))));
-                    Logger.LogInfo("Patched MainMenu.NewGame successfully.");
-                }
-                else Logger.LogError("Failed to find MainMenu.NewGame!");
+            SafePatch(typeof(MainMenu), "NewGame",
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_MainMenu_NewGame))));
 
-                // 4. GameplayManager.StartNewWorld
-                Logger.LogInfo("Attempting to find GameplayManager.StartNewWorld...");
-                var startNewWorldMethod = AccessTools.Method(typeof(GameplayManager), "StartNewWorld");
-                if (startNewWorldMethod != null)
-                {
-                    harmony.Patch(startNewWorldMethod, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Prefix_StartNewWorld))));
-                    Logger.LogInfo("Patched GameplayManager.StartNewWorld successfully.");
-                }
-                else Logger.LogError("Failed to find GameplayManager.StartNewWorld!");
+            SafePatch(typeof(GameplayManager), "StartNewWorld",
+                prefix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Prefix_StartNewWorld))));
 
-                // 5. UniverseInfo constructor
-                Logger.LogInfo("Attempting to find UniverseInfo constructors...");
-                var uniConstructor = AccessTools.Constructor(typeof(UniverseInfo), new Type[] { 
-                    typeof(string), typeof(string), typeof(VoronoiWorld), typeof(Lorebook), typeof(GameplayManager) 
-                });
-                if (uniConstructor != null)
-                {
-                    harmony.Patch(uniConstructor, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_UniverseInfo_Constructor))));
-                    Logger.LogInfo("Patched UniverseInfo constructor (5-arg) successfully.");
-                }
-                
-                var uniConstructor2 = AccessTools.Constructor(typeof(UniverseInfo), new Type[] { 
-                    typeof(string), typeof(Place), typeof(GameplayManager) 
-                });
-                if (uniConstructor2 != null)
-                {
-                    harmony.Patch(uniConstructor2, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_UniverseInfo_Constructor2))));
-                    Logger.LogInfo("Patched UniverseInfo constructor (3-arg-Place) successfully.");
-                }
+            SafePatchCtor(typeof(UniverseInfo),
+                new[] { typeof(string), typeof(string), typeof(VoronoiWorld), typeof(Lorebook), typeof(GameplayManager) },
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_UniverseInfo_Constructor))));
 
-                // 6. JournalModal
-                Logger.LogInfo("Attempting to find JournalModal methods...");
-                var journalInitMethod = AccessTools.Method(typeof(JournalModal), "Init");
-                if (journalInitMethod != null)
-                {
-                    harmony.Patch(journalInitMethod, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_JournalModal_Init))));
-                    Logger.LogInfo("Patched JournalModal.Init successfully.");
-                }
-                var unsetTabsMethod = AccessTools.Method(typeof(JournalModal), "UnsetTabTransesAndBtns");
-                if (unsetTabsMethod != null)
-                {
-                    harmony.Patch(unsetTabsMethod, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_UnsetTabTransesAndBtns))));
-                    Logger.LogInfo("Patched JournalModal.UnsetTabTransesAndBtns successfully.");
-                }
+            SafePatchCtor(typeof(UniverseInfo),
+                new[] { typeof(string), typeof(Place), typeof(GameplayManager) },
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_UniverseInfo_Constructor2))));
 
-                // 7. SaveIO (Saving)
-                Logger.LogInfo("Attempting to find SaveIO methods...");
-                var writeSaveMethod = AccessTools.Method(typeof(SaveIO), "WriteSaveFile");
-                if (writeSaveMethod != null)
-                {
-                    harmony.Patch(writeSaveMethod, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_WriteSaveFile))));
-                    Logger.LogInfo("Patched SaveIO.WriteSaveFile successfully.");
-                }
+            SafePatch(typeof(JournalModal), "Init",
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_JournalModal_Init))));
 
-                // 8. GameplayManager.LoadGame (Loading)
-                Logger.LogInfo("Attempting to find GameplayManager.LoadGame...");
-                var loadGameMethod = AccessTools.Method(typeof(GameplayManager), "LoadGame");
-                if (loadGameMethod != null)
-                {
-                    harmony.Patch(loadGameMethod, null, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_LoadGame))));
-                    Logger.LogInfo("Patched GameplayManager.LoadGame successfully.");
-                }
+            SafePatch(typeof(JournalModal), "UnsetTabTransesAndBtns",
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_UnsetTabTransesAndBtns))));
 
-                // 9. DateTimeDisp IncrTime (CRASH FIX)
-                Logger.LogInfo("Attempting to find DateTimeDisp.IncrTime...");
-                var incrTimeMethod = AccessTools.Method(typeof(DateTimeDisp), "IncrTime");
-                if (incrTimeMethod != null)
-                {
-                    harmony.Patch(incrTimeMethod, new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Prefix_IncrTime))));
-                    Logger.LogInfo("Patched DateTimeDisp.IncrTime successfully.");
-                }
+            SafePatch(typeof(SaveIO), "WriteSaveFile",
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_WriteSaveFile))));
 
+            SafePatch(typeof(GameplayManager), "LoadGame",
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Postfix_LoadGame))));
 
-                Logger.LogInfo("HistoryTabPlugin Awake completed successfully.");
-                
-                // Truncate large logs to prevent IndexOutOfRangeException in ConsoleEncoding
-                EnableLogTruncation = Config.Bind("General", "EnableLogTruncation", true, "Truncates extremely long log lines (e.g. from Chinese localization) preventing Windows Console crashes.");
-                ConsoleLogFix.Patch(harmony, EnableLogTruncation.Value);
+            // CRASH FIX: replaces DateTimeDisp.IncrTime entirely (returns false) rather than
+            // augmenting it. If the game's IncrTime grows new behavior, this patch won't
+            // reproduce it — worth periodically diffing against the decompiled source.
+            SafePatch(typeof(DateTimeDisp), "IncrTime",
+                prefix: new HarmonyMethod(AccessTools.Method(typeof(HistoryTabPlugin), nameof(Prefix_IncrTime))));
 
-                // Adjust token limits for Chinese users to prevent truncated responses and JSON errors
-                ChineseTokenFix.Patch(harmony);
+            Logger.LogInfo("HistoryTabPlugin Awake hook patching completed.");
 
-                // Handle History Import/Export
-                HistoryImportExport.Patch(harmony);
-                
-                
-                // Inject default prompts
-                if (SS.I != null)
-                {
-                    if (!SS.I.chatGptPromptsDict.ContainsKey("gen_history"))
-                    {
-                        SS.I.chatGptPromptsDict["gen_history"] = "As a world-building AI, create a compelling and immersive history for the universe of '${universe_name}'.\n\n" +
-                            "Universe Description:\n${universe_desc}\n\n" +
-                            "Current World Context (${world_name}):\n${world_bkgd}\n\n" +
-                            "Instructions:\n" +
-                            "1. Write 3-5 paragraphs of history including major past events, the rise and fall of civilizations, or significant turning points.\n" +
-                            "2. Ensure the tone matches the world background.${maybe_hint_str}${maybe_i18n_str}\n\n" +
-                            "Output the history text directly. Do not include any meta-commentary or JSON.";
-                        Logger.LogInfo("Injected default 'gen_history' prompt.");
-                    }
-                }
-            }
-            catch (Exception e)
+            // Unrelated features bundled into this plugin — isolated from the UI/save hooks
+            // above (and from each other) so a failure in one can't disable the others.
+            SafeRun("EnableLogTruncation / ConsoleLogFix", () =>
             {
-                Logger.LogError($"EXCEPTION in HistoryTabPlugin Awake: {e.Message}\n{e.StackTrace}");
-            }
+                EnableLogTruncation = Config.Bind("General", "EnableLogTruncation", true,
+                    "Truncates extremely long log lines (e.g. from Chinese localization) preventing Windows Console crashes.");
+                ConsoleLogFix.Patch(HarmonyInstance, EnableLogTruncation.Value);
+            });
+
+            SafeRun("ChineseTokenFix", () => ChineseTokenFix.Patch(HarmonyInstance));
+
+            SafeRun("HistoryImportExport", () => HistoryImportExport.Patch(HarmonyInstance));
+
+            SafeRun("gen_history prompt injection", () =>
+            {
+                if (SS.I != null && !SS.I.chatGptPromptsDict.ContainsKey("gen_history"))
+                {
+                    SS.I.chatGptPromptsDict["gen_history"] = "As a world-building AI, create a compelling and immersive history for the universe of '${universe_name}'.\n\n" +
+                        "Universe Description:\n${universe_desc}\n\n" +
+                        "Current World Context (${world_name}):\n${world_bkgd}\n\n" +
+                        "Instructions:\n" +
+                        "1. Write 3-5 paragraphs of history including major past events, the rise and fall of civilizations, or significant turning points.\n" +
+                        "2. Ensure the tone matches the world background.${maybe_hint_str}${maybe_i18n_str}\n\n" +
+                        "Output the history text directly. Do not include any meta-commentary or JSON.";
+                    Logger.LogInfo("Injected default 'gen_history' prompt.");
+                }
+            });
         }
 
         public static void Postfix_NewWorldModal_PresentSelf(NewWorldModal __instance)
@@ -261,7 +202,8 @@ namespace AIROG_HistoryTab
                                 var text = historyView.GetComponentInChildren<TextMeshProUGUI>();
                                 if (text != null) text.text = val;
                                 // Force Save
-                                HistoryData.Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+                                string editSaveDir = ModSaveFile.Dir();
+                                if (editSaveDir != null) HistoryData.Save(editSaveDir);
                             })
                         }, null, null);
                     });
@@ -275,7 +217,8 @@ namespace AIROG_HistoryTab
                 historyTabBtn.onClick.RemoveAllListeners();
                 historyTabBtn.onClick.AddListener(() => {
                     Debug.Log("[HistoryTab] History Tab Clicked!");
-                    __instance.manager.soundManager.smallClickSoundFxObj.PlayNextSound();
+                    // 07/11 build: manager.soundManager is no longer wired — use the singleton.
+                    try { SoundManager.I.smallClickSoundFxObj.PlayNextSound(); } catch { }
                     __instance.UnsetTabTransesAndBtns();
                     
                     var img = historyTabBtn.GetComponentInChildren<Image>();
@@ -316,30 +259,22 @@ namespace AIROG_HistoryTab
 
         public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-            {
-                string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
-                HistoryData.Save(saveDir);
-            }
+            string saveDir = ModSaveFile.Dir();
+            if (saveDir != null) HistoryData.Save(saveDir);
         }
 
         public static void Postfix_LoadGame(GameplayManager __instance)
         {
-            if (SS.I != null)
-            {
-                // LoadGame doesn't take saveDir as arg anymore in Postfix context easily, 
-                // but SS.I.saveSubDirAsArg is usually set before LoadGame.
-                // Or we can just use the global config.
-                string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
-                
-                Debug.Log($"[HistoryTab] Postfix_LoadGame running. Loading history from: {saveDir}");
-                HistoryData.Load(saveDir);
-                
-                // Double check if it worked
-                var univ = __instance.GetCurrentUniverse();
-                string hist = HistoryData.GetHistory(univ);
-                Debug.Log($"[HistoryTab] Loaded history verification for {univ?.name}: {(string.IsNullOrEmpty(hist) ? "EMPTY" : "FOUND (" + hist.Length + " chars)")}");
-            }
+            string saveDir = ModSaveFile.Dir();
+            if (saveDir == null) return;
+
+            Debug.Log($"[HistoryTab] Postfix_LoadGame running. Loading history from: {saveDir}");
+            HistoryData.Load(saveDir);
+
+            // Double check if it worked
+            var univ = __instance.GetCurrentUniverse();
+            string hist = HistoryData.GetHistory(univ);
+            Debug.Log($"[HistoryTab] Loaded history verification for {univ?.name}: {(string.IsNullOrEmpty(hist) ? "EMPTY" : "FOUND (" + hist.Length + " chars)")}");
         }
         
         public static void Postfix_BuildPromptString(GameplayManager __instance, ref string __result)

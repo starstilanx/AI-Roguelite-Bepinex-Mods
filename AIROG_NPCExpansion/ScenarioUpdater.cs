@@ -161,6 +161,7 @@ namespace AIROG_NPCExpansion
                 _rumorCounter = 0;
                 if (nearbyNpcs != null)
                 {
+                    WorldNewsGossip.SeedWorldNews(nearbyNpcs); // world-sim events enter the rumor pool
                     RumorNetwork.PropagateInPlace(nearbyNpcs);
                     WorldGossipSystem.ProcessGossipInPlace(nearbyNpcs);
                 }

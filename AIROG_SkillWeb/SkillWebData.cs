@@ -6,44 +6,87 @@ using Newtonsoft.Json;
 
 namespace AIROG_SkillWeb
 {
-    /// <summary>
-    /// A lightweight snapshot of a native PerkNode's relevant runtime state, passed from the
-    /// plugin (which can read the live game) into the data layer for recomputation.
-    /// </summary>
+    public enum WebNodeType
+    {
+        Basic,
+        Notable,
+        Keystone,
+        Anchor,
+        Confluence
+    }
+
+    [Serializable]
+    public class WebNode
+    {
+        public string id;                       // GUID; for Anchors: "anchor:" + native perk uuid
+        public WebNodeType type;
+        public string name;                     // procedural name
+        public string description;              // lore description
+        public string sectorId;                 // owning sector/discipline id
+        public int ring;                        // ring index (0 = origin, 1..N outward)
+        public float angle;                     // polar angle in radians
+        public float radius;                    // distance from center
+        public float x;                         // Cartesian X
+        public float y;                         // Cartesian Y
+        public List<string> edges = new List<string>(); // adjacent node IDs (undirected)
+        public Dictionary<string, float> stats = new Dictionary<string, float>(); // attribute -> bonus
+        public List<string> traits = new List<string>(); // non-numerical narrative traits
+        public string keystoneRule;             // rule directive for keystones
+        public bool unlocked;
+        public int tier;                        // 0 locked, 1..3 mastery
+        public bool aiRefined;                  // true if AI refined
+        public string originHook;               // provenance info e.g. "chronicle:<beat>"
+
+        // ── Usable ability grant (Keystone / Confluence nodes) ────────────────────
+        public string grantedAbilityUuid;       // stable uuid of the minted usable GameAbility
+        public string grantedAbilityDesc;       // AI-generated ability flavor/rules text (cached)
+        public int abilityCooldownRemaining;    // persisted cooldown so it survives save/load
+
+        [JsonIgnore]
+        public Vector2 Position => new Vector2(x, y);
+    }
+
+    [Serializable]
+    public class WebSector
+    {
+        public string id;
+        public string name;
+        public string purpose;
+        public string colorHex;
+        public float angleCenter;
+        public float angleSpan;
+        public int deepestGeneratedRing;
+        public string anchorPerkTreeUuid;       // native PerkTree UUID this grew from
+    }
+
     public struct PerkSnapshot
     {
         public string uuid;
         public bool isActivated;
     }
 
-    /// <summary>The derived mechanical bonus attached to a single native perk (keyed by perk UUID).</summary>
     [Serializable]
     public class PerkBonus
     {
         public string perkUuid;
         public string perkName;
-
-        /// <summary>Attribute name (Strength/Dexterity/Intellect/Cunning/Charisma) → base amount when learned.</summary>
         public Dictionary<string, float> stats = new Dictionary<string, float>();
-
-        /// <summary>True once stats have been computed (heuristic or AI). Prevents re-derivation.</summary>
         public bool derived = false;
-
-        /// <summary>True once the AI pass has refined the heuristic result.</summary>
         public bool aiRefined = false;
     }
 
-    /// <summary>
-    /// Per-save sidecar that stores attribute bonuses for native perks. The native perk tree is the
-    /// source of truth for which perks exist / are learned / are active; this only adds the mechanical
-    /// stat layer that the native (purely narrative) system lacks.
-    /// </summary>
     public class SkillWebData
     {
-        /// <summary>perk UUID → derived bonus. The only persisted state.</summary>
+        public int schemaVersion = 4;
+        public long layoutSeed;
+        public List<WebNode> nodes = new List<WebNode>();
+        public List<WebSector> sectors = new List<WebSector>();
+        public int resonance;
+        public int resonanceEarnedTotal;
+        public int turnsSurvived;
+        public Dictionary<string, long> economyLedger = new Dictionary<string, long>();
         public Dictionary<string, PerkBonus> perkBonuses = new Dictionary<string, PerkBonus>();
 
-        /// <summary>Accumulated attribute bonuses from all currently-learned perks. Rebuilt on sync; not serialized.</summary>
         [JsonIgnore]
         public Dictionary<SS.PlayerAttribute, float> CachedStats = new Dictionary<SS.PlayerAttribute, float>();
 
@@ -54,11 +97,27 @@ namespace AIROG_SkillWeb
             if (File.Exists(path))
             {
                 try
-                {
-                    var data = JsonConvert.DeserializeObject<SkillWebData>(File.ReadAllText(path));
+                 {
+                    string json = File.ReadAllText(path);
+                    var data = JsonConvert.DeserializeObject<SkillWebData>(json);
                     if (data != null)
                     {
+                        if (data.nodes == null) data.nodes = new List<WebNode>();
+                        if (data.sectors == null) data.sectors = new List<WebSector>();
+                        if (data.economyLedger == null) data.economyLedger = new Dictionary<string, long>();
                         if (data.perkBonuses == null) data.perkBonuses = new Dictionary<string, PerkBonus>();
+
+                        // Handle migration
+                        if (data.schemaVersion < 4)
+                        {
+                            Debug.Log($"[SkillWeb] Migrating save data to schema version 4...");
+                            var random = new System.Random();
+                            data.layoutSeed = ((long)random.Next() << 32) | (uint)random.Next();
+                            data.schemaVersion = 4;
+                            // Clean existing nodes list for fresh generation, but keep perkBonuses to recreate them as anchors
+                            data.nodes.Clear();
+                            data.sectors.Clear();
+                        }
                         return data;
                     }
                 }
@@ -67,7 +126,12 @@ namespace AIROG_SkillWeb
                     Debug.LogError($"[SkillWeb] Load error: {ex.Message}");
                 }
             }
-            return new SkillWebData();
+
+            // Create new game data
+            var newData = new SkillWebData();
+            var r = new System.Random();
+            newData.layoutSeed = ((long)r.Next() << 32) | (uint)r.Next();
+            return newData;
         }
 
         public void Save(string path)
@@ -87,51 +151,26 @@ namespace AIROG_SkillWeb
             }
         }
 
-        // ── Bonus bookkeeping ─────────────────────────────────────────────────────
+        // ── Collision / Query Helper ──────────────────────────────────────────────
 
-        public PerkBonus GetOrCreate(string uuid, string name)
+        public bool CheckCollision(Vector2 pos, float minDistance = 50f)
         {
-            if (!perkBonuses.TryGetValue(uuid, out PerkBonus pb))
+            foreach (var node in nodes)
             {
-                pb = new PerkBonus { perkUuid = uuid, perkName = name };
-                perkBonuses[uuid] = pb;
+                if (Vector2.Distance(node.Position, pos) < minDistance)
+                    return true;
             }
-            else if (!string.IsNullOrEmpty(name))
-            {
-                pb.perkName = name;
-            }
-            return pb;
+            return false;
         }
 
-        /// <summary>
-        /// Rebuilds <see cref="CachedStats"/> from the supplied set of currently-learned perks.
-        /// Active perks have their bonus scaled by <see cref="SkillWebConfig.ActiveBonusMultiplier"/>.
-        /// </summary>
-        public void RecalculateStats(IEnumerable<PerkSnapshot> learnedPerks, SkillWebConfig cfg)
+        public WebNode GetNode(string id)
         {
-            if (CachedStats == null) CachedStats = new Dictionary<SS.PlayerAttribute, float>();
-            CachedStats.Clear();
-            if (learnedPerks == null) return;
+            return nodes.Find(n => n.id == id);
+        }
 
-            foreach (var snap in learnedPerks)
-            {
-                if (snap.uuid == null) continue;
-                if (!perkBonuses.TryGetValue(snap.uuid, out PerkBonus pb) || pb.stats == null) continue;
-
-                float mult = snap.isActivated ? cfg.ActiveBonusMultiplier : 1f;
-                foreach (var kvp in pb.stats)
-                {
-                    if (!Enum.TryParse(kvp.Key, true, out SS.PlayerAttribute attr) ||
-                        attr == SS.PlayerAttribute.Unknown) continue;
-                    if (!CachedStats.ContainsKey(attr)) CachedStats[attr] = 0f;
-                    CachedStats[attr] += kvp.Value * mult;
-                }
-            }
-
-            // Clamp each attribute's total to the configured ceiling.
-            var keys = new List<SS.PlayerAttribute>(CachedStats.Keys);
-            foreach (var k in keys)
-                CachedStats[k] = Mathf.Clamp(CachedStats[k], -cfg.MaxBonusPerAttribute, cfg.MaxBonusPerAttribute);
+        public WebSector GetSector(string id)
+        {
+            return sectors.Find(s => s.id == id);
         }
     }
 }
