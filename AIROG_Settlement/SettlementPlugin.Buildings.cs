@@ -51,5 +51,22 @@ namespace AIROG_Settlement
             Log.LogInfo($"Upgraded {def.Name} to level {instance.Level}.");
             SaveSettlementData();
         }
+
+        public void ResearchTech(string researchId)
+        {
+            if (!HasActiveSettlement) return;
+            var def = ResearchCatalog.Get(researchId);
+            if (def == null) { Log.LogError($"Unknown research ID: {researchId}"); return; }
+            if (CurrentSettlement.Researched.Contains(researchId)) return;
+            if (!def.IsAvailable(CurrentSettlement)) { Log.LogWarning($"{researchId} is not yet available."); return; }
+            if (!def.CanAfford(CurrentSettlement)) { Log.LogWarning($"Cannot afford research {researchId}."); return; }
+
+            foreach (var kv in def.Cost)
+                CurrentSettlement.Resources[kv.Key] -= kv.Value;
+            CurrentSettlement.Researched.Add(researchId);
+
+            Log.LogInfo($"Researched {def.Name} at {CurrentSettlement.Name}.");
+            SaveSettlementData();
+        }
     }
 }

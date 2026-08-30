@@ -50,3 +50,9 @@ project.nuget.cache
 *.sourcelink.json
 *.Up2Date
 
+
+# ── Packaged release bundles ─────────────────────────────────────────
+dist/
+
+# ── Claude working docs (internal notes, not part of the mod source) ──
+Claude*

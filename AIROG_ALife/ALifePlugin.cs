@@ -15,7 +15,7 @@ namespace AIROG_ALife
     {
         public const string PLUGIN_GUID = "com.airog.alife";
         public const string PLUGIN_NAME = "AIROG A-Life";
-        public const string PLUGIN_VERSION = "2.0.0";
+        public const string PLUGIN_VERSION = "2.3.1";
 
         public static ALifePlugin Instance { get; private set; }
 
@@ -28,6 +28,13 @@ namespace AIROG_ALife
         public static ConfigEntry<bool> CfgPersistentSquads;
         public static ConfigEntry<bool> CfgEnableFeuds;
         public static ConfigEntry<bool> CfgEnableLifecycle;
+        // v2.1
+        public static ConfigEntry<bool> CfgWarMadeReal;
+        // v2.2
+        public static ConfigEntry<bool> CfgRumorsTab;
+        public static ConfigEntry<bool> CfgTracksLens;
+        // v2.3
+        public static ConfigEntry<bool> CfgAmbientLife;
 
         private void Awake()
         {
@@ -50,12 +57,25 @@ namespace AIROG_ALife
                 "Squads that survive battles swear feuds and hunt each other across the map.");
             CfgEnableLifecycle = Config.Bind("v2", "SquadLifecycle", true,
                 "Squads gain veterancy, recruit, merge when mauled, split when large, and desert broken factions.");
+            CfgWarMadeReal = Config.Bind("v2", "WarMadeReal", true,
+                "Squad battles drive WorldExpansion's wars: fronts move, territory flips, wars end decisively, " +
+                "garrisons defend, and faction-court lieutenants lead warbands in the field.");
+            CfgRumorsTab = Config.Bind("v2", "RumorsJournalTab", true,
+                "Add a 'Rumors' tab to the journal: whispers, known bands, killing grounds, war fronts (fog-of-warred).");
+            CfgTracksLens = Config.Bind("v2", "TracksMapLens", true,
+                "Add a 'TRK' toggle to the world map showing last-known band positions, battle sites, and killing grounds.");
+            CfgAmbientLife = Config.Bind("v2", "AmbientLifeDirective", true,
+                "Tell the narrative AI that NPCs have their own business with each other and that most of them " +
+                "have no reason to react to the player. Counteracts the AI treating the player as the center of " +
+                "every scene. Turn off if you prefer the vanilla player-focused framing.");
 
             Logger.LogInfo($"[ALife] {PLUGIN_GUID} v{PLUGIN_VERSION} loaded.");
 
             Harmony.CreateAndPatchAll(typeof(ALifeSimulation.Patch_TurnHappened));
             Harmony.CreateAndPatchAll(typeof(ALifeMaterializer.Patch_ApplyLocationChange));
             Harmony.CreateAndPatchAll(typeof(ALifeLegend.Patch_SetAsCorpse));
+            Harmony.CreateAndPatchAll(typeof(ALifeRumorsUI));
+            Harmony.CreateAndPatchAll(typeof(ALifeTracksLens));
             Harmony.CreateAndPatchAll(typeof(Patch_SaveLoad));
             Harmony.CreateAndPatchAll(typeof(Patch_ConsoleCommands));
 
@@ -75,11 +95,30 @@ namespace AIROG_ALife
 
         public static class Patch_SaveLoad
         {
+            // NOTE: WriteSaveFile's first arg is MmCtxGetter (implemented by BOTH GameplayManager
+            // and MainMenu) as of the 07/28 build. Taking no injected parameters avoids Harmony
+            // emitting a castclass that would throw when the caller is a MainMenu.
             [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]
             [HarmonyPostfix]
-            public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+            public static void Postfix_WriteSaveFile()
             {
                 ALifeData.SaveToCurrentDir();
+            }
+
+            // LoadGame's own arrival call (VisitPlace .. ApplyLocationChange) fires fully
+            // synchronously — no await actually suspends it — when the voronoi world was
+            // already visited, which is the normal case on every save load. That means our
+            // ApplyLocationChange postfix (ALifeMaterializer.OnPlayerArrived) runs, and saves
+            // to disk, BEFORE this Postfix below ever gets a chance to load the save's real
+            // ALife state — clobbering the save being loaded with whatever was in memory
+            // (a previous save, or nothing at all) and then reading that clobbered file back.
+            // Suppress arrival handling for the duration of the load, then replay it once
+            // the correct data is actually in memory.
+            [HarmonyPatch(typeof(GameplayManager), "LoadGame")]
+            [HarmonyPrefix]
+            public static void Prefix_LoadGame()
+            {
+                ALifeMaterializer.SuppressArrival = true;
             }
 
             [HarmonyPatch(typeof(GameplayManager), "LoadGame")]
@@ -88,6 +127,11 @@ namespace AIROG_ALife
             {
                 if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
                     ALifeData.Load(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+                ALifeWorldBridge.Reset();
+                ALifeLegend.ResetDecayCarry();
+                ALifeMaterializer.SuppressArrival = false;
+                if (__instance.currentPlace != null)
+                    ALifeMaterializer.OnPlayerArrived(__instance, __instance.currentPlace);
             }
 
             [HarmonyPatch(typeof(MainMenu), "NewGame")]
@@ -95,6 +139,8 @@ namespace AIROG_ALife
             public static void Postfix_NewGame(MainMenu __instance)
             {
                 ALifeData.Reset();
+                ALifeWorldBridge.Reset();
+                ALifeLegend.ResetDecayCarry();
             }
         }
 
@@ -106,6 +152,7 @@ namespace AIROG_ALife
             [HarmonyPrefix]
             public static bool Prefix(string txt, GameplayManager __instance)
             {
+                if (txt == null) return true;
                 string cmd = txt.ToUpperInvariant().Trim();
 
                 if (cmd == "ALIFE_STATUS")
@@ -177,6 +224,41 @@ namespace AIROG_ALife
                         sb.AppendLine("Bands that respect the player:");
                         foreach (var s in awed.Take(8))
                             sb.AppendLine($"  {s.Name}: awe {s.AweOfPlayer}");
+                    }
+                    MessageModal.I.ShowModal(sb.ToString(), false, true);
+                    return false;
+                }
+
+                if (cmd == "ALIFE_MAP")
+                {
+                    ALifeTracksLens.LensRequested = true;
+                    MessageModal.I.ShowModal("Tracks lens armed — open the world map to see last-known band positions.", false, true);
+                    return false;
+                }
+
+                if (cmd == "ALIFE_WARS")
+                {
+                    var sb = new StringBuilder();
+                    var wars = ALifeWorldBridge.GetActiveWars();
+                    if (wars.Count == 0) sb.AppendLine("No active wars.");
+                    foreach (var w in wars)
+                    {
+                        string front = ALifeWar.FrontLine(w);
+                        sb.AppendLine($"⚔ {w.ActorName} vs {w.TargetName} — {front ?? "the front is unbroken"}");
+                    }
+                    var garrisons = ALifeData.State.Squads.Where(s => s.GoalType == SquadGoal.GARRISON).ToList();
+                    if (garrisons.Count > 0)
+                    {
+                        sb.AppendLine("Garrisons:");
+                        foreach (var s in garrisons)
+                            sb.AppendLine($"  {s.Name} holding {s.CurrentPlaceName} (until T{s.GarrisonUntilTurn})");
+                    }
+                    var courtLed = ALifeData.State.Squads.Where(s => s.CourtFigureName != null).ToList();
+                    if (courtLed.Count > 0)
+                    {
+                        sb.AppendLine("Court figures in the field:");
+                        foreach (var s in courtLed)
+                            sb.AppendLine($"  {s.Leader?.FullName} ({s.CourtFigureTitle}) leading {s.Name} at {s.CurrentPlaceName}");
                     }
                     MessageModal.I.ShowModal(sb.ToString(), false, true);
                     return false;

@@ -23,6 +23,7 @@ namespace AIROG_ALife
         public const int FEAR_FLEE = 60;   // squads at/above this refuse to share a place with the player
         public const int FEAR_WARY = 30;   // hostile squads at/above this parley instead of attacking
         public const int DREAD_AVOID = 4;  // places at/above this get routed around
+        public const int LEGEND_MAX = 60;  // ceiling: a reputation that can't be outlived isn't one
 
         // ── Live kill tracking ──────────────────────────────────────────────────
 
@@ -67,9 +68,9 @@ namespace AIROG_ALife
                 string playerName = ALifeEmbodiment.SafePlayerName(manager);
                 squad.DeathsThisVisit++;
                 squad.FearOfPlayer = Math.Min(100, squad.FearOfPlayer + (wasLeader ? 35 : 15));
-                ALifeData.State.PlayerLegend++;
+                ALifeData.State.PlayerLegend = Math.Min(LEGEND_MAX, ALifeData.State.PlayerLegend + 1);
                 AddDread(squad.CurrentPlaceUuid, squad.CurrentPlaceName, 2);
-                SpreadRumorOfPlayer(squad.CurrentPlaceUuid, wasLeader ? 12 : 8);
+                SpreadRumorOfPlayer(squad.CurrentPlaceUuid, wasLeader ? 12 : 8, squad.Id);
                 squad.AddChronicle($"{ch.GetPrettyName()} fell in an encounter with {playerName} at {squad.CurrentPlaceName}.");
             }
             else
@@ -118,13 +119,21 @@ namespace AIROG_ALife
 
         // ── Rumor of the player ─────────────────────────────────────────────────
 
-        /// <summary>Word of violence travels one hop: nearby squads gain secondhand fear.</summary>
-        public static void SpreadRumorOfPlayer(string placeUuid, int fearAmount)
+        /// <summary>
+        /// Word of violence travels one hop: nearby squads gain secondhand fear. Squads
+        /// sharing the death site witnessed it directly and get the full bump, regardless of
+        /// whether they'd already met the player — direct witnessing isn't rumor, and a band
+        /// that already knows the player can still be freshly reminded why. excludeSquadId
+        /// keeps this from double-dipping the squad whose own member just died in front of
+        /// the player: that squad already took its (larger) direct hit in OnRealDeath.
+        /// </summary>
+        public static void SpreadRumorOfPlayer(string placeUuid, int fearAmount, string excludeSquadId = null)
         {
             var neighborUuids = new HashSet<string>(ALifeGraph.Neighbors(placeUuid).Select(p => p.uuid));
             foreach (var s in ALifeData.State.Squads)
             {
-                if (s.CurrentPlaceUuid == placeUuid && !s.MetPlayer)
+                if (s.Id == excludeSquadId) continue;
+                if (s.CurrentPlaceUuid == placeUuid)
                     s.FearOfPlayer = Math.Min(100, s.FearOfPlayer + fearAmount);
                 else if (neighborUuids.Contains(s.CurrentPlaceUuid))
                     s.FearOfPlayer = Math.Min(100, s.FearOfPlayer + fearAmount / 2);
@@ -134,6 +143,14 @@ namespace AIROG_ALife
         // ── Decay ───────────────────────────────────────────────────────────────
 
         private static int _decayCarry;
+
+        /// <summary>Clears the fractional-turn decay accumulator. Without this, starting a
+        /// second New Game (or loading a save) in the same process inherited whatever partial
+        /// turn count was left over from a previous playthrough's decay cycle.</summary>
+        public static void ResetDecayCarry()
+        {
+            _decayCarry = 0;
+        }
 
         public static void DecayTick(int numTurns)
         {
@@ -152,7 +169,11 @@ namespace AIROG_ALife
                     if (s.FearOfPlayer > 0) s.FearOfPlayer--;
                     if (s.AweOfPlayer > 0 && s.AweOfPlayer > 60) s.AweOfPlayer--; // high awe cools; earned respect keeps
                 }
-                if (st.PlayerLegend > 0 && ALifeData.State.CurrentTurn % 12 == 0) st.PlayerLegend--;
+                // Legend fades on the same 4-turn cadence as fear and dread. The old rule
+                // only fired when the turn counter happened to land on a multiple of 12,
+                // so clearing a couple of bands early left the player "feared across the
+                // region" for the rest of the run — pinning every scene at high tension.
+                if (st.PlayerLegend > 0) st.PlayerLegend--;
             }
         }
 

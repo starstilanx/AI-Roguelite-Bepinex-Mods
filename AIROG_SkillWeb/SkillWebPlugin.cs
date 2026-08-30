@@ -13,7 +13,7 @@ namespace AIROG_SkillWeb
     {
         public const string PLUGIN_GUID = "com.airog.skillweb";
         public const string PLUGIN_NAME = "Skill Web";
-        public const string PLUGIN_VERSION = "4.1.1";
+        public const string PLUGIN_VERSION = "4.1.4";
 
         public static SkillWebPlugin Instance { get; private set; }
         public SkillWebData Data { get; private set; }
@@ -177,6 +177,10 @@ namespace AIROG_SkillWeb
         [HarmonyPostfix]
         public static void AfterLoadOrNewGame_Postfix()
         {
+            // Anchor node ids are deterministic ("anchor:"+perkUuid), so icon in-flight/cooldown
+            // state from a previous save must not leak into whichever save is loading now.
+            NodeIconGen.ClearRuntimeState();
+
             SkillWebPlugin.Instance.LoadSaveData();
             SkillWebPlugin.Instance.SyncBonuses();
 

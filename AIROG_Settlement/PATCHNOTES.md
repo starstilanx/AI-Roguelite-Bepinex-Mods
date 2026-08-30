@@ -2,6 +2,17 @@
 
 ---
 
+## v1.2.0 (Depth Pass)
+
+### Added
+
+- **Settlement events.** Bandit raids, wildfires, a traveling merchant, festivals, and good harvests can now happen at your settlement. Each one presents real choices (pay tribute or fight back, fight the blaze or let a building burn, and so on), not just a log line. These wait for you: an event that comes up while you're off elsewhere in the story doesn't interrupt you, it's simply there waiting to be resolved the next time you're actually at the settlement. A Barracks lowers raid frequency and improves your odds if you fight back; researching Fortifications improves them further.
+- **Individual resident personalities.** Residents no longer share one town-wide happiness number. Each resident now has a personality trait (Hardy, Anxious, Sociable, Grumbling, Content, or Restless) that pushes their own happiness above or below the town baseline, and happiness drifts toward that target over a few turns instead of snapping instantly, so a festival's boost or a raid's hit actually feels temporary. Traits show in the Population tab and in the AI's context about the settlement.
+- **Research tab is live.** Population now generates Knowledge each turn, spendable on six research nodes: Masonry (more stone from Quarries), Irrigation (more gold from Farms), Fortifications (safer from raids), Guild Charter (+10% gold production), Trade Agreements (better trade prices), and Civic Planning (+2 population cap). Several nodes require the matching building first.
+- **Trade prices now fluctuate.** Wood and Stone buy/sell prices drift turn to turn instead of being fixed, with current market conditions shown at the top of the Trade tab. Trade Agreements research improves your rates on top of the fluctuation.
+
+---
+
 ## v1.1.1 — *No More Phantom Settlements*
 
 ### Fixed

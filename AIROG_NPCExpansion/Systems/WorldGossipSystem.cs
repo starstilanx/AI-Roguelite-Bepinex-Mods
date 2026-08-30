@@ -80,8 +80,9 @@ namespace AIROG_NPCExpansion
                 if (targetData.KnownFacts == null) targetData.KnownFacts = new List<string>();
                 if (targetData.KnownFacts.Contains(spread)) continue;
 
-                targetData.KnownFacts.Add(spread);
-                while (targetData.KnownFacts.Count > 8) targetData.KnownFacts.RemoveAt(0);
+                // Route through the shared pipeline so re-spread gossip gets the same
+                // trim/truncate/empty-string normalization every other fact source goes through.
+                RumorNetwork.AddFact(targetNpc.uuid, spread);
 
                 // Small affinity consequence toward the player
                 int delta = 0;

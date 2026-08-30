@@ -17,7 +17,7 @@ namespace AIROG_ALife
         private static readonly System.Random Rng = new System.Random();
 
         private static Dictionary<string, List<string>> _neighbors = new Dictionary<string, List<string>>();
-        private static int _builtForCount = -1;
+        private static int _builtForSignature = -1;
         private static string _builtForVwUuid;
 
         public static Place PlaceByUuid(string uuid)
@@ -40,14 +40,35 @@ namespace AIROG_ALife
             }
         }
 
+        /// <summary>
+        /// Order-independent signature over a place set's uuids. Only needs to be stable
+        /// within this process run (it's computed and compared moments apart, never
+        /// persisted), so string.GetHashCode()'s per-process randomization is fine here.
+        /// </summary>
+        private static int PlaceSetSignature(List<Place> places)
+        {
+            unchecked
+            {
+                int sig = 0;
+                foreach (Place p in places)
+                    sig ^= (p.uuid?.GetHashCode() ?? 0) * 397 + places.Count;
+                return sig;
+            }
+        }
+
         public static void EnsureBuilt(GameplayManager manager)
         {
             List<Place> places = GetTopPlaces(manager);
             string vwUuid = manager?.GetCurrentVoronoiWorld()?.uuid;
-            if (places.Count == _builtForCount && vwUuid == _builtForVwUuid) return;
+            // A place-set signature, not just a count: a same-tick swap (one place removed,
+            // a different one added) leaves the count unchanged, which used to skip the
+            // rebuild and strand squads routing through the new place with no adjacency
+            // entry at all.
+            int signature = PlaceSetSignature(places);
+            if (signature == _builtForSignature && vwUuid == _builtForVwUuid) return;
 
             _neighbors = new Dictionary<string, List<string>>();
-            _builtForCount = places.Count;
+            _builtForSignature = signature;
             _builtForVwUuid = vwUuid;
             if (places.Count < 2) return;
 

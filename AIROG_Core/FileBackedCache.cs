@@ -44,7 +44,14 @@ namespace AIROG_Core
         private void Load()
         {
             string path = ModSaveFile.Path(FileName);
-            if (path == null || !File.Exists(path)) return;
+            if (path == null || !File.Exists(path))
+            {
+                // No backing file for the currently active save (e.g. after a save switch, or
+                // the producing mod isn't installed) — reflect that rather than keep serving a
+                // previous save's cached value.
+                _cache = null;
+                return;
+            }
 
             try
             {

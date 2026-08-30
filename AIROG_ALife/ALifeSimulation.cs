@@ -53,12 +53,14 @@ namespace AIROG_ALife
             foreach (var s in state.Squads) ALifeEmbodiment.Sanitize(s);
             PruneInvalidSquads(topPlaces);
             ALifeLegend.DecayTick(numTurns);
+            ALifeWar.Upkeep();
             SeedSquads(manager, topPlaces, playerTopUuid);
             ALifeLifecycle.Tick(manager, numTurns, playerTopUuid);
             ALifeLifecycle.FeudTick(manager, numTurns, playerTopUuid);
             MoveSquads(manager, playerTopUuid, numTurns);
             ResolveEncounters(manager, playerTopUuid);
             MaybeMigrateNamedNpc(manager, topPlaces, playerTopUuid);
+            ALifeKnowledge.Tick(playerTopUuid);
 
             ALifeData.SaveToCurrentDir();
         }
@@ -75,7 +77,7 @@ namespace AIROG_ALife
         {
             int configured = ALifePlugin.CfgMaxSquads.Value;
             int auto = Mathf.Clamp(placeCount / 3, 3, 10) + warCount;
-            return configured > 0 ? Math.Min(configured, auto + warCount) : auto;
+            return configured > 0 ? Math.Min(configured, auto) : auto;
         }
 
         private static void SeedSquads(GameplayManager manager, List<Place> topPlaces, string playerTopUuid)
@@ -137,6 +139,23 @@ namespace AIROG_ALife
             };
             squad.Name = ALifeNames.SquadName(archetype, squad.FactionName, home.GetPrettyName());
             squad.Leader = ALifeNames.MakeLeader(squad);
+
+            // War Made Real: a faction-court lieutenant may take the field at a warband's head.
+            if (archetype == SquadArchetype.WARBAND && ALifePlugin.CfgWarMadeReal.Value && Rng.NextDouble() < 0.25)
+            {
+                var lt = ALifeWorldBridge.GetFieldLieutenant(faction.uuid);
+                if (lt != null)
+                {
+                    squad.CourtFigureName = lt.Name;
+                    squad.CourtFigureTitle = lt.Title;
+                    squad.Leader = new SquadLeader { Name = lt.Name, Role = string.IsNullOrEmpty(lt.Title) ? "war leader" : lt.Title };
+                    squad.Morale = Math.Min(100, squad.Morale + 10); // a famous name steadies the ranks
+                    ALifeWorldBridge.PushWorldEvent(
+                        $"{squad.Leader.FullName} of {squad.FactionName} has taken the field, leading a warband to war.",
+                        alertPlayer: false);
+                }
+            }
+
             squad.AddChronicle($"Formed at {home.GetPrettyName()} under {squad.Leader.FullName}.");
             AssignGoal(manager, squad);
             state.Squads.Add(squad);
@@ -182,6 +201,13 @@ namespace AIROG_ALife
                 case SquadArchetype.PATROL:
                 {
                     var own = OwnedPlaces(topPlaces, s.FactionUuid);
+                    // On home ground, sometimes dig in instead of moving on.
+                    if (ALifePlugin.CfgWarMadeReal.Value && own.Any(p => p.uuid == s.CurrentPlaceUuid)
+                        && Rng.NextDouble() < 0.35)
+                    {
+                        SetGarrison(s);
+                        break;
+                    }
                     Place dest = PreferCalm(s, own.Where(p => p.uuid != s.CurrentPlaceUuid))
                                  ?? SafeNeighbor(s);
                     SetTravel(s, SquadGoal.TRAVEL_TO, dest);
@@ -189,6 +215,23 @@ namespace AIROG_ALife
                 }
                 case SquadArchetype.WARBAND:
                 {
+                    // Defenders dig in on their own soil rather than marching out.
+                    if (ALifePlugin.CfgWarMadeReal.Value && ALifeWar.IsWarDefender(s.FactionUuid)
+                        && Rng.NextDouble() < 0.4)
+                    {
+                        var ownGround = OwnedPlaces(topPlaces, s.FactionUuid);
+                        if (ownGround.Any(p => p.uuid == s.CurrentPlaceUuid))
+                        {
+                            SetGarrison(s);
+                            break;
+                        }
+                        Place fallBack = PreferCalm(s, ownGround);
+                        if (fallBack != null)
+                        {
+                            SetTravel(s, SquadGoal.TRAVEL_TO, fallBack); // march home; may garrison on arrival
+                            break;
+                        }
+                    }
                     var enemies = ALifeWorldBridge.WarEnemiesOf(s.FactionUuid);
                     var enemyGround = topPlaces.Where(p =>
                         (p.faction != null && enemies.Contains(p.faction.uuid)) ||
@@ -265,11 +308,38 @@ namespace AIROG_ALife
             s.TargetPlaceName = dest?.GetPrettyName();
         }
 
+        private static void SetGarrison(VirtualSquad s)
+        {
+            s.GoalType = SquadGoal.GARRISON;
+            s.GarrisonUntilTurn = ALifeData.State.CurrentTurn + 10 + Rng.Next(10);
+            s.TargetPlaceUuid = null;
+            s.TargetPlaceName = null;
+            s.TargetSquadId = null;
+        }
+
+        /// <summary>Turns a band will sit frozen in the player's bubble before it gives up
+        /// waiting and walks out. Without this a band the player neither fought nor fled
+        /// from is pinned to their location for as long as they stay there.</summary>
+        private const int BUBBLE_LINGER_TURNS = 12;
+
         private static void MoveSquads(GameplayManager manager, string playerTopUuid, int numTurns)
         {
             foreach (VirtualSquad s in ALifeData.State.Squads.ToList())
             {
-                if (s.CurrentPlaceUuid == playerTopUuid) continue; // online bubble: frozen
+                if (s.CurrentPlaceUuid == playerTopUuid)
+                {
+                    MaybeLeaveBubble(manager, s); // online bubble: frozen, but not forever
+                    continue;
+                }
+                s.BubbleSinceTurn = -1;
+
+                // Garrisoned squads hold their ground until their watch ends.
+                if (s.GoalType == SquadGoal.GARRISON)
+                {
+                    if (ALifeData.State.CurrentTurn < s.GarrisonUntilTurn) continue;
+                    AssignGoal(manager, s);
+                    if (s.GoalType == SquadGoal.GARRISON) continue; // re-upped the watch
+                }
 
                 // HUNT tracks a moving target: retarget to the enemy's live position.
                 if (s.GoalType == SquadGoal.HUNT)
@@ -311,6 +381,42 @@ namespace AIROG_ALife
             }
         }
 
+        /// <summary>
+        /// The player's ground is the online bubble: the real game owns it, so a band there
+        /// holds still rather than teleporting under the player's nose. But a band that has
+        /// been stood there for turns on end without a fight has simply stopped being a
+        /// scene — it breaks camp and moves on like any other. Uses the visible relocation
+        /// (UI refreshes included), since the player is looking at this place.
+        /// </summary>
+        private static void MaybeLeaveBubble(GameplayManager manager, VirtualSquad s)
+        {
+            if (s.GoalType == SquadGoal.GARRISON) return; // dug in on purpose
+
+            var state = ALifeData.State;
+            if (s.BubbleSinceTurn < 0) { s.BubbleSinceTurn = state.CurrentTurn; return; }
+            if (state.CurrentTurn - s.BubbleSinceTurn < BUBBLE_LINGER_TURNS) return;
+
+            Place from = ALifeGraph.PlaceByUuid(s.CurrentPlaceUuid);
+            Place dest = ALifeGraph.Neighbors(s.CurrentPlaceUuid)
+                .Where(p => p.uuid != s.CurrentPlaceUuid && !ALifeLegend.AvoidsPlace(s, p.uuid))
+                .OrderBy(_ => Rng.Next()).FirstOrDefault();
+            if (from == null || dest == null)
+            {
+                s.BubbleSinceTurn = state.CurrentTurn; // nowhere to go; try again later
+                return;
+            }
+
+            ALifeEmbodiment.RelocateVisibly(s, dest);
+            s.CurrentPlaceUuid = dest.uuid;
+            s.CurrentPlaceName = dest.GetPrettyName();
+            s.BubbleSinceTurn = -1;
+            s.HopProgress = 0;
+            s.AddChronicle($"Moved on from {from.GetPrettyName()}.");
+            ALifeData.LogEvent(from.uuid, from.GetPrettyName(), "MIGRATION",
+                $"{Cap(s.Name)} broke camp and moved on toward {dest.GetPrettyName()}.");
+            AssignGoal(manager, s);
+        }
+
         /// <summary>Move the squad record — and, if embodied, its real members — one hop.</summary>
         public static void MoveSquadTo(VirtualSquad s, Place next)
         {
@@ -327,13 +433,25 @@ namespace AIROG_ALife
 
             if (s.GoalType == SquadGoal.RAID && here.uuid == s.TargetPlaceUuid)
             {
-                // No defenders resolved by the encounter step? Then the raid lands.
+                // Defenders present? The assault is contested — the encounter step
+                // fights it out this same turn, and no sack happens until they're beaten.
+                bool defended = ALifeData.State.Squads.Any(d =>
+                    d != s && d.CurrentPlaceUuid == here.uuid && AreHostile(s, d));
+                if (defended)
+                {
+                    ALifeData.LogEvent(here.uuid, here.GetPrettyName(), "BATTLE",
+                        $"{Cap(s.Name)}'s assault on {here.GetPrettyName()} was met by defenders — battle is joined.");
+                    return; // keep the RAID goal; win the field first
+                }
+
                 string victim = here.faction != null ? here.faction.GetPrettyName() : "the locals";
                 ALifeData.LogEvent(here.uuid, here.GetPrettyName(), "RAID",
                     $"{Cap(s.Name)} raided the outskirts of {here.GetPrettyName()}, striking at {victim} before withdrawing.");
                 if (s.Archetype == SquadArchetype.WARBAND)
                     ALifeWorldBridge.PushWorldEvent(
                         $"{Cap(s.Name)} raided {here.GetPrettyName()}.", alertPlayer: false);
+                if (s.Archetype == SquadArchetype.WARBAND || s.Archetype == SquadArchetype.RAIDERS)
+                    ALifeWar.RaidLanded(s, here); // treasuries bleed; courts can lose figures
                 s.LastEventTurn = ALifeData.State.CurrentTurn;
                 s.Morale = Math.Min(100, s.Morale + 10);
                 s.XP += 5;
@@ -395,9 +513,11 @@ namespace AIROG_ALife
 
             var feud = ALifeLifecycle.FeudBetween(a, b);
             double fury = feud != null && feud.Heat >= 30 ? 1.15 : 1.0; // feuding squads fight to the knife
+            double dugInA = a.GoalType == SquadGoal.GARRISON ? 1.25 : 1.0; // defenders hold prepared ground
+            double dugInB = b.GoalType == SquadGoal.GARRISON ? 1.25 : 1.0;
 
-            double powerA = a.Strength * (0.5 + a.Morale / 200.0) * (0.7 + Rng.NextDouble() * 0.6) * fury;
-            double powerB = b.Strength * (0.5 + b.Morale / 200.0) * (0.7 + Rng.NextDouble() * 0.6) * fury;
+            double powerA = a.Strength * (0.5 + a.Morale / 200.0) * (0.7 + Rng.NextDouble() * 0.6) * fury * dugInA;
+            double powerB = b.Strength * (0.5 + b.Morale / 200.0) * (0.7 + Rng.NextDouble() * 0.6) * fury * dugInB;
             VirtualSquad winner = powerA >= powerB ? a : b;
             VirtualSquad loser  = powerA >= powerB ? b : a;
 
@@ -432,6 +552,9 @@ namespace AIROG_ALife
             // Faction-on-faction wipes are world news
             if (loserWiped && loser.FactionName != null && winner.FactionName != null)
                 ALifeWorldBridge.PushWorldEvent(desc, alertPlayer: false);
+
+            // War Made Real: the field feeds the war ledger (fronts move, wars end).
+            ALifeWar.RecordBattle(winner, loser, loserWiped, loserLeaderDies);
 
             if (loserWiped)
             {

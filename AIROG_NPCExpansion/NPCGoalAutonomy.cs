@@ -5,7 +5,7 @@ namespace AIROG_NPCExpansion
 {
     internal static class NPCGoalAutonomy
     {
-        public static void PursueGoal(GameCharacter npc, NPCData data, GameplayManager manager)
+        public static void PursueGoal(GameCharacter npc, NPCData data)
         {
              // 10% chance to act on goal per turn, OR immediately if we have no thoughts yet (for UI)
              bool forceThink = (data.RecentThoughts == null || data.RecentThoughts.Count == 0);

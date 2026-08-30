@@ -66,8 +66,11 @@ namespace AIROG_NanoBanana
         {
             // If the mode is NanoBanana (99), our Prefix handled it.
             // If it's Sapphire or AIRL_Free, they handle bg removal natively.
+            // Mode 97 is AIROG_OpenAIImage, which does its own removal (or gets real alpha from
+            // gpt-image-*) — running ours too just spawns a wasted ffmpeg pass per sprite.
             // For everyone else (Local, Wombo, etc), we need to do it manually if removeBg is requested.
             if (SS.I.imageGenerationMode != (SS.ImageGenerationMode)99 &&
+                SS.I.imageGenerationMode != (SS.ImageGenerationMode)97 &&
                 SS.I.imageGenerationMode != SS.ImageGenerationMode.SAPPHIRE &&
                 SS.I.imageGenerationMode != SS.ImageGenerationMode.AIRL_FREE &&
                 removeBg)

@@ -11,12 +11,6 @@ Welcome to the definitive collection of modifications for **AI Roguelite**. This
 
 The following mods represent the most significant transformations to the AI Roguelite experience.
 
-### ⚔️ Co-op Multiplayer (`AIROG_Multiplayer`)
-**The ultimate way to play.** Turns AI Roguelite into a shared tabletop-style RPG. One player hosts, and others join from the main menu.
-- **Unified Narrative:** The AI responds to *all* players simultaneously, weaving their actions into a single story response.
-- **Real-time Sync:** Shared story logs, party health tracking, and instant world updates.
-- **Zero Configuration:** Clients only need the plugin—no save data required to join.
-
 ### 🎭 NPC Expansion: Living World (`AIROG_NPCExpansion`)
 **They were never just set dressing.** This mod overhauls every NPC in the game with deep autonomy and memory.
 - **Social Ripple Effects:** NPCs remember your actions, form gossip networks, and react to how you treat their friends or enemies.
@@ -71,6 +65,15 @@ Enhance immersion by giving different characters unique voices.
 2. Download any mod folder (e.g., `AIROG_SkillWeb`).
 3. Copy the compiled `.dll` (and any associated `StreamingAssets`) into `BepInEx/plugins/`.
 4. Launch the game and enjoy the expanded universe!
+
+## 🗄️ Archived & Legacy Mods
+
+### ⚔️ Co-op Multiplayer (`AIROG_Multiplayer`)
+- **Status:** Archived (moved to `Archived/AIROG_Multiplayer`).
+- **Reason:** Official multiplayer has been integrated into the base game.
+- **Legacy Features:** Provided TCP/IP-based co-op play, synchronizing actions and narrative prompts across clients prior to official support.
+
+---
 
 ## ☕ Support the Project
 

@@ -55,6 +55,7 @@ namespace AIROG_NPCExpansion
                 if (data.LongTermMemories.Count > 10) data.LongTermMemories.RemoveAt(0);
 
                 NPCData.Save(killer.uuid, data);
+                NPCData.FlushSessionLore();
 
                 if (manager?.gameLogView != null)
                     _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(
@@ -111,6 +112,10 @@ namespace AIROG_NPCExpansion
 
             // 6. Save
             NPCData.Save(killer.uuid, data);
+            // Push to disk immediately — IsNemesis and the trophy memory from LootPlayer()
+            // above (if it ran) should reach the AI on the very next prompt, same as every
+            // other narrative-relevant NPCData change.
+            NPCData.FlushSessionLore();
 
             // 7. Dramatic notification
             Debug.Log($"[Nemesis] {oldName} is now known as {newName}.");

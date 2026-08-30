@@ -73,16 +73,65 @@ When modifying `AIROG_NPCExpansion/NPCData.cs`, ensure the corresponding fields 
 | Category | Field | Injected to Prompt? |
 |----------|-------|---------------------|
 | **Native (game)** | `importantData.personality`, `importantData.background`, `importantData.visualDescription` | ✓ Yes (fallback path in NPCProvider) |
-| **Core Identity** | Name, Description, Personality, Scenario | ✓ Yes |
+| **Core Identity** | Name, Description, Personality, Scenario | ✓ Yes (each field length-capped) |
 | **Character Card** | CreatorNotes, SystemPrompt | ✓ Yes (truncated) |
-| **Character Card (Metadata)** | FirstMessage, PostHistoryInstructions, AlternateGreetings, GenerationInstructions | ✗ No |
-| **Tags & Traits** | Tags, InteractionTraits | ✓ Yes |
+| **Character Card (Metadata)** | FirstMessage, MessageExamples, PostHistoryInstructions, AlternateGreetings, GenerationInstructions | ✗ No |
+| **Tags & Traits** | Tags, InteractionTraits, ReputationTags | ✓ Yes |
 | **Goals & Memory** | LongTermMemories, CurrentGoal, GoalProgress, RecentThoughts, InteractionHistory | ✓ Yes |
 | **Relationship** | Affinity, RelationshipStatus, NpcAffinities | ✓ Yes |
+| **Rumor Network** | KnownFacts | ✓ Yes (last 2, only when budget > 100 tokens) |
+| **Secrets** | Secrets | ✓ Yes — **revealed only**; unrevealed secrets are deliberately withheld |
+| **Relationship Arc** | ArcMilestones | ✓ Yes (3 most recent) |
+| **Death Tracking** | IsDeceased, DeathInfo, Epitaph | ✓ Yes — replaces the living block entirely when deceased |
 | **Equipment** | EquippedUuids | ✓ Yes |
 | **Stats & Skills** | Attributes, Skills, DetailedAbilities, Abilities | ✓ Yes |
 | **Autonomy Flags** | AllowAutoEquip, AllowSelfPreservation, AllowEconomicActivity, AllowWorldInteraction | ✗ No (runtime only) |
 | **Special Flags** | IsNemesis | ✓ Yes |
+| **Player-scoped** | `npcexpansion_taught_skills.json` | ✓ Yes — injected on every prompt, not per-NPC |
+
+### Files NPCProvider reads
+
+All three are optional; each degrades to nothing when absent. They share one 5-second
+refresh window, keyed to the active save directory (a save switch invalidates immediately).
+
+| File | Contents |
+|---|---|
+| `npcexpansion_lore.json` | The `NPCData` bundle — everything in the table above |
+| `npcexpansion_quests.json` | Active quests, indexed by giver UUID |
+| `npcexpansion_taught_skills.json` | Techniques NPCs have taught the player |
+
+**Enum gotcha:** Newtonsoft serialises `QuestStatus` as its integer ordinal
+(`"Status": 0`), so the reader-side stub must declare a matching *enum*, not a `string`.
+A `string Status` field deserialises `0` to `"0"` and silently never matches `"Active"` —
+this shipped broken from v4.0.0 through v4.3.0, so no quest was ever injected.
+
+### Freshness: `NPCData.FlushSessionLore()` (v4.4.0+)
+
+NPCProvider injects from `npcexpansion_lore.json` on disk, but that file was historically
+only written on `SaveIO.WriteSaveFile`. Under any `SS.I.autoSaveMode` other than
+`EVERY_TURN`, simulated NPC life could pile up unseen by the AI for a long time.
+
+`NPCData.Save()` now sets a dirty flag and `FlushSessionLore()` writes the bundle only when
+that flag is set, so it is cheap to call anywhere. It fires:
+- at the end of every `ScenarioUpdater.OnTurnHappened` (covers barks, rumors, gossip, memory synthesis, reputation)
+- at the end of the async scenario-update task (refreshed goals and thoughts)
+- immediately on player-initiated beats: secret reveal, arc milestone, quest accepted
+
+**Rule:** if you add a system whose output the AI should see on the *next* prompt rather
+than at the next autosave, call `NPCData.FlushSessionLore()` after your `NPCData.Save()`.
+
+### No prompt patches in this mod (v4.4.0+)
+
+NPCExpansion holds **zero** Harmony patches that write to an AI prompt. The last one — a
+postfix on `PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace` that appended
+NPC-taught techniques — was removed in v4.4.0 because it bypassed the shared token budget
+and the provider on/off toggle. If you find yourself reaching for `ref string __result` on
+any prompt-building method, the answer is a field in `NPCData` plus a line in `NPCProvider`.
+
+Formatting for the prompt lives in `NPCProvider` only. Helper methods in this mod that
+build prompt strings (`BuildRevealedContext`, `BuildArcContext`, `BuildTaughtSkillsContext`)
+were deleted in v4.4.0 — all three were dead code that no caller ever reached, which is
+exactly how secrets and milestones went missing from the AI's view for three versions.
 
 ### NPC Scenario Update Rate
 

@@ -11,7 +11,9 @@ namespace AIROG_NPCExpansion
     /// </summary>
     public static class RumorNetwork
     {
-        private const int MAX_FACTS = 8;
+        /// <summary>Cap on facts held per NPC. Shared with WorldGossipSystem, which trims the same list.</summary>
+        public const int MAX_FACTS = 8;
+        private const int MAX_FACT_CHARS = 80;
         private const float SPREAD_CHANCE = 0.35f;
         private static readonly System.Random _rng = new System.Random();
 
@@ -52,14 +54,15 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        /// <summary>Seed a fact into an NPC's known facts. Truncated to 80 chars.</summary>
+        /// <summary>Seed a fact into an NPC's known facts. Truncated to MAX_FACT_CHARS.</summary>
         public static void AddFact(string npcUuid, string fact)
         {
             if (string.IsNullOrEmpty(fact) || string.IsNullOrEmpty(npcUuid)) return;
             var data = NPCData.Load(npcUuid);
             if (data == null) return;
 
-            fact = fact.Length > 80 ? fact.Substring(0, 80) : fact;
+            fact = Truncate(fact.Trim());
+            if (string.IsNullOrEmpty(fact)) return;
             if (data.KnownFacts == null) data.KnownFacts = new List<string>();
             if (!data.KnownFacts.Contains(fact))
             {
@@ -68,6 +71,16 @@ namespace AIROG_NPCExpansion
                     data.KnownFacts.RemoveAt(0);
                 NPCData.Save(npcUuid, data);
             }
+        }
+
+        /// <summary>
+        /// Clips a fact to the length cap on a sentence/word boundary. World-sim headlines
+        /// arrive as full sentences and a hard mid-word cut reads as garbled text once
+        /// injected. Delegates to the game's own truncation utility rather than reimplementing it.
+        /// </summary>
+        private static string Truncate(string fact)
+        {
+            return Utils.SimplerTruncateWithPreferenceForEnders(fact, MAX_FACT_CHARS);
         }
     }
 }

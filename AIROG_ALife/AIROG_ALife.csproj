@@ -1,10 +1,10 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_ALife</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite that simulates STALKER-style A-Life: persistent offline squads that travel, fight, and die across the world map.</Description>
-    <Version>1.0.0</Version>
+    <Version>2.3.1</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
@@ -24,6 +24,22 @@
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\AIRL\libs\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>..\AIRL\libs\UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>..\AIRL\libs\UnityEngine.UIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>..\AIRL\libs\Unity.TextMeshPro.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.Localization">
+      <HintPath>..\AIRL\libs\Unity.Localization.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="Newtonsoft.Json">

@@ -154,7 +154,8 @@ namespace AIROG_WorldExpansion
         private static void OnLensToggled(MapModal modal)
         {
             _lensOn = !_lensOn;
-            modal.manager?.soundManager?.smallClickSoundFxObj?.PlayNextSound();
+            // modal.manager.soundManager is no longer wired since the 07/11 build — use the singleton (see WorldEventsUI/WorldLoreExpansion).
+            try { SoundManager.I.smallClickSoundFxObj.PlayNextSound(); } catch { }
 
             Transform btn = modal.jumpToCurrentLocationButton?.transform.parent.Find(BUTTON_NAME);
             if (btn != null) UpdateButtonLabel(btn.gameObject);

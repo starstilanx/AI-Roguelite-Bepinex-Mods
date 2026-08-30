@@ -100,7 +100,15 @@ namespace AIROG_NPCExpansion
         }
 
         public List<AbilityData> DetailedAbilities = new List<AbilityData>();
-        
+
+        // Tags which save session (SS.I.saveSubDirAsArg) this instance was created/loaded under.
+        // Not persisted — stamped fresh by the constructor every time an instance is built,
+        // whether via `new NPCData()`, CreateDefault(), or Newtonsoft deserialization. Lets
+        // Save() detect and drop writes from a background task that is still holding an NPCData
+        // loaded under a save the player has since switched away from.
+        [JsonIgnore]
+        public string SessionSaveDir;
+
         // The Abilities property is a compatibility shim for old saves that stored a flat string list.
         // Getter: derives names from DetailedAbilities (use DetailedAbilities directly in hot paths).
         // Setter: migrates legacy string list by converting entries into AbilityData with no description.
@@ -125,6 +133,7 @@ namespace AIROG_NPCExpansion
 
         public NPCData()
         {
+            SessionSaveDir = SS.I?.saveSubDirAsArg;
             AlternateGreetings = new List<string>();
             Tags = new List<string>();
             InteractionTraits = new List<string>();
@@ -197,10 +206,31 @@ namespace AIROG_NPCExpansion
             };
         }
 
+        // Set by Save(), cleared by SaveSessionLore(). Lets FlushSessionLore() be called
+        // freely from anywhere without re-serialising the whole bundle when nothing changed.
+        private static bool _loreDirty = false;
+
         public static void Save(string uuid, NPCData data)
         {
+            if (data == null) return;
+
+            // A background task (e.g. an in-flight AI generation) can still be holding an
+            // NPCData it loaded under a save the player has since switched away from. Writing
+            // it now would contaminate the newly-loaded save with the previous one's data, so
+            // drop it instead. Only compares when both sides know a save dir; older/edge-case
+            // data with no tag is allowed through rather than blocked.
+            string currentSaveDir = SS.I?.saveSubDirAsArg;
+            if (!string.IsNullOrEmpty(data.SessionSaveDir) && !string.IsNullOrEmpty(currentSaveDir) &&
+                !string.Equals(data.SessionSaveDir, currentSaveDir, StringComparison.OrdinalIgnoreCase))
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] Discarded stale NPCData.Save for {uuid} — data belongs to save '{data.SessionSaveDir}', current save is '{currentSaveDir}'.");
+                return;
+            }
+            data.SessionSaveDir = currentSaveDir;
+
             LoreCache[uuid] = data;
-            
+            _loreDirty = true;
+
             // 1. Save to global plugin folder (Global Backup)
             try
             {
@@ -303,12 +333,30 @@ namespace AIROG_NPCExpansion
             {
                 string path = Path.Combine(saveDir, "npcexpansion_lore.json");
                 File.WriteAllText(path, JsonConvert.SerializeObject(LoreCache, Formatting.Indented));
+                _loreDirty = false;
                 Debug.Log($"[AIROG_NPCExpansion] Saved {LoreCache.Count} lore entries to save folder.");
             }
             catch (Exception ex)
             {
                 Debug.LogError($"[AIROG_NPCExpansion] Failed to save lore bundle: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Writes the lore bundle to the active save folder right now.
+        ///
+        /// GenContext's NPCProvider injects from npcexpansion_lore.json, and that file is
+        /// otherwise only written on SaveIO.WriteSaveFile — which, depending on the player's
+        /// SS.I.autoSaveMode, may not happen for a long time. Call this after any change the
+        /// AI should notice on the very next prompt (a revealed secret, a new milestone, a
+        /// skill taught, a quest given). No-op when no save is active or nothing has changed
+        /// since the last write, so it is safe to call on every turn tick.
+        /// </summary>
+        public static void FlushSessionLore()
+        {
+            if (!_loreDirty) return;
+            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
+            SaveSessionLore(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
         }
 
         public static void LoadSessionLore(string saveDir)
@@ -324,6 +372,7 @@ namespace AIROG_NPCExpansion
                 {
                     LoreCache[kvp.Key] = kvp.Value;
                 }
+                _loreDirty = false; // Cache matches disk
                 Debug.Log($"[AIROG_NPCExpansion] Loaded {loaded.Count} lore entries from save folder.");
             }
             catch (Exception ex)

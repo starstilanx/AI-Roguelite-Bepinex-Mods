@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using Newtonsoft.Json;
+using AIROG_Core;
 using UnityEngine;
 
 namespace AIROG_NPCExpansion
@@ -18,9 +17,8 @@ namespace AIROG_NPCExpansion
     /// </summary>
     public static class WorldNewsGossip
     {
-        private const float  SEED_CHANCE       = 0.5f;  // per rumor tick
-        private const int    EVENT_WINDOW      = 25;    // only events this many turns old
-        private const double CACHE_SECONDS     = 15.0;
+        private const float SEED_CHANCE  = 0.5f;  // per rumor tick
+        private const int   EVENT_WINDOW = 25;    // only events this many turns old
         private static readonly System.Random _rng = new System.Random();
 
         // Event types worth spreading by word of mouth (skip SEASON/ECONOMY noise)
@@ -45,8 +43,16 @@ namespace AIROG_NPCExpansion
         }
 #pragma warning restore 0649
 
-        private static WorldStateStub _cache;
-        private static DateTime _lastLoad = DateTime.MinValue;
+        // FileBackedCache reads via ModSaveFile.Path(), which is always resolved against the
+        // CURRENTLY active save (SS.I.saveSubDirAsArg) at read time — so a save switch during
+        // the 15s refresh window can't leave a stale reload serving a previous save's events.
+        private class WorldStateCache : FileBackedCache<WorldStateStub>
+        {
+            public WorldStateCache() : base(refreshRateSeconds: 15f) { }
+            protected override string FileName => "world_expansion_data.json";
+        }
+
+        private static readonly WorldStateCache _cache = new WorldStateCache();
 
         /// <summary>Called from ScenarioUpdater's rumor tick (every ~3 turns).</summary>
         public static void SeedWorldNews(List<GameCharacter> npcsInPlace)
@@ -56,14 +62,14 @@ namespace AIROG_NPCExpansion
                 if (npcsInPlace == null || npcsInPlace.Count == 0) return;
                 if (_rng.NextDouble() > SEED_CHANCE) return;
 
-                RefreshCache();
-                if (_cache?.Events == null || _cache.Events.Count == 0) return;
+                var state = _cache.Get();
+                if (state?.Events == null || state.Events.Count == 0) return;
 
-                var fresh = _cache.Events
+                var fresh = state.Events
                     .Where(e => e != null
                                 && !string.IsNullOrEmpty(e.Description)
                                 && NewsworthyTypes.Contains(e.Type)
-                                && _cache.CurrentTurn - e.Turn <= EVENT_WINDOW)
+                                && state.CurrentTurn - e.Turn <= EVENT_WINDOW)
                     .ToList();
                 if (fresh.Count == 0) return;
 
@@ -82,26 +88,6 @@ namespace AIROG_NPCExpansion
             catch (Exception e)
             {
                 Debug.LogWarning($"[WorldNewsGossip] Failed to seed world news: {e.Message}");
-            }
-        }
-
-        private static void RefreshCache()
-        {
-            if ((DateTime.UtcNow - _lastLoad).TotalSeconds < CACHE_SECONDS) return;
-            _lastLoad = DateTime.UtcNow;
-
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) { _cache = null; return; }
-            string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "world_expansion_data.json");
-            if (!File.Exists(path)) { _cache = null; return; }
-
-            try
-            {
-                _cache = JsonConvert.DeserializeObject<WorldStateStub>(File.ReadAllText(path));
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[WorldNewsGossip] Could not read world data: {e.Message}");
-                _cache = null;
             }
         }
     }

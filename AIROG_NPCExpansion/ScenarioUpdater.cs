@@ -181,6 +181,13 @@ namespace AIROG_NPCExpansion
                 }
                 QuestManager.CheckDeadlines(_globalTurn, manager);
             }
+
+            // One bundle write per turn covering everything the tick touched (barks, rumors,
+            // gossip, memories, reputation). GenContext injects from npcexpansion_lore.json,
+            // so without this the whole simulation stays invisible to the AI until the game
+            // next autosaves — which, on non-EVERY_TURN autosave modes, may be a long while.
+            // No-op when nothing was modified.
+            NPCData.FlushSessionLore();
         }
 
         // ─── Scenario Update Task ──────────────────────────────────────────────────
@@ -207,6 +214,9 @@ namespace AIROG_NPCExpansion
                     }
                 }
                 Debug.Log("[AIROG_NPCExpansion] ScenarioUpdater finished update task.");
+                // Runs after the turn tick returned, so it needs its own flush — refreshed
+                // goals and thoughts are the highest-value context this mod produces.
+                NPCData.FlushSessionLore();
             }
             catch (Exception ex)
             {

@@ -20,7 +20,7 @@ namespace AIROG_NPCExpansion
     {
         public const string PLUGIN_GUID = "com.airog.npcexpansion";
         public const string PLUGIN_NAME = "NPC Expansion";
-        public const string PLUGIN_VERSION = "4.3.0";
+        public const string PLUGIN_VERSION = "4.4.0";
 
         public static NPCExpansionPlugin Instance { get; private set; }
         public static string NPCDataPath => Path.Combine(Paths.PluginPath, "AIROG_NPCExpansion", "NPCData");
@@ -56,20 +56,10 @@ namespace AIROG_NPCExpansion
                 Logger.LogWarning("[NPCExpansion] Could not find GameCharacter.GenerateImportantData — native profile generation will not seed NPCData.");
             }
 
-            // Manually patch PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace —
-            // Harmony's attribute-based resolver fails for this newly-added class at runtime.
-            var statusMethod = AccessTools.Method(typeof(PlayableCharacterData), "GetPlayerStatusStrToAppendNoSpace");
-            if (statusMethod != null)
-            {
-                harmony.Patch(statusMethod,
-                    postfix: new HarmonyMethod(typeof(NPCExpansionPlugin),
-                        nameof(Postfix_GetPlayerStatusStrToAppendNoSpace)));
-                Logger.LogInfo("[NPCExpansion] Patched PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace manually.");
-            }
-            else
-            {
-                Logger.LogWarning("[NPCExpansion] Could not find PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace — NPC skill context will not be injected.");
-            }
+            // NOTE: NPC-taught techniques used to be appended here via a postfix on
+            // PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace. That bypassed the
+            // shared token budget and the provider toggle, so it now goes through
+            // AIROG_GenContext's NPCProvider like every other piece of our context.
 
             // Initialize UI logic
             NPCUI.Init();
@@ -347,31 +337,28 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        // ─── Inject NPC-taught skills into the player status string the AI sees ──
-        // NOTE: patched manually via AccessTools in Awake() — attributes removed to avoid double-patch.
-        public static void Postfix_GetPlayerStatusStrToAppendNoSpace(ref string __result)
-        {
-            string taught = NPCTeachingSystem.BuildTaughtSkillsContext();
-            if (!string.IsNullOrEmpty(taught))
-                __result += "\n" + taught;
-        }
-
-        [HarmonyPatch(typeof(InventoryAndAbilitySelectionPrompter), "SellItem")]
+        // The 07/18 build removed InventoryAndAbilitySelectionPrompter.SellItem; the sell path now
+        // routes through GameplayManager.SellItemToMerchant(item, merchant), which hands us the
+        // merchant GameCharacter directly (no MerchantInventory traversal needed).
+        // Patched on DoSellItemToMerchant rather than SellItemToMerchant: the host's MP command
+        // handler (MpCommands.cs) calls DoSellItemToMerchant directly for a non-host client's
+        // sale, bypassing SellItemToMerchant entirely. DoSellItemToMerchant is the common
+        // downstream of both paths, so patching it here covers host-local and relayed sales alike.
+        [HarmonyPatch(typeof(GameplayManager), "DoSellItemToMerchant")]
         [HarmonyPostfix]
-        public static void Postfix_SellItem(GameItem item, long goldAmount, MerchantInventory ___merchantInventory)
+        public static void Postfix_SellItem(GameItem item, GameCharacter merchant)
         {
-            if (___merchantInventory != null && ___merchantInventory.currentMerchant != null)
-            {
-                var npc = ___merchantInventory.currentMerchant;
-                var data = NPCData.Load(npc.uuid);
-                if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
+            if (item == null || merchant == null) return;
 
-                data.ChangeAffinity(3, $"Sold {item.GetPrettyName()} to them.");
-                if (!string.IsNullOrEmpty(item.uuid))
-                    data.PlayerPlacedItemUuids.Add(item.uuid);
-                NPCData.Save(npc.uuid, data);
-                SyncAffinityToGame(npc.uuid, data);
-            }
+            var npc = merchant;
+            var data = NPCData.Load(npc.uuid);
+            if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
+
+            data.ChangeAffinity(3, $"Sold {item.GetPrettyName()} to them.");
+            if (!string.IsNullOrEmpty(item.uuid))
+                data.PlayerPlacedItemUuids.Add(item.uuid);
+            NPCData.Save(npc.uuid, data);
+            SyncAffinityToGame(npc.uuid, data);
         }
 
         [HarmonyPatch(typeof(GameplayManager), "ProcessInteractionInfoNoTryStr")]

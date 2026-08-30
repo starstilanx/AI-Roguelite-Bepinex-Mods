@@ -6,7 +6,7 @@ namespace AIROG_NPCExpansion
 {
     internal static class NPCEconomicAutonomy
     {
-        public static void EconomicActivity(GameCharacter npc, NPCData data, GameplayManager manager)
+        public static void EconomicActivity(GameCharacter npc, NPCData data)
         {
             if (npc.items == null || npc.items.Count < 5) return;
 

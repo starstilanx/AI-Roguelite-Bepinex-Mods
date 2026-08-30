@@ -27,6 +27,25 @@ namespace AIROG_NPCExpansion
             _lastLoggedNpcUuid = null;
         }
 
+        /// <summary>
+        /// Resolves the GameplayManager a UI window should use (falling back to the hacky
+        /// singleton) and validates it has a usable canvas. Callers should check this BEFORE
+        /// touching any of their own state (e.g. the NPC currently being shown) so a failed
+        /// resolve leaves an already-open window showing its previous, still-correct content
+        /// instead of a mismatched NPC/manager pairing.
+        /// </summary>
+        public static bool TryResolveManager(GameplayManager manager, string uiName, out GameplayManager resolved)
+        {
+            resolved = manager ?? SS.I?.hackyManager;
+            if (resolved == null || resolved.canvasTransform == null)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] Cannot open {uiName}: no valid GameplayManager/canvas available.");
+                resolved = null;
+                return false;
+            }
+            return true;
+        }
+
         private static GameCharacter _lastMonitoredNpc;
         private static int _lastMonitoredIdx = -1;
 

@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
 
 namespace AIROG_Settlement
 {
@@ -43,12 +45,17 @@ namespace AIROG_Settlement
             if (index == 1) RefreshBuildingsTab();
             if (index == 2) RefreshPopulationTab();
             if (index == 3) RefreshTradeTab();
+            if (index == 4) RefreshResearchTab();
         }
 
         public bool IsSettlement(Place p)
         {
             return p != null && CurrentSettlement != null && CurrentSettlement.LocationUuid == p.uuid;
         }
+
+        /// <summary>True when the player's current location is this settlement — the gate
+        /// for actually surfacing a pending event popup (see TryTriggerEvent).</summary>
+        public bool IsPlayerAtSettlement() => IsSettlement(SS.I?.hackyManager?.currentPlace);
 
         public void EstablishSettlement(Place p)
         {
@@ -69,6 +76,9 @@ namespace AIROG_Settlement
             CurrentSettlement.Resources["Gold"] = 150;
             CurrentSettlement.Resources["Wood"] = 0;
             CurrentSettlement.Resources["Stone"] = 0;
+            CurrentSettlement.Resources["Knowledge"] = 0;
+            PendingEvent = null;
+            HideEventPopup();
             Log.LogInfo($"Established settlement at {p.GetPrettyName()} ({p.uuid})");
 
             SaveSettlementData();
@@ -95,18 +105,21 @@ namespace AIROG_Settlement
             // Resources in right sidebar (persistent, always visible)
             if (!HasActiveSettlement)
             {
-                if (GoldText  != null) GoldText.text  = "Gold: —";
-                if (WoodText  != null) WoodText.text  = "Wood: —";
-                if (StoneText != null) StoneText.text = "Stone: —";
+                if (GoldText      != null) GoldText.text      = "Gold: —";
+                if (WoodText      != null) WoodText.text      = "Wood: —";
+                if (StoneText     != null) StoneText.text     = "Stone: —";
+                if (KnowledgeText != null) KnowledgeText.text = "Knowledge: —";
             }
             else
             {
-                int gold  = CurrentSettlement.Resources.TryGetValue("Gold",  out int g) ? g : 0;
-                int wood  = CurrentSettlement.Resources.TryGetValue("Wood",  out int w) ? w : 0;
-                int stone = CurrentSettlement.Resources.TryGetValue("Stone", out int s) ? s : 0;
-                if (GoldText  != null) GoldText.text  = $"Gold: {gold}";
-                if (WoodText  != null) WoodText.text  = $"Wood: {wood}";
-                if (StoneText != null) StoneText.text = $"Stone: {stone}";
+                int gold      = CurrentSettlement.Resources.TryGetValue("Gold",      out int g) ? g : 0;
+                int wood      = CurrentSettlement.Resources.TryGetValue("Wood",      out int w) ? w : 0;
+                int stone     = CurrentSettlement.Resources.TryGetValue("Stone",     out int s) ? s : 0;
+                int knowledge = CurrentSettlement.Resources.TryGetValue("Knowledge", out int k) ? k : 0;
+                if (GoldText      != null) GoldText.text      = $"Gold: {gold}";
+                if (WoodText      != null) WoodText.text      = $"Wood: {wood}";
+                if (StoneText     != null) StoneText.text     = $"Stone: {stone}";
+                if (KnowledgeText != null) KnowledgeText.text = $"Knowledge: {knowledge}";
             }
 
             // Population in right sidebar (persistent)
@@ -199,6 +212,87 @@ namespace AIROG_Settlement
             {
                 Log.LogError($"Error generating settlement image: {e}");
             }
+        }
+
+        // -----------------------------------------------------------------------
+        // Event popup: shown independent of whether the Settlement modal itself is open, but
+        // gated on the player actually being at the settlement's location — see
+        // IsPlayerAtSettlement() and the check in Update() (SettlementPlugin.cs). ShowEventPopup
+        // itself doesn't check location; it just renders whatever PendingEvent is handed to it.
+        // Backdrop + panel are built once (SettlementMainUIPatch.cs); only the choice
+        // buttons are rebuilt per event, same "destroy children, redraw" pattern the tabs use.
+        // -----------------------------------------------------------------------
+
+        public void ShowEventPopup(SettlementEventDefinition def)
+        {
+            if (EventPopupObj == null) { Log.LogError("Event popup UI not built; cannot show event."); return; }
+
+            if (EventPopupTitleText != null) EventPopupTitleText.text = def.Title;
+            if (EventPopupFlavorText != null) EventPopupFlavorText.text = def.FlavorText;
+
+            Transform root = EventPopupObj.transform;
+            for (int i = root.childCount - 1; i >= 0; i--)
+            {
+                var child = root.GetChild(i);
+                if (child.name.StartsWith("Choice_")) Destroy(child.gameObject);
+            }
+
+            const float btnX = 284f, btnW = 456f, btnH = 36f, startY = 272f, step = 46f;
+            for (int i = 0; i < def.Choices.Count; i++)
+            {
+                var choice = def.Choices[i];
+                GameObject btnObj = SettlementUIHelper.CreateUIElement($"Choice_{i}", root,
+                    btnX, startY + i * step, btnW, btnH, null, new Color(0.16f, 0.16f, 0.24f, 0.95f));
+                var btn = btnObj.AddComponent<Button>();
+                btn.onClick.AddListener(() => ResolveEvent(choice));
+
+                GameObject txtObj = new GameObject("T", typeof(RectTransform), typeof(TextMeshProUGUI));
+                txtObj.transform.SetParent(btnObj.transform, false);
+                var txt = txtObj.GetComponent<TextMeshProUGUI>();
+                txt.text = choice.Label;
+                txt.fontSize = 14;
+                txt.alignment = TextAlignmentOptions.Center;
+                txt.color = Color.white;
+                var tr = txtObj.GetComponent<RectTransform>();
+                tr.anchorMin = Vector2.zero; tr.anchorMax = Vector2.one;
+                tr.offsetMin = tr.offsetMax = Vector2.zero;
+            }
+
+            EventPopupObj.SetActive(true);
+            EventPopupObj.transform.SetAsLastSibling();
+        }
+
+        public void HideEventPopup()
+        {
+            if (EventPopupObj != null) EventPopupObj.SetActive(false);
+        }
+
+        public void ResolveEvent(SettlementEventChoice choice)
+        {
+            var def = PendingEvent;
+            if (def == null) return;
+
+            string outcome;
+            try
+            {
+                outcome = choice.Resolve(CurrentSettlement) ?? "Nothing happens.";
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning($"Event choice '{choice.Label}' for '{def.ID}' failed: {ex.Message}");
+                outcome = "Something went wrong, and the moment passes without incident.";
+            }
+
+            CurrentSettlement.UpdateHappiness();
+            PendingEvent = null;
+            HideEventPopup();
+            SaveSettlementData();
+            ScheduleUiUpdate();
+
+            Log.LogInfo($"[{def.Title}] {choice.Label}: {outcome}");
+            var gameLog = SS.I?.hackyManager?.gameLogView;
+            if (gameLog != null)
+                _ = gameLog.LogText($"<color=#d8c8a0>[{CurrentSettlement.Name}] {def.Title}: {outcome}</color>");
         }
 
         public class SettlementImageEntity : GameEntity

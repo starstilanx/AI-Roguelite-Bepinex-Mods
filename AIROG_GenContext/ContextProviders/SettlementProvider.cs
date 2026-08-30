@@ -41,6 +41,7 @@ namespace AIROG_GenContext.ContextProviders
             public string Job;
             public string Uuid;
             public int Happiness;
+            public string Trait;
         }
 
         private SettlementStateStub _cache;
@@ -101,7 +102,8 @@ namespace AIROG_GenContext.ContextProviders
                 
                 if (workers.Any())
                 {
-                    context += "Notable Residents: " + string.Join(", ", workers.Select(r => $"{r.Name} ({r.Job})")) + "\n";
+                    context += "Notable Residents: " + string.Join(", ", workers.Select(r =>
+                        string.IsNullOrEmpty(r.Trait) ? $"{r.Name} ({r.Job})" : $"{r.Name} ({r.Job}, {r.Trait})")) + "\n";
                 }
             }
             

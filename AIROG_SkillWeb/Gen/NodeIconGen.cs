@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
@@ -23,6 +24,31 @@ namespace AIROG_SkillWeb
     {
         static string IconDir => Path.Combine(Path.GetDirectoryName(SkillWebPlugin.GetSavePath()), "icons");
 
+        // A single generation holds the backend's image semaphore for up to a minute (ComfyUI/A1111),
+        // but SkillWebUI.Refresh() — which re-triggers EnsureIconAsync for every visible node — fires
+        // dozens of times before any gen finishes (each icon completion itself calls Refresh). Without
+        // a guard, the same handful of nodes get re-queued on every Refresh, ballooning the backend
+        // queue into an endless re-generation of the same icons and starving the game's own image gens.
+        // These two sets de-dupe: _inFlight blocks a node that's already generating; _failedUntil backs
+        // off a node whose gen failed so a permanently-failing node doesn't re-queue on every Refresh.
+        // Concurrent collections: a continuation resuming off Unity's main thread (some native backend
+        // clients aren't guaranteed to hop back) must not be able to corrupt these against a concurrent
+        // EnsureIconAsync call on the main thread.
+        static readonly ConcurrentDictionary<string, byte> _inFlight = new ConcurrentDictionary<string, byte>();
+        static readonly ConcurrentDictionary<string, float> _failedUntil = new ConcurrentDictionary<string, float>();
+        const float FailCooldownSeconds = 300f;
+
+        /// <summary>
+        /// Clears in-flight/cooldown bookkeeping. Node ids for Anchors are deterministic
+        /// ("anchor:"+perkUuid), so without this a failure on one save's icon would leave a
+        /// same-perk node on a different save silently cooling down too. Call on every load.
+        /// </summary>
+        public static void ClearRuntimeState()
+        {
+            _inFlight.Clear();
+            _failedUntil.Clear();
+        }
+
         /// <summary>Node ids can contain ':' (Anchors are "anchor:&lt;perkUuid&gt;"), which is illegal in a Windows filename.</summary>
         static string SafeFileName(string nodeId) => nodeId.Replace(':', '_');
 
@@ -34,11 +60,20 @@ namespace AIROG_SkillWeb
         public static void EnsureIconAsync(WebNode node)
         {
             if (node == null || node.type == WebNodeType.Basic || HasIcon(node)) return;
+
+            // Already generating this node, or it failed recently — don't pile another request onto
+            // the backend queue. Refresh() calls this for every visible node many times per second.
+            if (_inFlight.ContainsKey(node.id)) return;
+            if (_failedUntil.TryGetValue(node.id, out float until) && Time.realtimeSinceStartup < until) return;
+
+            _inFlight[node.id] = 0;
             _ = GenerateAsync(node);
         }
 
         static async Task GenerateAsync(WebNode node)
         {
+            bool succeeded = false;
+            bool skippedDisabled = false;
             try
             {
                 Directory.CreateDirectory(IconDir);
@@ -49,7 +84,13 @@ namespace AIROG_SkillWeb
                 if (!ok)
                 {
                     if (SS.I.imageGenerationMode == SS.ImageGenerationMode.DISABLED)
-                        return; // player turned image generation off — don't warn every refresh
+                    {
+                        // Player turned image generation off — don't warn every refresh, and don't
+                        // treat this as a generation failure either: no attempt was actually made,
+                        // so re-enabling a backend should let this node retry immediately.
+                        skippedDisabled = true;
+                        return;
+                    }
                     ok = await TryNativeBackend(prompt, pathNoExt);
                 }
 
@@ -59,12 +100,29 @@ namespace AIROG_SkillWeb
                     return;
                 }
 
+                succeeded = true;
                 if (SkillWebUI.Instance != null && SkillWebUI.Instance.gameObject.activeSelf)
                     SkillWebUI.Instance.Refresh();
             }
             catch (Exception ex)
             {
                 Debug.LogError("[SkillWeb] NodeIconGen exception: " + ex.Message);
+            }
+            finally
+            {
+                // Guarded: if this continuation resumed off Unity's main thread, Time.realtimeSinceStartup
+                // itself can throw here — letting that escape a finally block would fault this fire-and-forget
+                // Task as an unobserved exception and silently skip setting the cooldown below.
+                try
+                {
+                    _inFlight.TryRemove(node.id, out _);
+                    if (succeeded || skippedDisabled) _failedUntil.TryRemove(node.id, out _);
+                    else _failedUntil[node.id] = Time.realtimeSinceStartup + FailCooldownSeconds;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError("[SkillWeb] NodeIconGen cleanup exception: " + ex.Message);
+                }
             }
         }
 

@@ -374,10 +374,18 @@ namespace AIROG_WorldExpansion
             WorldData.CurrentState.MajorEventHistory.Add(desc);
             WorldData.QueuePlayerEvent($"{loser.GetPrettyName()} has fallen and been absorbed by {victor.GetPrettyName()}.", "FACTION_FALL");
 
-            // End any active war between them
-            string key = WorldData.GetRelationshipKey(loser.uuid, victor.uuid);
-            if (WorldData.CurrentState.ActiveWars.ContainsKey(key))
-                WorldData.CurrentState.ActiveWars.Remove(key);
+            // End ALL active wars involving the loser, not just the one with the victor —
+            // a defeated faction can't credibly still be fighting a third party, and
+            // nothing else clears those wars (CheckActiveWarPeace only catches them once
+            // its own exhaustion/duration conditions happen to line up, up to several
+            // turns later), leaving ghost wars in the AI prompt, World News, and the
+            // political map's war-front rendering in the meantime.
+            var warsToClear = WorldData.CurrentState.ActiveWars
+                .Where(kv => kv.Value.ActorUuid == loser.uuid || kv.Value.TargetUuid == loser.uuid)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var k in warsToClear)
+                WorldData.CurrentState.ActiveWars.Remove(k);
 
             PlayerWorldActor.OnFactionFallen(loser, victor);
 

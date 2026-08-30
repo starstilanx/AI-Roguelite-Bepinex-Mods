@@ -39,6 +39,9 @@ namespace AIROG_NPCExpansion
             data.ArcMilestones.Insert(0, entry);
             while (data.ArcMilestones.Count > 10) data.ArcMilestones.RemoveAt(data.ArcMilestones.Count - 1);
             NPCData.Save(npcUuid, data);
+            // Milestones are narrative beats the AI should know about immediately, not at
+            // the next autosave — GenContext reads them from the lore bundle on disk.
+            NPCData.FlushSessionLore();
             Debug.Log($"[ArcSystem] Milestone recorded for {data.Name}: {milestone}");
         }
 
@@ -92,15 +95,7 @@ namespace AIROG_NPCExpansion
             return actions;
         }
 
-        // ─── Context for AI Prompt ─────────────────────────────────────────────────
-
-        public static string BuildArcContext(NPCData data)
-        {
-            if (data.ArcMilestones == null || data.ArcMilestones.Count == 0) return "";
-            return "Relationship milestones: " + string.Join("; ",
-                data.ArcMilestones.Count > 3
-                    ? data.ArcMilestones.GetRange(0, 3)
-                    : data.ArcMilestones);
-        }
+        // Arc milestones reach the AI through AIROG_GenContext's NPCProvider, which reads
+        // NPCData.ArcMilestones from npcexpansion_lore.json and injects the three most recent.
     }
 }

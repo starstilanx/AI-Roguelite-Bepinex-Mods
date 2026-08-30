@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
+using UnityEngine;
 
 namespace AIROG_Settlement
 {
@@ -20,6 +21,12 @@ namespace AIROG_Settlement
 
         public List<BuildingInstance> Buildings = new List<BuildingInstance>();
         public List<ResidentData> Residents = new List<ResidentData>();
+        public HashSet<string> Researched = new HashSet<string>();
+        public Dictionary<string, float> TradePrices = new Dictionary<string, float>
+        {
+            {"Wood", 1f},
+            {"Stone", 1f}
+        };
 
         public void AddResource(string key, int amount)
         {
@@ -36,8 +43,25 @@ namespace AIROG_Settlement
         public int CompletedBuildingCount() =>
             Buildings.FindAll(b => b.IsComplete).Count;
 
-        /// <summary>Max residents the settlement can hold: one per completed building, capped by UI space.</summary>
-        public int GetPopulationCap() => Math.Min(CompletedBuildingCount(), 6);
+        /// <summary>Max residents the settlement can hold: one per completed building, capped by UI space
+        /// (raised by 2 once "civic_planning" is researched).</summary>
+        public int GetPopulationCap()
+        {
+            int cap = 6 + (Researched.Contains("civic_planning") ? 2 : 0);
+            return Math.Min(CompletedBuildingCount(), cap);
+        }
+
+        /// <summary>Town-wide happiness baseline from amenities, before any per-resident trait.
+        /// Shared by UpdateHappiness and new-resident creation so the two never drift apart.</summary>
+        public int GetBaseHappiness()
+        {
+            int happiness = 40;
+            if (HasBuilding("tavern")) happiness += 20;
+            if (HasBuilding("farm"))   happiness += 15;
+            if (HasBuilding("market")) happiness += 10;
+            if (HasBuilding("barracks")) happiness += 5; // Safety
+            return Math.Min(100, happiness);
+        }
 
         /// <summary>
         /// Produces resources from all built buildings and residents.
@@ -48,33 +72,53 @@ namespace AIROG_Settlement
         {
             if (string.IsNullOrEmpty(LocationUuid) || numTurns <= 0) return;
 
+            bool guildCharter = Researched.Contains("guild_charter");
             foreach (var building in Buildings)
             {
                 var def = BuildingCatalog.Get(building.BuildingID);
                 if (def == null || !building.IsComplete) continue;
                 foreach (var kv in def.Production)
-                    AddResource(kv.Key, kv.Value * building.Level * numTurns);
+                {
+                    int amount = kv.Value * building.Level * numTurns;
+                    if (kv.Key == "Gold" && guildCharter) amount = Mathf.RoundToInt(amount * 1.1f);
+                    AddResource(kv.Key, amount);
+                }
+
+                if (building.BuildingID == "quarry" && Researched.Contains("masonry"))
+                    AddResource("Stone", 2 * building.Level * numTurns);
+                if (building.BuildingID == "farm" && Researched.Contains("irrigation"))
+                    AddResource("Gold", Mathf.RoundToInt(3 * building.Level * numTurns * (guildCharter ? 1.1f : 1f)));
             }
 
             // Residents pay taxes: 1 gold/turn each, 2 if genuinely happy
             foreach (var resident in Residents)
                 AddResource("Gold", (resident.Happiness >= 70 ? 2 : 1) * numTurns);
+
+            // Knowledge trickles in from the population itself, not a building
+            AddResource("Knowledge", Residents.Count * numTurns);
         }
 
         /// <summary>
-        /// Recomputes resident happiness from settlement amenities.
-        /// Deterministic so it can run every turn without drift.
+        /// Recomputes each resident's happiness target from settlement amenities plus their
+        /// own trait, then drifts current happiness toward that target (at most 5/turn) so
+        /// temporary swings (a festival, a raid) fade out instead of vanishing next tick.
+        /// The target computation itself stays deterministic (no RNG) so it's still safe to
+        /// run every turn.
         /// </summary>
         public void UpdateHappiness()
         {
-            int happiness = 40;
-            if (HasBuilding("tavern")) happiness += 20;
-            if (HasBuilding("farm"))   happiness += 15;
-            if (HasBuilding("market")) happiness += 10;
-            if (HasBuilding("barracks")) happiness += 5; // Safety
-            happiness = Math.Min(100, happiness);
+            int baseHappiness = GetBaseHappiness();
+
             foreach (var resident in Residents)
-                resident.Happiness = happiness;
+            {
+                if (string.IsNullOrEmpty(resident.Trait))
+                    resident.Trait = TraitCatalog.Random(); // self-heal residents from pre-1.2.0 saves
+
+                int target = Math.Max(0, Math.Min(100, baseHappiness + TraitCatalog.GetModifier(resident.Trait)));
+                int delta = target - resident.Happiness;
+                int step = Math.Min(Math.Abs(delta), 5);
+                resident.Happiness += Math.Sign(delta) * step;
+            }
         }
 
         /// <summary>Settlement level derives from total construction (base 1 + one per two building levels).</summary>
@@ -104,6 +148,39 @@ namespace AIROG_Settlement
         public string Job;
         public string Uuid; // References GameCharacter if applicable
         public int Happiness = 50;
+        public string Trait;
+    }
+
+    /// <summary>
+    /// Flavor personality traits that push a resident's happiness target above or below
+    /// the settlement-wide baseline, giving each resident their own trajectory instead of
+    /// everyone sharing one number.
+    /// </summary>
+    public static class TraitCatalog
+    {
+        private static readonly (string Name, int Modifier, string Flavor)[] All =
+        {
+            ("Hardy", 8, "shrugs off hardship"),
+            ("Sociable", 5, "thrives around neighbors"),
+            ("Content", 3, "easy to please"),
+            ("Restless", -3, "itches for something new"),
+            ("Grumbling", -5, "grumbles more than most"),
+            ("Anxious", -8, "worries constantly"),
+        };
+
+        public static string Random() => All[UnityEngine.Random.Range(0, All.Length)].Name;
+
+        public static int GetModifier(string trait)
+        {
+            foreach (var t in All) if (t.Name == trait) return t.Modifier;
+            return 0;
+        }
+
+        public static string GetFlavor(string trait)
+        {
+            foreach (var t in All) if (t.Name == trait) return t.Flavor;
+            return "";
+        }
     }
 
     /// <summary>

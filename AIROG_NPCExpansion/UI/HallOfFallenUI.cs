@@ -44,12 +44,7 @@ namespace AIROG_NPCExpansion
 
         private void Show(GameplayManager manager)
         {
-            _manager = manager ?? SS.I?.hackyManager;
-            if (_manager == null || _manager.canvasTransform == null)
-            {
-                Debug.LogWarning("[AIROG_NPCExpansion] Cannot open HallOfFallenUI: no valid GameplayManager/canvas available.");
-                return;
-            }
+            if (!NPCUI.TryResolveManager(manager, "HallOfFallenUI", out _manager)) return;
             if (_window == null) CreateUI();
             if (_modalBlocker != null) _modalBlocker.SetActive(true);
             _window.SetActive(true);

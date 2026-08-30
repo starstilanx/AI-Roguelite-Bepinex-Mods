@@ -31,10 +31,13 @@ namespace AIROG_RandomOrg
             !RandomOrgPlugin.DiceRollsOnly.Value || Active;
     }
 
+    // 07/18 build appended a trailing optional `GameCharacter actor = null` param — the explicit
+    // Type[] must list it or Harmony's signature lookup fails with "Undefined target method".
     [HarmonyPatch(typeof(Utils), "GetRollOutcome", new Type[]
     {
         typeof(GameplayManager), typeof(SS.PlayerAttribute), typeof(long),
-        typeof(PlayerSkill), typeof(InteractionInfo), typeof(PlausV2), typeof(SS.RollOutcome)
+        typeof(PlayerSkill), typeof(InteractionInfo), typeof(PlausV2), typeof(SS.RollOutcome),
+        typeof(GameCharacter)
     })]
     public static class Patch_Utils_GetRollOutcome_Scope
     {

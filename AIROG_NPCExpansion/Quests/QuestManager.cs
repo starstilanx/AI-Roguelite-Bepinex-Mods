@@ -84,8 +84,7 @@ namespace AIROG_NPCExpansion
                     while (npcLoreData.LongTermMemories.Count > 10) npcLoreData.LongTermMemories.RemoveAt(0);
                     NPCData.Save(npc.uuid, npcLoreData);
                     // Flush session lore so NPCProvider's 5-second cache picks it up
-                    if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                        NPCData.SaveSessionLore(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+                    NPCData.FlushSessionLore();
                 }
 
                 _ = manager.gameLogView.LogTextCompat(

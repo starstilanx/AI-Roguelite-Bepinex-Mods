@@ -91,6 +91,8 @@ namespace AIROG_NPCExpansion
                 NPCData.Save(npc.uuid, data);
                 NPCExpansionPlugin.SyncAffinityToGame(npc.uuid, data);
 
+                // RecordMilestone flushes the lore bundle, so the affinity cost above lands
+                // on disk in the same pass and GenContext sees both on the next prompt.
                 RelationshipArcSystem.RecordMilestone(npc.uuid, data, $"Taught player: {skillName}");
 
                 _ = manager.gameLogView.LogTextCompat(
@@ -106,16 +108,10 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        // ─── Prompt Injection ──────────────────────────────────────────────────────
-
-        public static string BuildTaughtSkillsContext()
-        {
-            if (PlayerTaughtSkills == null || PlayerTaughtSkills.Count == 0) return "";
-            var sb = new System.Text.StringBuilder("NPC-Taught Techniques:");
-            foreach (var s in PlayerTaughtSkills)
-                sb.Append($"\n  - {s.SkillName}: {s.Description} (taught by {s.TeacherName})");
-            return sb.ToString();
-        }
+        // Taught techniques reach the AI through AIROG_GenContext's NPCProvider, which reads
+        // npcexpansion_taught_skills.json. Until v4.4.0 this mod appended them to the prompt
+        // itself via a postfix on PlayableCharacterData.GetPlayerStatusStrToAppendNoSpace,
+        // which sidestepped the shared token budget and the provider toggle.
 
         // ─── Persistence ───────────────────────────────────────────────────────────
 

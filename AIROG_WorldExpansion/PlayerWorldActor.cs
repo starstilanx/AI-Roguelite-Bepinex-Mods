@@ -20,7 +20,6 @@ namespace AIROG_WorldExpansion
         private const int   PLAYER_GRIEVANCE_BOUNTY_THRESHOLD = 3;
         private const float BIG_REP_DELTA = 10f; // native minor changes are ±10, major ±20
 
-        private static readonly System.Random rng = new System.Random();
         private static bool _selfInflicted; // guard: don't react to our own DeltaRep calls
 
         // ─── Native rep bridge ────────────────────────────────────────────────────
@@ -115,7 +114,7 @@ namespace AIROG_WorldExpansion
                 var standing = faction.GetStanding();
                 string name  = faction.GetPrettyName();
 
-                if (standing <= Faction.FactionStanding.SCORNED && rng.NextDouble() < 0.15)
+                if (standing <= Faction.FactionStanding.SCORNED && WorldSimUtils.Rng.NextDouble() < 0.15)
                 {
                     bool bounty = state.PlayerBounties.Contains(faction.uuid);
                     string[] hostileActs = bounty
@@ -130,14 +129,14 @@ namespace AIROG_WorldExpansion
                             $"{name} is spreading ugly rumors about the player.",
                             $"Agents of {name} are keeping hostile watch on the player's movements.",
                         };
-                    string act = hostileActs[rng.Next(hostileActs.Length)];
+                    string act = hostileActs[WorldSimUtils.Rng.Next(hostileActs.Length)];
                     WorldData.LogEvent(act, "PLAYER");
                     WorldData.QueuePlayerEvent(act, "FACTION_HOSTILITY");
                     WorldEventsUI.MarkDirty();
                     return; // at most one player-targeted event per tick
                 }
 
-                if (standing >= Faction.FactionStanding.ADMIRED && rng.NextDouble() < 0.08)
+                if (standing >= Faction.FactionStanding.ADMIRED && WorldSimUtils.Rng.NextDouble() < 0.08)
                 {
                     string[] friendlyActs =
                     {
@@ -145,7 +144,7 @@ namespace AIROG_WorldExpansion
                         $"{name} has sent an envoy bearing a gift and warm regards for the player.",
                         $"Songs commissioned by {name} about the player's exploits are being sung in the streets.",
                     };
-                    string act = friendlyActs[rng.Next(friendlyActs.Length)];
+                    string act = friendlyActs[WorldSimUtils.Rng.Next(friendlyActs.Length)];
                     WorldData.LogEvent(act, "PLAYER");
                     WorldData.QueuePlayerEvent(act, "FACTION_HONOR");
                     WorldEventsUI.MarkDirty();
@@ -189,6 +188,13 @@ namespace AIROG_WorldExpansion
         {
             try
             {
+                // A fallen faction can't credibly still be hunting the player — drop any
+                // bounty unconditionally, even if their standing drifted above Scorned
+                // (e.g. via small native rep gains) before they were eliminated. Otherwise
+                // it lingers forever: nothing else clears a bounty except a future DeltaRep
+                // on a faction that no longer takes any actions.
+                WorldData.CurrentState.PlayerBounties.Remove(fallen.uuid);
+
                 if (fallen.GetStanding() >= Faction.FactionStanding.TRUSTED)
                 {
                     SafeDeltaRep(victor, -15f);
@@ -198,7 +204,6 @@ namespace AIROG_WorldExpansion
                 }
                 else if (fallen.GetStanding() <= Faction.FactionStanding.SCORNED)
                 {
-                    WorldData.CurrentState.PlayerBounties.Remove(fallen.uuid);
                     WorldData.QueuePlayerEvent(
                         $"{fallen.GetPrettyName()}, a faction hostile to you, has been destroyed by {victor.GetPrettyName()}. One enemy fewer.",
                         "ENEMY_FALLEN");

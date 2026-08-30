@@ -37,7 +37,7 @@ namespace AIROG_NPCExpansion
             if (data.AllowEconomicActivity)
             {
                 int itemsBefore = npc.items?.Count ?? 0;
-                NPCEconomicAutonomy.EconomicActivity(npc, data, manager);
+                NPCEconomicAutonomy.EconomicActivity(npc, data);
                 int itemsAfter = npc.items?.Count ?? 0;
                 if (itemsAfter < itemsBefore)
                     _ = NPCReputationSystem.AddReputationFromAction(npc, data, "sold surplus goods to make a profit");
@@ -52,7 +52,7 @@ namespace AIROG_NPCExpansion
 
             // Pursue Narrative Goal
             if (!string.IsNullOrEmpty(data.CurrentGoal))
-                NPCGoalAutonomy.PursueGoal(npc, data, manager);
+                NPCGoalAutonomy.PursueGoal(npc, data);
 
             NPCGoalAutonomy.PerformAbility(npc, data, manager);
 

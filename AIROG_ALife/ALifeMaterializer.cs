@@ -19,6 +19,23 @@ namespace AIROG_ALife
     {
         private static readonly System.Random Rng = new System.Random();
 
+        /// <summary>
+        /// Minimum turns between two presence announcements for the same band on the same
+        /// ground. Matched to ALifeProvider's event window so a repeat can never land in
+        /// the same prompt as the first. ApplyLocationChange fires on every arrival —
+        /// including sub-location moves inside one settlement — so without this a band
+        /// the player walked past once re-announces itself for the rest of the run.
+        /// </summary>
+        private const int ANNOUNCE_COOLDOWN_TURNS = 25;
+
+        /// <summary>
+        /// Set for the duration of GameplayManager.LoadGame. Its own arrival call fires
+        /// synchronously, before our own postfix on LoadGame gets to load the save's real
+        /// state — so OnPlayerArrived must not run (or save) against whatever was in memory
+        /// beforehand. ALifePlugin replays the arrival once the real data is loaded.
+        /// </summary>
+        public static bool SuppressArrival;
+
         [HarmonyPatch(typeof(GameplayManager), "ApplyLocationChange")]
         public static class Patch_ApplyLocationChange
         {
@@ -38,6 +55,7 @@ namespace AIROG_ALife
 
         public static void OnPlayerArrived(GameplayManager manager, Place newPl)
         {
+            if (SuppressArrival) return;
             if (!ALifePlugin.CfgEnableSim.Value) return;
             if (manager == null || newPl == null) return;
 
@@ -51,8 +69,17 @@ namespace AIROG_ALife
                 if (prevTop != null)
                     ALifeEmbodiment.ReconcileDeparture(manager, prevTop);
                 ALifeData.State.LastPlayerTopUuid = top.uuid;
+                // A genuinely new visit: reset the bloodshed tally for every band on this
+                // ground. (This used to live in Materialize, which re-runs on every
+                // sub-location move — so killing two raiders and stepping indoors wiped
+                // the tally and earned the band's respect for a "bloodless" visit.)
+                foreach (var s in ALifeData.State.Squads)
+                    if (s.CurrentPlaceUuid == top.uuid)
+                        s.DeathsThisVisit = 0;
                 ALifeData.SaveToCurrentDir();
             }
+
+            ALifeKnowledge.DiscoverSite(top.uuid); // walking the ground reveals what happened on it
 
             if (!ALifePlugin.CfgMaterialize.Value) return;
 
@@ -62,11 +89,12 @@ namespace AIROG_ALife
             // The Wake: squads that fear the player refuse the meeting and bolt.
             foreach (var scared in squadsHere.ToList())
             {
-                if (scared.FearOfPlayer >= ALifeLegend.FEAR_FLEE)
-                {
-                    FleeFromPlayer(manager, scared, top);
+                // Only drop it from squadsHere if it actually got somewhere — a squad with
+                // no reachable neighbor (isolated top-level place) stays put and stays
+                // eligible for materialization instead of silently vanishing from every
+                // future visit.
+                if (scared.FearOfPlayer >= ALifeLegend.FEAR_FLEE && FleeFromPlayer(manager, scared, top))
                     squadsHere.Remove(scared);
-                }
             }
             if (squadsHere.Count == 0) return;
 
@@ -82,12 +110,27 @@ namespace AIROG_ALife
             switch (s.Archetype)
             {
                 case SquadArchetype.HUNTERS: return true;
-                // deterministic per-squad so repeated checks agree
-                case SquadArchetype.RAIDERS: return (Math.Abs((s.Id ?? "").GetHashCode()) % 10) < 6;
+                // deterministic per-squad so repeated checks agree, and stable across
+                // process restarts — string.GetHashCode() is randomized per-process in
+                // .NET, which would flip a persisted squad's hostility on the next launch
+                case SquadArchetype.RAIDERS: return (StableHash(s.Id ?? "") % 10) < 6;
                 case SquadArchetype.WARBAND:
                 case SquadArchetype.PATROL:
                     return ALifeWorldBridge.PlayerHasBountyFrom(s.FactionUuid);
                 default: return false;
+            }
+        }
+
+        /// <summary>Process-stable string hash (unlike string.GetHashCode(), which is
+        /// randomized per-process in .NET Framework 4.5+). Always non-negative, so callers
+        /// never need Math.Abs (which overflows on int.MinValue).</summary>
+        private static int StableHash(string s)
+        {
+            unchecked
+            {
+                int hash = 17;
+                foreach (char c in s) hash = hash * 31 + c;
+                return hash & 0x7FFFFFFF;
             }
         }
 
@@ -100,40 +143,23 @@ namespace AIROG_ALife
                 && s.Archetype != SquadArchetype.HUNTERS; // beasts don't parley
         }
 
-        private static void FleeFromPlayer(GameplayManager manager, VirtualSquad squad, Place fromTop)
+        /// <summary>Returns false (and leaves the squad in place) if there's nowhere to flee to.</summary>
+        private static bool FleeFromPlayer(GameplayManager manager, VirtualSquad squad, Place fromTop)
         {
             Place dest = ALifeGraph.Neighbors(fromTop.uuid)
                 .Where(p => p.uuid != fromTop.uuid)
                 .OrderBy(_ => Rng.Next()).FirstOrDefault();
-            if (dest == null) return;
+            if (dest == null) return false;
 
             string playerName = ALifeEmbodiment.SafePlayerName(manager);
-            if (squad.IsEmbodied)
-            {
-                // Player-visible place: use the FULL native relocation (UI refreshes included).
-                foreach (var ch in ALifeEmbodiment.LivingMembers(squad))
-                {
-                    try
-                    {
-                        InGameEntity ent = ch.ParentInGameEnt();
-                        if (ent == null) continue;
-                        ent.SetAsChildOfPl(dest);
-                        if (dest.IsGrdStyle())
-                            ent.PopulateGrdInfo(dest, null, Vector2Int.one);
-                        ch.parentPlace = dest;
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning("[ALife] Flee move failed for " + ch.GetPrettyName() + ": " + ex.Message);
-                    }
-                }
-            }
+            ALifeEmbodiment.RelocateVisibly(squad, dest); // player-visible ground: full native move
             squad.CurrentPlaceUuid = dest.uuid;
             squad.CurrentPlaceName = dest.GetPrettyName();
             squad.GoalType = SquadGoal.FLEE;
             squad.TargetPlaceUuid = null;
             squad.Activity = "fleeing from " + playerName;
             squad.AddChronicle($"Fled {fromTop.GetPrettyName()} rather than face {playerName}.");
+            ALifeKnowledge.Learn(squad, met: false); // you know who fled, and where to
             ALifeData.LogEvent(fromTop.uuid, fromTop.GetPrettyName(), "LEGEND",
                 $"{ALifeSimulation.Cap(squad.Name)} broke camp and fled toward {dest.GetPrettyName()} rather than face {playerName}.");
             try
@@ -142,10 +168,23 @@ namespace AIROG_ALife
                     $"Signs of a hasty departure: {squad.Name} fled this place at word of your coming."));
             }
             catch { /* log line is cosmetic */ }
+            return true;
         }
 
         public static void Materialize(GameplayManager manager, VirtualSquad squad, Place at)
         {
+            // An embodied band whose real members have all vanished WITHOUT dying — deleted
+            // by the player, culled with a pruned place, lost to a stale save — is not a band
+            // any more. Retire the record instead of resurrecting bodies the player got rid
+            // of, or announcing a standoff with nobody in it. (Deaths go through
+            // ALifeLegend.OnRealDeath, which decrements Size and wipes at zero.)
+            if (squad.IsEmbodied && ALifeEmbodiment.LivingMembers(squad).Count == 0)
+            {
+                ALifeLifecycle.WipeSquad(squad, "scattered, and never seen again");
+                ALifeData.SaveToCurrentDir();
+                return;
+            }
+
             bool hostile = IsHostileToPlayer(squad);
             bool wary = IsWaryOfPlayer(squad);
             int cap = Math.Min(squad.Size, hostile && !wary ? 4 : 3);
@@ -198,31 +237,57 @@ namespace AIROG_ALife
                 }
             }
 
-            string leaderNote = squad.Leader != null ? $", led by {squad.Leader.FullName}" : "";
-            string encounterDesc =
-                wary ? $"{ALifeSimulation.Cap(squad.Name)} ({squad.Size} strong{leaderNote}) is here — hostile, but they know your name and hold back, wary."
-                : hostile ? $"{ALifeSimulation.Cap(squad.Name)} ({squad.Size} strong{leaderNote}, {squad.Activity}) is here — and hostile."
-                : $"{ALifeSimulation.Cap(squad.Name)} ({squad.Size} strong{leaderNote}, {squad.Activity}) is passing through.";
-            ALifeData.LogEvent(at.GetTopLvlPlace().uuid, at.GetTopLvlPlace().GetPrettyName(), "ENCOUNTER", encounterDesc);
+            // Announce the band ONCE per meeting, and only when there is something real
+            // to see. Re-entering the ground they're already standing on is not news, and
+            // announcing a band that failed to spawn (or whose members the player has
+            // since removed) puts a threat in the prompt that isn't in the room.
+            Place topAt = at.GetTopLvlPlace();
+            bool anyoneReal = spawnedNames.Count > 0 || alreadyHere > 0;
+            bool newGround = !squad.MetPlayer || squad.LastAnnouncedPlaceUuid != topAt?.uuid;
+            bool cooledDown = ALifeData.State.CurrentTurn - squad.LastAnnouncedTurn >= ANNOUNCE_COOLDOWN_TURNS;
 
-            try
+            if (topAt != null && anyoneReal && (newGround || cooledDown))
             {
-                manager.gameLogView.LogText(GameLogView.AiDecision(encounterDesc));
+                string leaderNote = squad.Leader != null ? $", led by {squad.Leader.FullName}" : "";
+                string encounterDesc =
+                    wary ? $"{ALifeSimulation.Cap(squad.Name)} ({squad.Size} strong{leaderNote}) is here — hostile, but they know your name and hold back, wary."
+                    : hostile ? $"{ALifeSimulation.Cap(squad.Name)} ({squad.Size} strong{leaderNote}, {squad.Activity}) is here — and hostile."
+                    : $"{ALifeSimulation.Cap(squad.Name)} ({squad.Size} strong{leaderNote}, {squad.Activity}) is passing through.";
+                ALifeData.LogEvent(topAt.uuid, topAt.GetPrettyName(), "ENCOUNTER", encounterDesc);
+                squad.LastAnnouncedTurn = ALifeData.State.CurrentTurn;
+                squad.LastAnnouncedPlaceUuid = topAt.uuid;
+
+                try
+                {
+                    manager.gameLogView.LogText(GameLogView.AiDecision(encounterDesc));
+                }
+                catch { /* log line is cosmetic */ }
             }
-            catch { /* log line is cosmetic */ }
 
-            squad.MetPlayer = true;
-            squad.DeathsThisVisit = 0;
-
-            if (ALifePlugin.CfgPersistentSquads.Value)
+            // A squad that spawned nobody (every SpawnMember attempt threw — e.g. a
+            // transient faction/entity lookup failure) is left virtual instead of marked
+            // embodied: flipping IsEmbodied with an empty MemberUuids list would trip the
+            // "no living members left" guard at the top of this method on the very next
+            // visit and wipe a squad that never actually got its chance to appear.
+            if (anyoneReal)
             {
-                // v2.0: the squad record lives on; reconciliation on departure.
-                squad.IsEmbodied = true;
+                squad.MetPlayer = true;
+                ALifeKnowledge.Learn(squad, met: true);
+
+                if (ALifePlugin.CfgPersistentSquads.Value)
+                {
+                    // v2.0: the squad record lives on; reconciliation on departure.
+                    squad.IsEmbodied = true;
+                }
+                else
+                {
+                    // v1.0 fallback: one-way handoff, the game owns the characters from here.
+                    ALifeData.State.Squads.Remove(squad);
+                }
             }
             else
             {
-                // v1.0 fallback: one-way handoff, the game owns the characters from here.
-                ALifeData.State.Squads.Remove(squad);
+                Debug.LogWarning($"[ALife] Materialize for '{squad.Name}' spawned nobody — leaving it virtual for a later retry.");
             }
             ALifeData.SaveToCurrentDir();
             Debug.Log($"[ALife] Materialized {squad.Id} '{squad.Name}' (+{spawnedNames.Count} chars, {alreadyHere} already real) at {at.GetPrettyName()} (hostile={hostile}, wary={wary}).");

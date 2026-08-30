@@ -262,11 +262,18 @@ namespace AIROG_WorldExpansion
 
             // ── Notable Diplomatic Relations (non-neutral, non-war) ───────────────
             var notableRels = new List<DiplomaticRelation>();
-            foreach (var rel in state.DiplomaticRelations.Values)
+            foreach (var kv in state.DiplomaticRelations)
             {
+                var rel = kv.Value;
                 var t = (DiplomaticTier)rel.Tier;
                 if (t == DiplomaticTier.Neutral || t == DiplomaticTier.War) continue;
                 if (string.IsNullOrEmpty(rel.FactionAName) || string.IsNullOrEmpty(rel.FactionBName)) continue;
+                // Pair key is "uuidA_uuidB" (GetRelationshipKey) — skip relations where
+                // either side has fallen, so a dead faction doesn't linger as e.g.
+                // "Iron Pact ↔ FallenGuild [Alliance]" until natural drift decays it out
+                var uuids = kv.Key.Split('_');
+                if (uuids.Length == 2 && (state.EliminatedFactions.Contains(uuids[0]) || state.EliminatedFactions.Contains(uuids[1])))
+                    continue;
                 notableRels.Add(rel);
             }
             // Sort: most recently changed first, cap at 6
@@ -288,9 +295,9 @@ namespace AIROG_WorldExpansion
             }
 
             // ── Faction Leaderboard ───────────────────────────────────────────────
-            var factionList = state.Factions.Values
-                .Where(f => !string.IsNullOrEmpty(f.Name))
-                .OrderByDescending(f => f.Resources)
+            var factionList = state.Factions
+                .Where(kv => !string.IsNullOrEmpty(kv.Value.Name))
+                .OrderByDescending(kv => kv.Value.Resources)
                 .Take(6)
                 .ToList();
 
@@ -299,11 +306,11 @@ namespace AIROG_WorldExpansion
                 var nativeFactions = SS.I?.hackyManager?.GetCurrentFactions();
                 CreateTextEntry("<b>Faction Power Rankings</b>", 26, new Color(0.8f, 0.8f, 1f));
                 int rank = 1;
-                foreach (var f in factionList)
+                foreach (var kv in factionList)
                 {
-                    // Check if eliminated
-                    string uuid = state.Factions.FirstOrDefault(kv => kv.Value == f).Key;
-                    bool eliminated = !string.IsNullOrEmpty(uuid) && state.EliminatedFactions.Contains(uuid);
+                    string uuid = kv.Key;
+                    var f = kv.Value;
+                    bool eliminated = state.EliminatedFactions.Contains(uuid);
                     string nameStr = eliminated ? $"<s>{f.Name}</s> [FALLEN]" : f.Name;
                     string tag     = f.Tag != "Neutral" ? $" [{f.Tag}]" : "";
                     string regions = f.ClaimedPlaceUuids.Count > 0 ? $" | {f.ClaimedPlaceUuids.Count}r" : "";

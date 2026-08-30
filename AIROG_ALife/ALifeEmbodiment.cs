@@ -89,6 +89,32 @@ namespace AIROG_ALife
             }
         }
 
+        /// <summary>
+        /// Move a squad's real members off ground the player can SEE: the full native
+        /// relocation, UI refreshes included. MoveEmbodied is the silent counterpart for
+        /// places the player isn't standing in — use this one inside the online bubble.
+        /// </summary>
+        public static void RelocateVisibly(VirtualSquad squad, Place dest)
+        {
+            if (!squad.IsEmbodied || dest == null) return;
+            foreach (var ch in LivingMembers(squad))
+            {
+                try
+                {
+                    InGameEntity ent = ch.ParentInGameEnt();
+                    if (ent == null) continue;
+                    ent.SetAsChildOfPl(dest);
+                    if (dest.IsGrdStyle())
+                        ent.PopulateGrdInfo(dest, null, Vector2Int.one);
+                    ch.parentPlace = dest;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[ALife] Visible relocation failed for " + ch.GetPrettyName() + ": " + ex.Message);
+                }
+            }
+        }
+
         // ── Offline casualties ───────────────────────────────────────────────────
 
         /// <summary>

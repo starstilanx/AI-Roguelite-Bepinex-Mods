@@ -2,6 +2,23 @@
 
 ---
 
+## v4.4.0
+
+- Secrets an NPC confided in you were never passed to the storyteller. You could earn a character's deepest trust, listen to them admit something terrible, and have the story carry on as though the conversation had never happened. Secrets you have earned now shape how the AI writes that character. Secrets you have *not* earned stay sealed, so nothing can slip out that you were never told.
+- Relationship milestones were recorded but never used. The AI knew a character's affinity number and nothing about how it got there. It now sees the turning points, when you became allies, what you did to earn it, so a hard-won friendship reads differently from a number that merely happens to be high.
+- Quests were entirely invisible to the storyteller. Every quest you accepted was missing from the AI's view, so the very NPC who sent you after something would speak to you as though they had never mentioned it. Active quests are now part of the conversation.
+- Named characters standing nearby were ignored while exploring. Personalities were only handed to the AI during a direct conversation, so if the story mentioned someone else in the room it wrote them as a stranger. Nearby characters the story names (hostile ones included) are now described in character.
+- The living world was invisible until the game happened to save. Barks, spreading rumors, gossip, NPC memories and refreshed goals only reached the AI when a save file was written. On any autosave setting other than *every turn*, hours of simulated NPC life could pass without the storyteller ever being told. Everything the simulation produces now reaches the AI at the end of the turn it happens in.
+- Techniques taught to you by NPCs were skipping the context manager. They were forced into the prompt through a side channel, which meant they ignored the shared context budget and could not be switched off alongside the rest of the mod's context. They now travel the same route as everything else.
+- One talkative NPC could crowd out every other mod. NPC details are the first thing added to the prompt, and AI-written personalities and backstories routinely run to several hundred words, so a single verbose character could swallow the entire context allowance and leave nothing for world state, history, settlements or anything else. Long entries are now trimmed, and the block as a whole keeps to its share.
+- The dead were written as though they were still going about their day. Examining a fallen character handed the AI their current goals, plans and outstanding quests. They now get their death and their epitaph instead.
+- Quest data was being re-read from disk on every single AI request. It is now read on the same schedule as everything else.
+- Loading a different save mid-session left the previous run's characters lingering in memory until a refresh timer happened to expire.
+- A character who had only just appeared could cause the entire NPC description to be dropped from the prompt.
+- World news picked up as rumor was being cut off mid-word. Headlines are now trimmed at a word boundary so they still read as sentences.
+
+---
+
 ## v4.3.0 — *Word on the Street*
 
 > *"Did you hear? The Iron Pact marches again."*

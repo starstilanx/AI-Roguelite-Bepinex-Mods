@@ -178,7 +178,9 @@ namespace AIROG_SkillWeb
                 }
             }
 
-            if (nodesAddedOrModified)
+            // Re-lay-out when nodes changed, or once when an older save still carries coordinates
+            // from a previous (overlapping) packing revision.
+            if (nodesAddedOrModified || Data.layoutVersion != WebLayout.LayoutVersion)
             {
                 WebGrower.RepositionAndRewire(Data);
             }

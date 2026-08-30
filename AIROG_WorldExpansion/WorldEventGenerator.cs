@@ -80,12 +80,11 @@ namespace AIROG_WorldExpansion
                     ? string.Join(", ", state.ActiveWars.Values.Select(w => $"{w.ActorName} vs {w.TargetName}"))
                     : "none";
 
-                var topFactions = state.Factions.Values
-                    .Where(f => !string.IsNullOrEmpty(f.Name) && !state.EliminatedFactions.Contains(
-                        state.Factions.FirstOrDefault(kv => kv.Value == f).Key))
-                    .OrderByDescending(f => f.Resources)
+                var topFactions = state.Factions
+                    .Where(kv => !string.IsNullOrEmpty(kv.Value.Name) && !state.EliminatedFactions.Contains(kv.Key))
+                    .OrderByDescending(kv => kv.Value.Resources)
                     .Take(3)
-                    .Select(f => $"{f.Name} [{f.Tag}]");
+                    .Select(kv => $"{kv.Value.Name} [{kv.Value.Tag}]");
                 string factionsSummary = topFactions.Any() ? string.Join(", ", topFactions) : "unknown factions";
 
                 string prompt =
@@ -107,7 +106,7 @@ namespace AIROG_WorldExpansion
                     forceEventCheckModel: true);
 
                 if (!string.IsNullOrWhiteSpace(raw))
-                    return TrimToTwoSentences(raw.Trim());
+                    return TrimToThreeSentences(raw.Trim());
             }
             catch (Exception ex)
             {
@@ -134,7 +133,8 @@ namespace AIROG_WorldExpansion
             return pool[WorldSimUtils.Rng.Next(pool.Count)];
         }
 
-        private static string TrimToTwoSentences(string text)
+        // Caps output at 3 sentences, matching the prompt's "2-3 sentences" ask.
+        private static string TrimToThreeSentences(string text)
         {
             var terminators = new char[] { '.', '!', '?' };
             int end = -1, count = 0;

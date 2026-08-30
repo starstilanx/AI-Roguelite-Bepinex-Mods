@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_SkillWeb</AssemblyName>
     <Description>Mechanical attribute-bonus layer that bridges onto the game's native perk tree.</Description>
-    <Version>4.1.1</Version>
+    <Version>4.1.4</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>

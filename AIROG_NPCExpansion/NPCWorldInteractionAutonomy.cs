@@ -85,7 +85,7 @@ namespace AIROG_NPCExpansion
                 {
                     // Sort by power and pick best
                     var winner = candidates
-                        .OrderByDescending(c => NPCEquipmentAutonomy.CalculateItemPower(npc, c.item, manager))
+                        .OrderByDescending(c => NPCEquipmentAutonomy.CalculateItemPower(npc, data, c.item, manager))
                         .First();
 
                     GameItem itemToPick = winner.item;
@@ -163,10 +163,13 @@ namespace AIROG_NPCExpansion
         {
             // Simple flavor thoughts based on traits
             string msg = "looks around.";
-            if (data.InteractionTraits.Any(t => t.ToLower().Contains("paranoid"))) msg = "glances nervously over their shoulder.";
-            else if (data.InteractionTraits.Any(t => t.ToLower().Contains("curious"))) msg = "inspects their surroundings closely.";
-            else if (data.InteractionTraits.Any(t => t.ToLower().Contains("lazy"))) msg = "yawns.";
-            else if (data.InteractionTraits.Any(t => t.ToLower().Contains("aggressive"))) msg = "clenches their fist.";
+            if (data.InteractionTraits != null)
+            {
+                if (data.InteractionTraits.Any(t => t.ToLower().Contains("paranoid"))) msg = "glances nervously over their shoulder.";
+                else if (data.InteractionTraits.Any(t => t.ToLower().Contains("curious"))) msg = "inspects their surroundings closely.";
+                else if (data.InteractionTraits.Any(t => t.ToLower().Contains("lazy"))) msg = "yawns.";
+                else if (data.InteractionTraits.Any(t => t.ToLower().Contains("aggressive"))) msg = "clenches their fist.";
+            }
 
             string logMsg = $"{npc.GetPrettyName()} {msg}";
             _ = manager.gameLogView.LogTextCompat(GameLogView.AiDecision(logMsg));

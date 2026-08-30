@@ -64,7 +64,9 @@ namespace AIROG_Insight
                 InsightData.Instance.Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
         }
 
-        public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+        // WriteSaveFile's first arg is MmCtxGetter (both GameplayManager and MainMenu implement it)
+        // as of the 07/28 build; take no injected params so Harmony emits no castclass.
+        public static void Postfix_WriteSaveFile()
         {
             SaveNow();
         }

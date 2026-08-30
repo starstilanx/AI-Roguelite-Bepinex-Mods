@@ -44,12 +44,7 @@ namespace AIROG_NPCExpansion
 
         private void Show(GameplayManager manager)
         {
-            _manager = manager ?? SS.I?.hackyManager;
-            if (_manager == null || _manager.canvasTransform == null)
-            {
-                Debug.LogWarning("[AIROG_NPCExpansion] Cannot open QuestUI: no valid GameplayManager/canvas available.");
-                return;
-            }
+            if (!NPCUI.TryResolveManager(manager, "QuestUI", out _manager)) return;
 
             // Rebuild UI if stale (e.g. scene reload destroyed scroll content but not the window)
             if (_window == null || _scrollContent == null)

@@ -13,11 +13,13 @@ namespace AIROG_Settlement
     // plugin's internals — only the Harmony patch classes at the bottom of the original file
     // touched SettlementPlugin.Instance/.Log, and those got their own files too). See
     // SettlementPlugin.Simulation.cs (per-turn tick), SettlementPlugin.Lifecycle.cs
-    // (establish/toggle/overview/image gen), SettlementPlugin.Persistence.cs (save/load),
-    // SettlementPlugin.Buildings.cs (build/upgrade), SettlementPlugin.Tabs.cs (tab UI),
+    // (establish/toggle/overview/image gen/event popup show-hide), SettlementPlugin.Persistence.cs
+    // (save/load), SettlementPlugin.Buildings.cs (build/upgrade/research), SettlementPlugin.Tabs.cs
+    // (tab UI), SettlementPlugin.Events.cs (event catalog + per-turn trigger roll),
     // SettlementHarmonyPatches.cs / SettlementMainUIPatch.cs / SettlementMapButtonsPatch.cs
-    // (the previously-bundled standalone Harmony patch classes).
-    [BepInPlugin("com.airog.settlement", "Settlement Mod", "1.1.1")]
+    // (the previously-bundled standalone Harmony patch classes). SettlementResearch.cs holds
+    // the (non-partial) research catalog, mirroring BuildingCatalog in SettlementData.cs.
+    [BepInPlugin("com.airog.settlement", "Settlement Mod", "1.2.0")]
     public partial class SettlementPlugin : BaseUnityPlugin
     {
         public static SettlementPlugin Instance;
@@ -39,11 +41,18 @@ namespace AIROG_Settlement
 
         // Persistent UI refs (live on modal, always visible regardless of active tab)
         public TextMeshProUGUI OverviewNameText;
-        public TextMeshProUGUI GoldText, WoodText, StoneText, PopulationText;
+        public TextMeshProUGUI GoldText, WoodText, StoneText, PopulationText, KnowledgeText;
         public RawImage SettlementImageDisplay;
 
         public GameObject CenterWorkspaceObj;
         public List<GameObject> TabContentObjects = new List<GameObject>();
+
+        // Event popup (built alongside the Settlement modal; independent of whether the
+        // modal itself is open, but only ever shown while the player is at the settlement's
+        // own location — see IsPlayerAtSettlement() and the check in Update())
+        public GameObject EventPopupObj;
+        public TextMeshProUGUI EventPopupTitleText;
+        public TextMeshProUGUI EventPopupFlavorText;
 
         private bool _needsUiUpdate = false;
 
@@ -76,6 +85,13 @@ namespace AIROG_Settlement
                 _needsUiUpdate = false;
                 UpdateOverviewUI();
             }
+
+            // A queued event only surfaces once the player is actually standing at the
+            // settlement — not the moment it rolls, wherever the player happens to be in the
+            // story. Polling here catches both "event rolled while already there" (shows next
+            // frame) and "player travels to a settlement with an event already waiting".
+            if (PendingEvent != null && EventPopupObj != null && !EventPopupObj.activeSelf && IsPlayerAtSettlement())
+                ShowEventPopup(PendingEvent);
         }
 
         public void ScheduleUiUpdate() { _needsUiUpdate = true; }

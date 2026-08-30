@@ -63,6 +63,16 @@ namespace AIROG_ALife
         {
             if (squad.Size <= 0) return;
             SquadLeader old = squad.Leader;
+
+            // A faction-court lieutenant fell (or left) leading this band — the court mourns.
+            if (squad.CourtFigureName != null)
+            {
+                if (leaderDead)
+                    ALifeWorldBridge.MarkFieldFigureDead(squad.FactionUuid, squad.CourtFigureName,
+                        $"was slain leading {squad.Name}");
+                squad.CourtFigureName = null;
+                squad.CourtFigureTitle = null;
+            }
             SquadLeader heir = ALifeNames.MakeLeader(squad);
             if (leaderDead && (killerSquad != null || squad.DeathsThisVisit > 0))
                 heir.Epithet = "the Avenger";
@@ -155,6 +165,9 @@ namespace AIROG_ALife
         {
             if (!ALifeData.State.Squads.Contains(squad)) return; // idempotent
             ALifeData.State.Squads.Remove(squad);
+            if (squad.CourtFigureName != null)
+                ALifeWorldBridge.MarkFieldFigureDead(squad.FactionUuid, squad.CourtFigureName,
+                    $"fell as {squad.Name} was destroyed");
             ALifeData.LogEvent(squad.CurrentPlaceUuid, squad.CurrentPlaceName, "WIPE",
                 $"{ALifeSimulation.Cap(squad.Name)} is no more — {how}.");
             // Settle every feud pointed at the fallen band.
@@ -195,6 +208,14 @@ namespace AIROG_ALife
                 // Defection: broken faction squads go renegade.
                 if (squad.FactionUuid != null && squad.Morale < 25 && Rng.NextDouble() < 0.15)
                 {
+                    // A court lieutenant won't turn renegade — they slip back to the court
+                    // and a nobody takes over the deserters.
+                    if (squad.CourtFigureName != null)
+                    {
+                        squad.CourtFigureName = null;
+                        squad.CourtFigureTitle = null;
+                        squad.Leader = ALifeNames.MakeLeader(squad);
+                    }
                     string oldName = squad.Name;
                     squad.Archetype = SquadArchetype.RAIDERS;
                     squad.FactionUuid = null;

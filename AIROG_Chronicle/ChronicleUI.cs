@@ -165,7 +165,11 @@ namespace AIROG_Chronicle
             if (_panelObj == null) return;
             _isOpen = !_isOpen;
             _panelObj.SetActive(_isOpen);
-            if (_isOpen) RefreshUI();
+            if (_isOpen)
+            {
+                ChronicleManager.ConsumeUiDirty();
+                RefreshUI();
+            }
         }
 
         public static void RefreshUI()

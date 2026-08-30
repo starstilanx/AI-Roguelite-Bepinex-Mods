@@ -79,6 +79,8 @@ namespace AIROG_SkillWeb
     {
         public int schemaVersion = 4;
         public long layoutSeed;
+        /// <summary>Which WebLayout packing revision produced the stored coordinates (0 = pre-packing saves).</summary>
+        public int layoutVersion;
         public List<WebNode> nodes = new List<WebNode>();
         public List<WebSector> sectors = new List<WebSector>();
         public int resonance;

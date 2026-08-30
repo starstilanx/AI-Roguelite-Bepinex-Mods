@@ -126,6 +126,8 @@ namespace AIROG_NPCExpansion
                 $"<color=#c890ff>[SECRET] {npc.GetPrettyName()} {reason}:\n" +
                 $"[{secret.Category}] {secret.Text}</color>");
 
+            // RecordMilestone() below saves and flushes to disk immediately, which also
+            // covers the reveal above (same NPCData instance) — no need for a second flush here.
             RelationshipArcSystem.RecordMilestone(npc.uuid, data,
                 $"Learned {npc.GetPrettyName()}'s secret [{secret.Category}]");
 
@@ -136,14 +138,8 @@ namespace AIROG_NPCExpansion
             Debug.Log($"[SecretSystem] Revealed secret for {npc.GetPrettyName()}: {secret.Text}");
         }
 
-        // ─── Prompt injection (revealed secrets visible to AI) ────────────────────
-
-        public static string BuildRevealedContext(NPCData data)
-        {
-            if (data.Secrets == null) return "";
-            var revealed = data.Secrets.Where(s => s.IsRevealed).ToList();
-            if (revealed.Count == 0) return "";
-            return "Known secrets: " + string.Join("; ", revealed.Select(s => $"[{s.Category}] {s.Text}"));
-        }
+        // Prompt injection for revealed secrets lives in AIROG_GenContext's NPCProvider,
+        // which reads NPCData.Secrets straight out of npcexpansion_lore.json. Only revealed
+        // secrets are injected, so the AI can never leak one the player has not earned.
     }
 }

@@ -117,6 +117,8 @@ namespace AIROG_Settlement
                 826, 218, 164, 42, GoldIcon: SettlementPlugin.Instance.StoneIcon);
             SettlementPlugin.Instance.PopulationText = CreateSidebarText(modalObj.transform, "SidebarPop",
                 826, 263, 164, 42);
+            SettlementPlugin.Instance.KnowledgeText = CreateSidebarText(modalObj.transform, "SidebarKnowledge",
+                826, 308, 164, 42);
 
             // ---- Tab Content objects ----
             SettlementPlugin.Instance.TabContentObjects.Clear();
@@ -153,7 +155,63 @@ namespace AIROG_Settlement
 
             modalObj.SetActive(false);
             SettlementPlugin.Instance.SettlementModalObj = modalObj;
+
+            CreateEventPopup(layout);
+
             SettlementPlugin.Instance.UpdateOverviewUI();
+        }
+
+        // -----------------------------------------------------------------------
+        // Event popup: a small backdrop + panel built once, independent of the Settlement
+        // modal (it can be shown whether or not the Settlement UI is open). It's only ever
+        // actually shown once the player is standing at the settlement's location though —
+        // see SettlementPlugin.Update()/IsPlayerAtSettlement() — so it never interrupts the
+        // player somewhere else in the story. Choice buttons are (re)built per event by
+        // SettlementPlugin.ShowEventPopup.
+        // -----------------------------------------------------------------------
+        private static void CreateEventPopup(MainLayouts layout)
+        {
+            if (layout.mainHolder.Find("SettlementEventPopup") != null)
+            {
+                SettlementPlugin.Instance.EventPopupObj = layout.mainHolder.Find("SettlementEventPopup").gameObject;
+                return;
+            }
+
+            GameObject popupObj = new GameObject("SettlementEventPopup", typeof(RectTransform));
+            popupObj.transform.SetParent(layout.mainHolder, false);
+            SettlementUIHelper.SetRect(popupObj.GetComponent<RectTransform>(), 0, 0, 1024, 559);
+
+            // Backdrop — blocks clicks to whatever is behind it (default Image raycastTarget)
+            // and forces a choice; no button/close, deliberately.
+            SettlementUIHelper.CreateUIElement("Backdrop", popupObj.transform,
+                0, 0, 1024, 559, null, new Color(0, 0, 0, 0.6f));
+
+            SettlementUIHelper.CreateUIElement("Panel", popupObj.transform,
+                262, 150, 500, 270, null, new Color(0.06f, 0.06f, 0.10f, 0.97f));
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform), typeof(TextMeshProUGUI));
+            titleObj.transform.SetParent(popupObj.transform, false);
+            var titleTxt = titleObj.GetComponent<TextMeshProUGUI>();
+            titleTxt.fontSize = 20;
+            titleTxt.fontStyle = FontStyles.Bold;
+            titleTxt.alignment = TextAlignmentOptions.Center;
+            titleTxt.color = new Color(0.95f, 0.85f, 0.5f);
+            titleTxt.outlineWidth = 0.15f;
+            titleTxt.outlineColor = Color.black;
+            SettlementUIHelper.SetRect(titleObj.GetComponent<RectTransform>(), 262, 164, 500, 28);
+            SettlementPlugin.Instance.EventPopupTitleText = titleTxt;
+
+            GameObject flavorObj = new GameObject("Flavor", typeof(RectTransform), typeof(TextMeshProUGUI));
+            flavorObj.transform.SetParent(popupObj.transform, false);
+            var flavorTxt = flavorObj.GetComponent<TextMeshProUGUI>();
+            flavorTxt.fontSize = 13;
+            flavorTxt.alignment = TextAlignmentOptions.Center;
+            flavorTxt.color = new Color(0.82f, 0.82f, 0.82f);
+            SettlementUIHelper.SetRect(flavorObj.GetComponent<RectTransform>(), 284, 196, 456, 68);
+            SettlementPlugin.Instance.EventPopupFlavorText = flavorTxt;
+
+            popupObj.SetActive(false);
+            SettlementPlugin.Instance.EventPopupObj = popupObj;
         }
 
         // -----------------------------------------------------------------------

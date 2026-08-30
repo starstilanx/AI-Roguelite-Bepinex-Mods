@@ -76,12 +76,20 @@ namespace AIROG_SkillWeb
         // ── State ───────────────────────────────────────────────────────────────
         private WebNode   _selectedNode;
         private float     _zoomLevel   = 1f;
-        private const float MIN_ZOOM   = 0.25f;
-        private const float MAX_ZOOM   = 4f;
+        private const float MIN_ZOOM   = 0.15f;
+        // Floor for FrameWeb's fit-to-viewport zoom only. A large, many-ring constellation can
+        // need to zoom out further than the manual scroll floor to actually fit — clamping the
+        // fit itself to MIN_ZOOM would silently crop outer rings while still reporting "Web Framed".
+        private const float MIN_FIT_ZOOM = 0.02f;
+        private const float MAX_ZOOM = 4f;
         private Vector2   _lastMousePos;
         private float     _dragDistance;
         private const float DRAG_THRESHOLD = 8f;
         private string    _searchQuery = "";
+        // Tracks which SkillWebData was last successfully auto-framed, so a different save/web
+        // loaded into this persisting singleton gets framed again instead of inheriting a stale
+        // pan/zoom left over from whatever was framed before it.
+        private SkillWebData _framedData;
 
         // UI Widget Mapping (for performant culling & animation)
         private readonly Dictionary<string, GameObject> _nodeWidgets = new Dictionary<string, GameObject>();
@@ -112,6 +120,15 @@ namespace AIROG_SkillWeb
             _window.SetActive(true);
             if (_tooltipCanvas != null) _tooltipCanvas.gameObject.SetActive(true);
             Refresh();
+
+            // Open on a view that shows the whole web; afterwards respect whatever the player panned to.
+            // Re-frame whenever this is a different save's web than the one we last framed — FrameWeb
+            // itself only marks _framedData on a real fit, so a bail-out (viewport not sized yet, or an
+            // empty web) leaves this unset and gets another chance next time Show() runs.
+            if (!ReferenceEquals(_data, _framedData))
+            {
+                FrameWeb();
+            }
         }
 
         public void Close()
@@ -502,11 +519,46 @@ namespace AIROG_SkillWeb
 
         void FrameWeb()
         {
-            _contentRoot.anchoredPosition = Vector2.zero;
-            _zoomLevel = 1.0f;
-            _contentRoot.localScale = Vector3.one;
+            // Fit the whole constellation in the viewport rather than snapping back to 1:1 —
+            // a grown web is several thousand units across and 1:1 only shows the core.
+            Canvas.ForceUpdateCanvases();
+
+            float vw = _viewportRect != null ? _viewportRect.rect.width  : 0f;
+            float vh = _viewportRect != null ? _viewportRect.rect.height : 0f;
+
+            if (_data == null || _data.nodes.Count == 0 || vw < 10f || vh < 10f)
+            {
+                _contentRoot.anchoredPosition = Vector2.zero;
+                _zoomLevel = 1.0f;
+                _contentRoot.localScale = Vector3.one;
+                UpdateCulling();
+                SetStatus("Web Centered");
+                return; // not a real fit — leave _framedData unset so this gets retried next time
+            }
+
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            foreach (var node in _data.nodes)
+            {
+                float half = WebLayout.NodeDiameter(node) * 0.5f + 30f; // + label band
+                minX = Mathf.Min(minX, node.x - half); maxX = Mathf.Max(maxX, node.x + half);
+                minY = Mathf.Min(minY, node.y - half); maxY = Mathf.Max(maxY, node.y + half);
+            }
+
+            float w = Mathf.Max(1f, maxX - minX);
+            float h = Mathf.Max(1f, maxY - minY);
+
+            _zoomLevel = Mathf.Clamp(Mathf.Min(vw / w, vh / h), MIN_FIT_ZOOM, 1f);
+            _contentRoot.localScale = new Vector3(_zoomLevel, _zoomLevel, 1f);
+
+            var center = new Vector2((minX + maxX) * 0.5f, (minY + maxY) * 0.5f);
+            _contentRoot.anchoredPosition = -center * _zoomLevel;
+
             UpdateCulling();
-            SetStatus("Web Centered");
+            _lastAnchoredPos = _contentRoot.anchoredPosition;
+            _lastZoomLevel   = _zoomLevel;
+            _framedData = _data;
+            SetStatus("Web Framed");
         }
 
         // ── Spatial Culling Logic ────────────────────────────────────────────────
@@ -726,6 +778,11 @@ namespace AIROG_SkillWeb
                     elapsed += Time.deltaTime;
                     float t = elapsed / duration;
 
+                    // A Refresh() mid-animation (e.g. an icon gen completing) destroys and rebuilds
+                    // every node widget, leaving these references pointing at destroyed GameObjects.
+                    // Touching them then throws NullReferenceException — bail out cleanly instead.
+                    if (widget == null || flashImg == null) yield break;
+
                     // Scale node outward and fade the flash glow overlay
                     float scaleVal = 1f + Mathf.Sin(t * Mathf.PI) * 0.25f;
                     widget.transform.localScale = originalScale * scaleVal;
@@ -738,9 +795,9 @@ namespace AIROG_SkillWeb
                     yield return null;
                 }
 
-                widget.transform.localScale = originalScale;
+                if (widget != null) widget.transform.localScale = originalScale;
                 if (frame != null) frame.color = originalColor;
-                Destroy(flashObj);
+                if (flashObj != null) Destroy(flashObj);
             }
         }
 
@@ -829,9 +886,8 @@ namespace AIROG_SkillWeb
             var rect = obj.GetComponent<RectTransform>();
             rect.anchoredPosition = node.Position;
 
-            float nodeSize = node.type == WebNodeType.Keystone ? 130f :
-                             node.type == WebNodeType.Notable  ? 100f : 
-                             node.type == WebNodeType.Anchor   ? 110f : 80f;
+            // Must stay in sync with WebLayout.NodeDiameter — the packer reserves arc from these.
+            float nodeSize = WebLayout.NodeDiameter(node);
 
             float halfSize = nodeSize * 0.5f;
             rect.sizeDelta = new Vector2(nodeSize, nodeSize);
@@ -993,9 +1049,13 @@ namespace AIROG_SkillWeb
             var lbl = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
             lbl.transform.SetParent(obj.transform, false);
             lbl.GetComponent<RectTransform>().anchoredPosition = new Vector2(0, -(halfSize + 14f));
-            lbl.GetComponent<RectTransform>().sizeDelta        = new Vector2(nodeSize + 40f, 26);
+            // Stay inside the arc the packer reserved for this node (diameter + WebLayout.NodePad),
+            // otherwise long names bleed over the neighbouring star.
+            lbl.GetComponent<RectTransform>().sizeDelta        = new Vector2(nodeSize + WebLayout.NodePad * 0.75f, 26);
             var lText = lbl.GetComponent<TextMeshProUGUI>();
-            lText.alignment = TextAlignmentOptions.Center;
+            lText.alignment           = TextAlignmentOptions.Center;
+            lText.enableWordWrapping  = false;
+            lText.overflowMode        = TextOverflowModes.Ellipsis;
             lText.color     = (node.unlocked || node.ring == 0) ? new Color(1, 1, 1, alpha) : new Color(0.6f, 0.6f, 0.6f, alpha);
 
             // LOD: Hide basic node labels when zoomed out below 40%

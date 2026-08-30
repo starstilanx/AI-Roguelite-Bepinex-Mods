@@ -156,7 +156,19 @@ namespace AIROG_GenContext.ContextProviders
             // ── Diplomacy (non-neutral, non-war pacts and rivalries) ──────────────
             if (_cache.DiplomaticRelations != null && _cache.DiplomaticRelations.Count > 0)
             {
-                var pacts = _cache.DiplomaticRelations.Values
+                var eliminatedForDiplomacy = _cache.EliminatedFactions ?? new List<string>();
+                var pacts = _cache.DiplomaticRelations
+                    // Pair key is "uuidA_uuidB" (WorldData.GetRelationshipKey) — skip relations
+                    // where either side has fallen, so the AI doesn't treat a dead faction's
+                    // stale Alliance/Hostile tier as still real (drift back to Neutral otherwise
+                    // takes ~90 turns)
+                    .Where(kv =>
+                    {
+                        var parts = kv.Key.Split('_');
+                        return parts.Length != 2
+                            || (!eliminatedForDiplomacy.Contains(parts[0]) && !eliminatedForDiplomacy.Contains(parts[1]));
+                    })
+                    .Select(kv => kv.Value)
                     .Where(r => r.Tier != 0 && r.Tier != -3
                              && !string.IsNullOrEmpty(r.FactionAName) && !string.IsNullOrEmpty(r.FactionBName))
                     .OrderByDescending(r => r.TierChangedTurn)

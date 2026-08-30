@@ -40,7 +40,7 @@ namespace AIROG_ALife
                         ? "trade caravan out of " + homePlaceName
                         : factionName + " caravan";
                 case SquadArchetype.RAIDERS:
-                    return "the " + char.ToUpper(homePlaceName[0]) + homePlaceName.Substring(1) + " " + Pick(RaiderBandNouns);
+                    return "the " + ALifeSimulation.Cap(homePlaceName) + " " + Pick(RaiderBandNouns);
                 case SquadArchetype.HUNTERS:
                     return "the " + Pick(HunterPackAdjectives) + " " + Pick(HunterPackNouns);
                 case SquadArchetype.PILGRIMS:
@@ -177,6 +177,7 @@ namespace AIROG_ALife
                 case SquadGoal.FLEE:   return "fleeing after a defeat";
                 case SquadGoal.TRADE:  return "running a trade route";
                 case SquadGoal.HUNT:   return "hunting a sworn enemy";
+                case SquadGoal.GARRISON: return "dug in and holding this ground";
                 case SquadGoal.TRAVEL_TO: return "traveling toward " + (s.TargetPlaceName ?? "parts unknown");
                 default: return s.Archetype == SquadArchetype.HUNTERS ? "prowling for prey" : "roaming the area";
             }

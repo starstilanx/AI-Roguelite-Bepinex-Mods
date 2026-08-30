@@ -341,7 +341,9 @@ namespace AIROG_SkillWeb
                             }
                         }
 
-                        RepositionAndRewire(data);
+                        // AI refinement only overwrites name/description/stats/traits/keystoneRule — never
+                        // ring/sectorId/type — so positions and edges are unaffected; a full repack here
+                        // was pure wasted work on top of the perk-buy/upgrade path that already does it.
                         plugin.SaveData();
 
                         // Refresh UI if it is active in the game
@@ -366,42 +368,10 @@ namespace AIROG_SkillWeb
 
         public static void RepositionAndRewire(SkillWebData data)
         {
-            WebLayout.AlignSectors(data.sectors);
+            if (data == null) return;
 
-            // Group nodes by cell (sector, ring) for neat layout spacing
-            var cellGroups = new Dictionary<(string sectorId, int ring), List<WebNode>>();
-            foreach (var node in data.nodes)
-            {
-                if (node.ring == 0) continue;
-                var key = (node.sectorId, node.ring);
-                if (!cellGroups.ContainsKey(key)) cellGroups[key] = new List<WebNode>();
-                cellGroups[key].Add(node);
-            }
-
-            // Position nodes within their cell groups
-            foreach (var kvp in cellGroups)
-            {
-                string sectorId = kvp.Key.sectorId;
-
-                var sector = data.GetSector(sectorId);
-                var nodesInCell = kvp.Value;
-
-                // Sort by ID to ensure order is deterministic for indexing
-                nodesInCell.Sort((a, b) => a.id.CompareTo(b.id));
-
-                for (int i = 0; i < nodesInCell.Count; i++)
-                {
-                    WebLayout.PositionNode(nodesInCell[i], sector, i, nodesInCell.Count, data.layoutSeed);
-                }
-            }
-
-            // Special position for origin node
-            var origin = data.nodes.Find(n => n.ring == 0);
-            if (origin != null)
-            {
-                origin.x = 0;
-                origin.y = 0;
-            }
+            // Pack every (sector, ring) cell so nodes can't land on top of each other
+            WebLayout.LayoutNodes(data);
 
             // Rebuild wireframe connections
             WebLayout.GenerateEdges(data);

@@ -41,13 +41,8 @@ namespace AIROG_NPCExpansion
         private void Show(GameCharacter npc, GameplayManager manager)
         {
             Debug.Log($"[AIROG_NPCExpansion] Opening NPCEquipmentUI for {npc?.GetPrettyName() ?? "null"}");
+            if (!NPCUI.TryResolveManager(manager, "NPCEquipmentUI", out _manager)) return;
             _currentNpc = npc;
-            _manager = manager ?? SS.I?.hackyManager;
-            if (_manager == null || _manager.canvasTransform == null)
-            {
-                Debug.LogWarning("[AIROG_NPCExpansion] Cannot open NPCEquipmentUI: no valid GameplayManager/canvas available.");
-                return;
-            }
 
             if (_window == null) CreateUI();
 

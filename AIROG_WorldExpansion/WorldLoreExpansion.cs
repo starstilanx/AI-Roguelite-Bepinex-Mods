@@ -11,7 +11,6 @@ namespace AIROG_WorldExpansion
     {
         public static string CurrentCategory = "All";
         private static GameObject _tabsHolder;
-        private static bool _isInitialized = false;
 
         public static void RecordHistoricalEvent(GameplayManager manager, string desc, string category, List<string> keys = null)
         {
@@ -63,9 +62,7 @@ namespace AIROG_WorldExpansion
             
             _tabsHolder = new GameObject("LoreCategoryTabs", typeof(RectTransform));
             _tabsHolder.transform.SetParent(parent, false);
-            _tabsHolder.transform.SetAsFirstSibling(); // Render behind content? No, we want on TOP.
-            // Wait, standard UI: Last child = Topmost render.
-            // But we will set it as LastSibling in RedrawWithFiltering after content update.
+            // RedrawWithFiltering raises this to LastSibling (topmost render) once content is built.
 
             var rt = _tabsHolder.GetComponent<RectTransform>();
             rt.anchorMin = new Vector2(0, 1);
@@ -277,7 +274,7 @@ namespace AIROG_WorldExpansion
 
              try 
              {
-                 GameplayManager gm = Object.FindObjectOfType<GameplayManager>();
+                 GameplayManager gm = SS.I?.hackyManager;
                  if (gm == null) 
                  {
                      Debug.LogError("[WorldLoreExpansion] GameplayManager not found!");

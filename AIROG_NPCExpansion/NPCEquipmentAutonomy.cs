@@ -39,7 +39,7 @@ namespace AIROG_NPCExpansion
             HashSet<string> assignedUuids = new HashSet<string>();
             foreach (var slot in slots)
             {
-                var bestItem = FindBestItemForSlot(npc, slot, assignedUuids, manager);
+                var bestItem = FindBestItemForSlot(npc, data, slot, assignedUuids, manager);
                 if (bestItem != null)
                 {
                     assignedUuids.Add(bestItem.uuid);
@@ -66,7 +66,7 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        private static GameItem FindBestItemForSlot(GameCharacter npc, string slot, HashSet<string> assignedUuids, GameplayManager manager)
+        private static GameItem FindBestItemForSlot(GameCharacter npc, NPCData data, string slot, HashSet<string> assignedUuids, GameplayManager manager)
         {
             GameItem best = null;
             double bestPower = -1;
@@ -76,7 +76,7 @@ namespace AIROG_NPCExpansion
                 if (assignedUuids.Contains(item.uuid)) continue;
                 if (!IsItemValidForSlot(item, slot)) continue;
 
-                double power = CalculateItemPower(npc, item, manager);
+                double power = CalculateItemPower(npc, data, item, manager);
                 // Debug.Log($"[NPCAutonomy] Checking {item.GetPrettyName()} for {slot}: Power {power}"); // VERBOSE
 
                 if (power > bestPower)
@@ -110,7 +110,7 @@ namespace AIROG_NPCExpansion
             return false;
         }
 
-        public static double CalculateItemPower(GameCharacter npc, GameItem item, GameplayManager manager)
+        public static double CalculateItemPower(GameCharacter npc, NPCData data, GameItem item, GameplayManager manager)
         {
             double qualityMult = 1.0;
             switch (item.itemQuality)
@@ -134,7 +134,6 @@ namespace AIROG_NPCExpansion
             }
 
             // --- ROLE SUITABILITY BONUS ---
-            NPCData data = NPCData.Load(npc.uuid);
             if (data != null)
             {
                 float suitability = GetItemSuitability(npc, data, item);

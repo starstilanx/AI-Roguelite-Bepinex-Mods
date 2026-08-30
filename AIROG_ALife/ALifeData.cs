@@ -73,6 +73,9 @@ namespace AIROG_ALife
             if (s.RecentEvents == null) s.RecentEvents = new List<ALifeEvent>();
             if (s.DreadMap == null) s.DreadMap = new Dictionary<string, int>();
             if (s.DreadNames == null) s.DreadNames = new Dictionary<string, string>();
+            if (s.WarScores == null) s.WarScores = new Dictionary<string, int>();
+            if (s.WarSeizures == null) s.WarSeizures = new Dictionary<string, int>();
+            if (s.Knowledge == null) s.Knowledge = new Dictionary<string, SquadKnowledge>();
             foreach (var sq in s.Squads)
             {
                 if (sq.MemberUuids == null) sq.MemberUuids = new List<string>();
@@ -81,6 +84,33 @@ namespace AIROG_ALife
                 // v1.0 saves have leaderless squads — give every squad a face.
                 if (sq.Leader == null) sq.Leader = ALifeNames.MakeLeader(sq);
             }
+            // Pre-v2.3 legend was uncapped and barely decayed, so long runs carry values
+            // far past the top tier that would take hundreds of turns to shed.
+            s.PlayerLegend = Mathf.Clamp(s.PlayerLegend, 0, ALifeLegend.LEGEND_MAX);
+            PruneDuplicateEncounters(s);
+        }
+
+        /// <summary>
+        /// v2.3 repair pass for saves written by earlier builds. Those re-announced a
+        /// band's arrival on EVERY location change, so a single standoff could leave
+        /// dozens of identical "is here — and hostile" notices in the feed — flooding
+        /// the Whispers tab and, worse, the narrative prompt. Keep the newest telling
+        /// of each and drop the rest.
+        /// </summary>
+        private static void PruneDuplicateEncounters(ALifeState s)
+        {
+            var seen = new HashSet<string>();
+            var kept = new List<ALifeEvent>();
+            for (int i = s.RecentEvents.Count - 1; i >= 0; i--)
+            {
+                ALifeEvent e = s.RecentEvents[i];
+                if (e.Type == "ENCOUNTER" && !seen.Add(e.PlaceUuid + "|" + e.Description)) continue;
+                kept.Add(e);
+            }
+            if (kept.Count == s.RecentEvents.Count) return;
+            kept.Reverse();
+            Debug.Log($"[ALife] Pruned {s.RecentEvents.Count - kept.Count} duplicate encounter notices from the feed.");
+            s.RecentEvents = kept;
         }
 
         public static void LogEvent(string placeUuid, string placeName, string type, string desc)
@@ -98,11 +128,29 @@ namespace AIROG_ALife
             Debug.Log($"[ALife] T{State.CurrentTurn} {type} @ {placeName}: {desc}");
         }
 
-        public static List<ALifeEvent> EventsAt(string placeUuid, int withinTurns, int max)
+        /// <summary>
+        /// Recent happenings at a place, oldest-first, for prompt injection.
+        /// Repeats of the same line are collapsed to their most recent telling — a band
+        /// standing in the road is one fact, not fifteen — and <paramref name="excludeType"/>
+        /// drops a category entirely (the provider excludes ENCOUNTER, since who is
+        /// standing here is already reported live rather than as aftermath).
+        /// </summary>
+        public static List<ALifeEvent> EventsAt(string placeUuid, int withinTurns, int max, string excludeType = null)
         {
             int cutoff = State.CurrentTurn - withinTurns;
-            var list = State.RecentEvents.Where(e => e.PlaceUuid == placeUuid && e.Turn >= cutoff).ToList();
-            return list.Skip(Math.Max(0, list.Count - max)).ToList();
+            var list = State.RecentEvents
+                .Where(e => e.PlaceUuid == placeUuid && e.Turn >= cutoff)
+                .Where(e => excludeType == null || e.Type != excludeType)
+                .ToList();
+
+            var seen = new HashSet<string>();
+            var deduped = new List<ALifeEvent>();
+            for (int i = list.Count - 1; i >= 0; i--)
+                if (seen.Add(list[i].Description))
+                    deduped.Add(list[i]);
+            deduped.Reverse();
+
+            return deduped.Skip(Math.Max(0, deduped.Count - max)).ToList();
         }
 
         public static VirtualSquad SquadById(string id)
@@ -128,6 +176,38 @@ namespace AIROG_ALife
         public Dictionary<string, int> DreadMap = new Dictionary<string, int>();
         /// <summary>placeUuid → pretty name, for displaying dread zones after places prune.</summary>
         public Dictionary<string, string> DreadNames = new Dictionary<string, string>();
+
+        // ── War Made Real (v2.1): the field decides WorldExpansion's wars ──────
+        /// <summary>war key → net battle score. Positive favors the war's ActorUuid side.
+        /// At ±3 the leading side pushes the front (seizes a territory).</summary>
+        public Dictionary<string, int> WarScores = new Dictionary<string, int>();
+        /// <summary>war key → net territories seized through squad warfare (signed like WarScores).
+        /// At ±3, or when the loser is landless, the war ends decisively.</summary>
+        public Dictionary<string, int> WarSeizures = new Dictionary<string, int>();
+
+        // ── Whispers & Tracks (v2.2): what the PLAYER knows, fog-of-warred ─────
+        /// <summary>squad Id → last intel the player has on it (sightings + rumors).</summary>
+        public Dictionary<string, SquadKnowledge> Knowledge = new Dictionary<string, SquadKnowledge>();
+    }
+
+    /// <summary>
+    /// v2.2: the player's (possibly stale) intel on one band. Only squads the player
+    /// has met, or heard rumor of nearby, appear here — and the record freezes when
+    /// the band moves out of earshot, so the Tracks lens shows last-known positions,
+    /// not live ones.
+    /// </summary>
+    public class SquadKnowledge
+    {
+        public string SquadId;
+        public string KnownName;
+        public string KnownLeaderName;      // null until met or leader named in a rumor
+        public string Archetype;
+        public string LastKnownPlaceUuid;
+        public string LastKnownPlaceName;
+        public int LastKnownTurn;
+        public int LastKnownSize;
+        public string LastKnownActivity;
+        public bool Met;                     // met face to face (full dossier unlocked)
     }
 
     /// <summary>Squad archetypes. Kept as string constants (not an enum) so the JSON stays forward-compatible.</summary>
@@ -149,6 +229,7 @@ namespace AIROG_ALife
         public const string FLEE      = "FLEE";       // just lost a fight, running
         public const string TRADE     = "TRADE";      // shuttle between two places
         public const string HUNT      = "HUNT";       // v2.0: blood feud — tracking an enemy squad
+        public const string GARRISON  = "GARRISON";   // v2.1: dug in, defending a place
     }
 
     /// <summary>
@@ -220,6 +301,21 @@ namespace AIROG_ALife
         public int AweOfPlayer;               // 0–100: respect/goodwill from peaceful contact
         public bool MetPlayer;
 
+        // ── v2.1 war made real ──────────────────────────────────────────────────
+        public int GarrisonUntilTurn;         // GARRISON goal: dug in until this turn
+        public string CourtFigureName;        // non-null: this squad is led by a faction-court lieutenant
+        public string CourtFigureTitle;
+
+        // ── v2.3 announcement / bubble bookkeeping ──────────────────────────────
+        /// <summary>Turn this band's presence was last announced, so re-entering the
+        /// same ground doesn't re-announce a standoff the player is already looking at.</summary>
+        public int LastAnnouncedTurn = -999;
+        /// <summary>Ground the last announcement was made on (paired with LastAnnouncedTurn).</summary>
+        public string LastAnnouncedPlaceUuid;
+        /// <summary>Turn the band became frozen in the player's online bubble, or -1 when
+        /// it isn't. Bands that overstay walk out instead of being pinned there forever.</summary>
+        public int BubbleSinceTurn = -1;
+
         [JsonIgnore]
         public int Strength => Math.Max(1, Size) * (AvgLevel + 2);
 
@@ -236,7 +332,10 @@ namespace AIROG_ALife
         public int Turn;
         public string PlaceUuid;
         public string PlaceName;
-        public string Type;        // BATTLE, WIPE, RAID, MIGRATION, ENCOUNTER, SPAWN, FEUD, LEGEND, LIFECYCLE
+        public string Type;        // BATTLE, WIPE, RAID, MIGRATION, ENCOUNTER, SPAWN, FEUD, LEGEND, LIFECYCLE, WAR
         public string Description;
+        /// <summary>v2.2: the player has heard of this (it happened near them, or they
+        /// visited the site). Only Known events appear in the Rumors tab / Tracks lens.</summary>
+        public bool Known;
     }
 }
