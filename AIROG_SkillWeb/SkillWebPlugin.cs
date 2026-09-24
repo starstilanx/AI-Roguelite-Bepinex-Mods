@@ -13,7 +13,7 @@ namespace AIROG_SkillWeb
     {
         public const string PLUGIN_GUID = "com.airog.skillweb";
         public const string PLUGIN_NAME = "Skill Web";
-        public const string PLUGIN_VERSION = "4.1.4";
+        public const string PLUGIN_VERSION = "5.0.0";
 
         public static SkillWebPlugin Instance { get; private set; }
         public SkillWebData Data { get; private set; }
@@ -28,7 +28,7 @@ namespace AIROG_SkillWeb
         private void Awake()
         {
             Instance = this;
-            Logger.LogInfo($"[SkillWeb] Plugin {PLUGIN_GUID} v{PLUGIN_VERSION} (Constellation Overhaul) starting...");
+            Logger.LogInfo($"[SkillWeb] Plugin {PLUGIN_GUID} v{PLUGIN_VERSION} (Passive Atlas) starting...");
             LoadConfig();
             var harmony = new Harmony(PLUGIN_GUID);
             harmony.PatchAll(typeof(SkillWebPatches));

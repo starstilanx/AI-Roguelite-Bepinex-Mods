@@ -1,157 +1,189 @@
 using System;
 using System.Collections.Generic;
-using UnityEngine;
 
 namespace AIROG_SkillWeb
 {
     public static class WebGraph
     {
-        /// <summary>
-        /// Cost of purchasing a node in Resonance points (⟡).
-        /// </summary>
+        /// <summary>Cost of allocating a node, in Resonance.</summary>
         public static int GetUnlockCost(WebNode node)
         {
-            if (node.type == WebNodeType.Anchor) return 0; // Anchors unlock via native perks, cannot be bought
+            if (node == null) return 0;
             switch (node.type)
             {
+                case WebNodeType.Anchor: return 0; // gates are fed by native perks, never bought
+                case WebNodeType.Travel:
                 case WebNodeType.Basic: return 1;
-                case WebNodeType.Notable:
-                case WebNodeType.Confluence: return 2;
-                case WebNodeType.Keystone: return 3;
+                case WebNodeType.Mastery: return 2;
+                case WebNodeType.Notable: return 3;
+                case WebNodeType.Confluence: return 4;
+                case WebNodeType.Keystone: return 5;
                 default: return 1;
             }
         }
 
-        /// <summary>
-        /// Cost of upgrading a node's mastery tier (Basic/Notable only).
-        /// </summary>
+        /// <summary>Cost of the next mastery-tier upgrade: tier 1 to 2 costs 2, tier 2 to 3 costs 3.</summary>
         public static int GetUpgradeCost(WebNode node)
         {
-            if (node.type == WebNodeType.Keystone || node.type == WebNodeType.Anchor) return 0;
-            if (node.tier == 1) return 1; // Tier 1 -> Tier 2 costs 1
-            if (node.tier == 2) return 2; // Tier 2 -> Tier 3 costs 2
+            if (node == null || !node.IsTiered) return 0;
+            if (node.tier == 1) return 2;
+            if (node.tier == 2) return 3;
             return 0;
         }
 
-        /// <summary>
-        /// Checks if a node is buyable with Resonance.
-        /// Admissible if locked, not an Anchor, and connected to at least one unlocked/active node.
-        /// </summary>
-        public static bool CanUnlock(WebNode node, SkillWebData data)
+        /// <summary>Everything spent on a node so far: its price plus any tier upgrades.</summary>
+        public static int TotalSpent(WebNode node)
         {
-            if (node == null || node.unlocked || node.type == WebNodeType.Anchor || node.ring == 0) return false;
-            if (node.name == "Unformed Star") return false;
+            if (node == null) return 0;
+            int spent = GetUnlockCost(node);
+            if (node.tier >= 2) spent += 2;
+            if (node.tier >= 3) spent += 3;
+            return spent;
+        }
+
+        /// <summary>Allocated, or free by construction (the Heart and every sector gate), or pending.</summary>
+        public static bool IsTaken(WebNode node, ICollection<string> pending = null)
+        {
+            if (node == null) return false;
+            return node.unlocked || node.ring == 0 || (pending != null && pending.Contains(node.id));
+        }
+
+        /// <summary>
+        /// Whether a locked node can be allocated now: charted, not a gate, and touching an
+        /// allocated (or pending) node. Masteries instead need any allocated node in their cluster.
+        /// </summary>
+        public static bool CanUnlock(WebNode node, SkillWebData data, ICollection<string> pending = null)
+        {
+            if (node == null || data == null || IsTaken(node, pending)) return false;
+            if (node.type == WebNodeType.Anchor || node.ring == 0) return false;
+            if (!data.IsCharted(node)) return false;
+
+            if (node.type == WebNodeType.Mastery)
+            {
+                if (node.clusterId < 0) return false;
+                foreach (var n in data.nodes)
+                    if (n.clusterId == node.clusterId && n.type != WebNodeType.Mastery && IsTaken(n, pending))
+                        return true;
+                return false;
+            }
 
             foreach (var edgeId in node.edges)
-            {
-                var neighbor = data.GetNode(edgeId);
-                if (neighbor != null && (neighbor.unlocked || neighbor.ring == 0))
-                {
-                    return true;
-                }
-            }
+                if (IsTaken(data.GetNode(edgeId), pending)) return true;
             return false;
         }
 
-        /// <summary>
-        /// Checks if a node is upgradeable.
-        /// </summary>
         public static bool CanUpgrade(WebNode node, SkillWebConfig config)
         {
             if (node == null || !node.unlocked || !config.MasteryTiersEnabled) return false;
-            if (node.type == WebNodeType.Keystone || node.type == WebNodeType.Anchor) return false;
-            return node.tier < 3;
+            return node.IsTiered && node.tier < 3;
         }
 
         /// <summary>
-        /// Finds the cheapest Resonance path from any unlocked node to the target locked node.
-        /// Uses Dijkstra's algorithm.
-        /// Returns (path, totalCost) or (null, 0) if no path exists.
+        /// Cheapest chain of locked nodes that would reach <paramref name="target"/> from what is
+        /// already allocated (or pending), via charted nodes only. Returns (null, 0) when the
+        /// target is unreachable or is a Mastery (those aren't reached along edges).
         /// </summary>
-        public static (List<WebNode> path, int cost) FindCheapestPath(WebNode target, SkillWebData data)
+        public static (List<WebNode> path, int cost) FindCheapestPath(WebNode target, SkillWebData data, ICollection<string> pending = null)
         {
-            if (target == null || target.unlocked || target.type == WebNodeType.Anchor)
-            {
-                return (null, 0);
-            }
+            if (target == null || data == null || IsTaken(target, pending)) return (null, 0);
+            if (target.type == WebNodeType.Anchor || target.type == WebNodeType.Mastery || !data.IsCharted(target)) return (null, 0);
 
-            // Dijkstra setup
             var dist = new Dictionary<string, int>();
             var prev = new Dictionary<string, string>();
             var queue = new SortedSet<(int cost, string id)>(Comparer<(int cost, string id)>.Create((a, b) =>
             {
                 int cmp = a.cost.CompareTo(b.cost);
-                if (cmp != 0) return cmp;
-                return a.id.CompareTo(b.id);
+                return cmp != 0 ? cmp : string.CompareOrdinal(a.id, b.id);
             }));
 
-            // Initialize unlocked nodes with distance 0, others with infinity
             foreach (var node in data.nodes)
             {
-                if (node.unlocked || node.ring == 0)
-                {
-                    dist[node.id] = 0;
-                    queue.Add((0, node.id));
-                }
-                else
-                {
-                    dist[node.id] = int.MaxValue;
-                }
+                if (IsTaken(node, pending)) { dist[node.id] = 0; queue.Add((0, node.id)); }
             }
 
             while (queue.Count > 0)
             {
                 var current = queue.Min;
                 queue.Remove(current);
+                if (current.id == target.id) break;
 
-                int currCost = current.cost;
-                string currId = current.id;
-
-                if (currId == target.id) break;
-                if (currCost == int.MaxValue) break;
-
-                var currNode = data.GetNode(currId);
+                var currNode = data.GetNode(current.id);
                 if (currNode == null) continue;
 
                 foreach (var edgeId in currNode.edges)
                 {
-                    var neighbor = data.GetNode(edgeId);
-                    // Cannot path through locked Anchors
-                    if (neighbor == null || (neighbor.type == WebNodeType.Anchor && !neighbor.unlocked)) continue;
+                    var nb = data.GetNode(edgeId);
+                    if (nb == null || nb.type == WebNodeType.Mastery || nb.type == WebNodeType.Anchor) continue;
+                    if (!IsTaken(nb, pending) && !data.IsCharted(nb)) continue;
 
-                    int edgeCost = neighbor.unlocked ? 0 : GetUnlockCost(neighbor);
-                    int alt = currCost + edgeCost;
-
-                    if (alt < dist[neighbor.id])
+                    int alt = current.cost + (IsTaken(nb, pending) ? 0 : GetUnlockCost(nb));
+                    if (!dist.TryGetValue(nb.id, out int old) || alt < old)
                     {
-                        queue.Remove((dist[neighbor.id], neighbor.id));
-                        dist[neighbor.id] = alt;
-                        prev[neighbor.id] = currId;
-                        queue.Add((alt, neighbor.id));
+                        if (dist.ContainsKey(nb.id)) queue.Remove((old, nb.id));
+                        dist[nb.id] = alt;
+                        prev[nb.id] = current.id;
+                        queue.Add((alt, nb.id));
                     }
                 }
             }
 
-            if (dist[target.id] == int.MaxValue)
-            {
-                return (null, 0);
-            }
+            if (!dist.TryGetValue(target.id, out int total)) return (null, 0);
 
-            // Reconstruct path
             var path = new List<WebNode>();
             string trace = target.id;
-            while (prev.ContainsKey(trace))
+            while (trace != null)
             {
                 var n = data.GetNode(trace);
-                if (n != null && !n.unlocked)
-                {
-                    path.Add(n);
-                }
-                trace = prev[trace];
+                if (n == null || IsTaken(n, pending)) break;
+                path.Add(n);
+                prev.TryGetValue(trace, out trace);
             }
             path.Reverse();
+            return (path, total);
+        }
 
-            return (path, dist[target.id]);
+        /// <summary>
+        /// True if every node in <paramref name="keep"/> is still connected to the allocated web
+        /// through allocated/kept nodes (Masteries: through their cluster). Used to decide whether
+        /// a node can be refunded or un-pended without stranding anything beyond it.
+        /// </summary>
+        public static bool AllConnected(SkillWebData data, HashSet<string> keep)
+        {
+            var reached = new HashSet<string>();
+            var queue = new Queue<WebNode>();
+            foreach (var n in data.nodes)
+            {
+                if (n.ring == 0) { reached.Add(n.id); queue.Enqueue(n); }
+            }
+            while (queue.Count > 0)
+            {
+                var cur = queue.Dequeue();
+                foreach (var eid in cur.edges)
+                {
+                    if (reached.Contains(eid) || !keep.Contains(eid)) continue;
+                    var nb = data.GetNode(eid);
+                    if (nb == null || nb.type == WebNodeType.Mastery) continue;
+                    reached.Add(eid);
+                    queue.Enqueue(nb);
+                }
+            }
+
+            var liveClusters = new HashSet<int>();
+            foreach (var id in reached)
+            {
+                var n = data.GetNode(id);
+                if (n != null && n.clusterId >= 0) liveClusters.Add(n.clusterId);
+            }
+
+            foreach (var id in keep)
+            {
+                if (reached.Contains(id)) continue;
+                var n = data.GetNode(id);
+                if (n == null) continue;
+                if (n.type == WebNodeType.Mastery && liveClusters.Contains(n.clusterId)) continue;
+                return false;
+            }
+            return true;
         }
     }
 }

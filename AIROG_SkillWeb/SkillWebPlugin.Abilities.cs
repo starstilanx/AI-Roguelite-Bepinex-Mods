@@ -86,7 +86,8 @@ namespace AIROG_SkillWeb
             // Mastery tier maps to the native LEARNED ability tier (0-based, capped at 2).
             int tier = Mathf.Clamp(node.tier - 1, 0, 2);
 
-            var ability = new GameAbility(node.name, desc, manager,
+            string abilityName = string.IsNullOrWhiteSpace(node.abilityName) ? node.name : node.abilityName;
+            var ability = new GameAbility(abilityName, desc, manager,
                 GameAbility.AbilityType.LEARNED, null, tier, skipAddingToUuidMap: true);
             ability.uuid = uuid;
             lock (SS.I.uuidToGameEntityMap) { SS.I.uuidToGameEntityMap[uuid] = ability; }
@@ -118,11 +119,13 @@ namespace AIROG_SkillWeb
             if (!_abilityDescInFlight.Add(node.id)) return;
             try
             {
-                string seed = string.IsNullOrEmpty(node.description) ? node.name : (node.name + ": " + node.description);
+                string abilityName = string.IsNullOrWhiteSpace(node.abilityName) ? node.name : node.abilityName;
+                string about = !string.IsNullOrEmpty(node.keystoneRule) ? node.keystoneRule : node.description;
+                string seed = abilityName + " (granted by " + node.name + ")" + (string.IsNullOrEmpty(about) ? "" : ": " + about);
                 string ctx = manager.GetLastNStoryTurnsAsCombinedStrNoNewlines(2);
                 string turnTxt = string.IsNullOrWhiteSpace(ctx) ? seed : (seed + "\n\n" + ctx);
 
-                string desc = await AIAsker.GetAbilityDescFromStory(manager, node.name, turnTxt);
+                string desc = await AIAsker.GetAbilityDescFromStory(manager, abilityName, turnTxt);
                 if (!string.IsNullOrWhiteSpace(desc))
                 {
                     node.grantedAbilityDesc = desc;

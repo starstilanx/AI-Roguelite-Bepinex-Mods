@@ -34,11 +34,20 @@ namespace AIROG_SkillWeb
         /// <summary>Maximum number of simultaneously active Keystones.</summary>
         public int MaxActiveKeystones = 3;
 
-        /// <summary>Initial number of sectors to seed for a new character web.</summary>
-        public int SectorsAtStart = 5;
+        /// <summary>
+        /// Sectors in a new character's web (3-8). Raised automatically when the character has
+        /// more native perk trees than this. Fixed once the web exists.
+        /// </summary>
+        public int SectorsAtStart = 6;
 
-        /// <summary>Initial number of rings generated for each starting sector.</summary>
+        /// <summary>Rings charted (revealed) in every sector when a web is created; the rest reveal as you reach them.</summary>
         public int SeedRings = 3;
+
+        /// <summary>
+        /// Size of newly generated webs: "compact" (5 rings, ~400 nodes), "standard" (7 rings,
+        /// ~800 nodes) or "vast" (9 rings, ~1,200 nodes at 8 sectors). Existing webs keep their size.
+        /// </summary>
+        public string WebSize = "standard";
 
         /// <summary>Enable spending Resonance to level up Basic and Notable nodes (up to Tier 3).</summary>
         public bool MasteryTiersEnabled = true;
@@ -46,7 +55,7 @@ namespace AIROG_SkillWeb
         /// <summary>Enable soft integration hooks with Reverie, Chronicle, Insight, NPCExpansion, and Settlement.</summary>
         public bool CrossModHooks = true;
 
-        /// <summary>Show faint placeholders for ungenerated outer frontier nodes on the map.</summary>
+        /// <summary>Show uncharted outer rings as faint dots on the map.</summary>
         public bool FrontierPreview = true;
 
         /// <summary>Attribute budget distributed across a learned native perk's Anchor Star by the offline heuristic.</summary>

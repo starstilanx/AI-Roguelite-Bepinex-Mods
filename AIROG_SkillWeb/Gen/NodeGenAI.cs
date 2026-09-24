@@ -1,18 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using UnityEngine;
 using Newtonsoft.Json;
 
 namespace AIROG_SkillWeb
 {
+    /// <summary>
+    /// Rewrites a charted ring's Notables, Keystones, Masteries and Confluences so they belong to
+    /// the current world. Structure and node types never change here; stats are clamped back to
+    /// each type's budget so the AI can't inflate the web.
+    /// </summary>
     public static class NodeGenAI
     {
-        private static readonly string[] Attributes = { "Strength", "Dexterity", "Intellect", "Cunning", "Charisma" };
+        private static readonly string[] Attributes = ThemeLexicon.Attributes;
 
-        public class AINodeInfo
+#pragma warning disable 0649 // populated by JSON deserialization
+        class AINodeInfo
         {
             public string id;
             public string name;
@@ -20,6 +25,21 @@ namespace AIROG_SkillWeb
             public Dictionary<string, object> stats;
             public List<string> traits;
             public string keystoneRule;
+            public string abilityName;
+            public List<string> options;
+        }
+#pragma warning restore 0649
+
+        public class RefinedNode
+        {
+            public string id;
+            public string name;
+            public string description;
+            public Dictionary<string, float> stats;
+            public List<string> traits;
+            public string keystoneRule;
+            public string abilityName;
+            public List<string> masteryOptions;
         }
 
         // ── Context Helpers ─────────────────────────────────────────────────────
@@ -60,89 +80,72 @@ namespace AIROG_SkillWeb
                 (skills.Length > 0 ? "Known Skills:\n" + skills : "");
         }
 
-        // ── Main Generation Entrypoint ──────────────────────────────────────────
+        static string Budget(WebNode n, WebSector s)
+        {
+            switch (n.type)
+            {
+                case WebNodeType.Notable:
+                    return $"Notable. Stats: {s.attr} +2 to +3 and {s.altAttr} +1 to +2. Exactly 1 trait: one sentence describing how the world treats the player.";
+                case WebNodeType.Confluence:
+                    return "Confluence joining two disciplines. Stats: +2 in each of the two attributes already on it. Exactly 1 trait sentence that blends both.";
+                case WebNodeType.Keystone:
+                    return $"Keystone. Stats: {s.attr} +4 to +6 and one other attribute -1 to -3. keystoneRule: one sentence giving a strong advantage AND a real drawback the narrator must enforce. abilityName: 1-4 words naming the active ability it grants. No traits.";
+                case WebNodeType.Mastery:
+                    return "Mastery. No stats. options: exactly 3 alternative trait sentences, each a different small advantage the player can choose between.";
+                default:
+                    return "";
+            }
+        }
+
+        // ── Main entry point ──────────────────────────────────────────────────────
 
         /// <summary>
-        /// Asynchronously generates a batch of WebNodes for a given sector and ring using the AI.
-        /// Falls back to offline lexicon generation if the AI fails.
+        /// Asks the AI to rewrite <paramref name="batch"/> (all in one sector ring). Returns null on
+        /// failure; nodes the response leaves out simply keep their offline content.
         /// </summary>
-        public static async Task<List<WebNode>> GenerateRingBatchAsync(
-            GameplayManager manager, 
-            WebSector sector, 
-            int ring, 
-            List<(string id, WebNodeType type)> targets, 
-            List<WebNode> existingSectorNodes,
-            long layoutSeed)
+        public static async Task<List<RefinedNode>> RefineBatchAsync(GameplayManager manager, SkillWebData data,
+            WebSector sector, int ring, List<WebNode> batch)
         {
-            if (manager == null || sector == null || targets == null || targets.Count == 0)
-            {
-                return new List<WebNode>();
-            }
+            if (manager == null || sector == null || batch == null || batch.Count == 0) return null;
 
-            string worldCtx = WorldContext(manager);
-            string playerCtx = PlayerContext(manager);
-            string primaryAttr = NodeGenOffline.GetSectorAttribute(sector);
+            string continuity = "";
+            var inner = data.nodes.Where(n => n.sectorId == sector.id && n.ring == ring - 1 && n.aiRefined
+                                              && (n.type == WebNodeType.Notable || n.type == WebNodeType.Keystone))
+                                  .Take(5).ToList();
+            if (inner.Count > 0)
+                continuity = "\nContinuity (nodes one ring further in): " +
+                             string.Join(", ", inner.Select(n => $"{n.name} ({n.description})"));
 
-            // Continuity context from existing nodes
-            string continuityCtx = "";
-            if (existingSectorNodes != null && existingSectorNodes.Count > 0)
-            {
-                var recent = existingSectorNodes.FindAll(n => n.ring == ring - 1).Take(5).ToList();
-                if (recent.Count > 0)
-                {
-                    continuityCtx = "\nContinuity (stars in the previous ring): " + 
-                        string.Join(", ", recent.Select(n => $"{n.name} ({n.description})"));
-                }
-            }
-
-            // Recipe instructions
             string recipe = "";
-            for (int i = 0; i < targets.Count; i++)
+            foreach (var n in batch)
             {
-                var t = targets[i];
-                recipe += $"- Star index {i}: ID = \"{t.id}\", Type = {t.type}\n";
-                if (t.type == WebNodeType.Basic)
-                {
-                    recipe += "  * Basic budget: Exactly 1 positive attribute bonus (value +2 to +4). No traits.\n";
-                }
-                else if (t.type == WebNodeType.Notable)
-                {
-                    recipe += $"  * Notable budget: Total positive attributes bonus +6 to +10 (divided across 1 or 2 attributes matching the sector's affinity: {primaryAttr}). Exactly 1 non-numerical narrative trait.\n";
-                }
-                else if (t.type == WebNodeType.Keystone)
-                {
-                    recipe += $"  * Keystone budget: Exactly 1 positive attribute bonus ({primaryAttr}, value +10 to +14) AND exactly 1 negative attribute penalty (value -4 to -6). Exactly 1 narrative trait. Exactly 1 keystoneRule (a single gameplay directive text/rule sentence).\n";
-                }
+                string current = n.type == WebNodeType.Confluence
+                    ? " Current stats: " + string.Join(", ", n.stats.Select(kv => kv.Key + " " + kv.Value))
+                    : "";
+                string joins = n.type == WebNodeType.Confluence
+                    ? $" Joins {sector.name} with {data.GetSector(n.sectorId2)?.name ?? "a neighbouring discipline"}."
+                    : "";
+                recipe += $"- id \"{n.id}\": {Budget(n, sector)}{joins}{current}\n";
             }
 
-            string prompt = 
-                "You are designing a batch of stars for a lore-driven RPG skill constellation web.\n\n" +
-                "=== WORLD ===\n" + worldCtx + "\n\n" +
-                "=== PLAYER ===\n" + playerCtx + "\n\n" +
-                "=== DISCIPLINE / SECTOR ===\n" +
+            string prompt =
+                "You are designing nodes for a lore-driven RPG passive skill web.\n\n" +
+                "=== WORLD ===\n" + WorldContext(manager) + "\n\n" +
+                "=== PLAYER ===\n" + PlayerContext(manager) + "\n\n" +
+                "=== DISCIPLINE ===\n" +
                 $"Name: {sector.name}\n" +
                 $"Theme: {sector.purpose}\n" +
-                $"Primary Attribute: {primaryAttr}\n" +
-                continuityCtx + "\n\n" +
-                "=== RECIPE ===\n" +
-                "Create exactly the following stars matching their IDs, Types, and Budgets:\n" +
-                recipe + "\n" +
+                $"Primary attribute: {sector.attr}; secondary: {sector.altAttr}\n" +
+                $"Ring: {ring} of {data.maxRing} (higher rings are rarer and more dramatic)" +
+                continuity + "\n\n" +
+                "=== NODES TO WRITE ===\n" + recipe + "\n" +
                 "=== RULES ===\n" +
-                "- Names: 2-4 evocative, lore-grounded words.\n" +
-                "- Descriptions: 1-2 lore-grounded sentences.\n" +
-                "- Stats: ONLY use these keys: Strength, Dexterity, Intellect, Cunning, Charisma.\n" +
-                "- Traits: Non-numerical capabilities (e.g. 'Silent Stride', 'Flame Touch').\n\n" +
-                "Respond ONLY with a valid JSON array of objects matching the size of the recipe, no prose:\n" +
-                "[\n" +
-                "  {\n" +
-                "    \"id\": \"target-node-id\",\n" +
-                "    \"name\": \"Star Name\",\n" +
-                "    \"description\": \"Lore description.\",\n" +
-                "    \"stats\": { \"Strength\": 3 },\n" +
-                "    \"traits\": [\"Trait\"],\n" +
-                "    \"keystoneRule\": null\n" +
-                "  }\n" +
-                "]";
+                "- Fit the world's genre and tone; never assume fantasy if the world is not fantasy.\n" +
+                "- Names: 2-4 evocative words. Descriptions: one sentence of lore.\n" +
+                "- Stats: ONLY these keys: Strength, Dexterity, Intellect, Cunning, Charisma.\n" +
+                "- Traits and options are narrative capabilities the storyteller will honour, written as one sentence each.\n\n" +
+                "Respond ONLY with a JSON array, one object per node, no prose:\n" +
+                "[{\"id\":\"...\",\"name\":\"...\",\"description\":\"...\",\"stats\":{\"Strength\":2},\"traits\":[\"...\"],\"keystoneRule\":null,\"abilityName\":null,\"options\":null}]";
 
             try
             {
@@ -156,169 +159,102 @@ namespace AIROG_SkillWeb
 
                 int s = response.IndexOf('[');
                 int e = response.LastIndexOf(']');
-                if (s == -1 || e == -1) return null;
+                if (s == -1 || e <= s) return null;
 
-                var rawInfos = JsonConvert.DeserializeObject<List<AINodeInfo>>(response.Substring(s, e - s + 1));
-                if (rawInfos == null || rawInfos.Count == 0) return null;
+                var raw = JsonConvert.DeserializeObject<List<AINodeInfo>>(response.Substring(s, e - s + 1));
+                if (raw == null || raw.Count == 0) return null;
 
-                var resultNodes = new List<WebNode>();
-                for (int i = 0; i < targets.Count; i++)
+                var result = new List<RefinedNode>();
+                for (int i = 0; i < batch.Count; i++)
                 {
-                    var target = targets[i];
-                    var info = rawInfos.Find(infoObj => infoObj.id == target.id);
-                    
-                    // Fallback to match by index if ID matching failed
-                    if (info == null && i < rawInfos.Count)
-                    {
-                        info = rawInfos[i];
-                    }
-
-                    if (info == null)
-                    {
-                        // Fallback generator for this missing node
-                        var fallbackNode = NodeGenOffline.GenerateNode(target.id, target.type, sector, ring, i, layoutSeed);
-                        resultNodes.Add(fallbackNode);
-                        continue;
-                    }
-
-                    var node = new WebNode
-                    {
-                        id = target.id,
-                        type = target.type,
-                        sectorId = sector.id,
-                        ring = ring,
-                        name = string.IsNullOrEmpty(info.name) ? "Unnamed Star" : info.name,
-                        description = string.IsNullOrEmpty(info.description) ? "A mysterious star in the night sky." : info.description,
-                        keystoneRule = info.keystoneRule,
-                        unlocked = false,
-                        tier = (target.type == WebNodeType.Basic || target.type == WebNodeType.Notable || target.type == WebNodeType.Confluence) ? 1 : 0,
-                        aiRefined = true
-                    };
-
-                    // Populate stats
-                    if (info.stats != null)
-                    {
-                        foreach (var kvp in info.stats)
-                        {
-                            string attrName = Attributes.FirstOrDefault(a => string.Equals(a, kvp.Key, StringComparison.OrdinalIgnoreCase));
-                            if (attrName == null) continue;
-                            float val = ParseNum(kvp.Value);
-                            if (val != 0f) node.stats[attrName] = val;
-                        }
-                    }
-
-                    // Populate traits
-                    if (info.traits != null)
-                    {
-                        foreach (var trait in info.traits)
-                        {
-                            if (!string.IsNullOrEmpty(trait)) node.traits.Add(trait);
-                        }
-                    }
-
-                    // Budget constraints checks (Clamping)
-                    ClampNodeStats(node, primaryAttr);
-
-                    resultNodes.Add(node);
+                    var node = batch[i];
+                    var info = raw.Find(x => x != null && x.id == node.id) ?? (i < raw.Count ? raw[i] : null);
+                    if (info == null) continue;
+                    result.Add(Clamp(node, sector, info));
                 }
-
-                return resultNodes;
+                return result;
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[SkillWeb] AI batch generation failed for {sector.name} Ring {ring}: {ex.Message}. Falling back to offline lexicon.");
+                Debug.LogError($"[SkillWeb] AI refinement failed for {sector.name} ring {ring}: {ex.Message}. Keeping offline content.");
                 return null;
             }
         }
 
         // ── Validation and Clamping ─────────────────────────────────────────────
 
-        private static void ClampNodeStats(WebNode node, string primaryAttr)
+        static RefinedNode Clamp(WebNode node, WebSector sector, AINodeInfo info)
         {
-            if (node.stats.Count == 0)
+            var r = new RefinedNode
             {
-                node.stats[primaryAttr] = (node.type == WebNodeType.Basic) ? 3 : (node.type == WebNodeType.Notable ? 6 : 12);
+                id = node.id,
+                name = string.IsNullOrWhiteSpace(info.name) ? node.name : info.name.Trim(),
+                description = string.IsNullOrWhiteSpace(info.description) ? node.description : info.description.Trim(),
+                stats = new Dictionary<string, float>(),
+                traits = (info.traits ?? new List<string>()).Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).ToList(),
+                keystoneRule = null,
+            };
+
+            var parsed = new Dictionary<string, float>();
+            if (info.stats != null)
+            {
+                foreach (var kvp in info.stats)
+                {
+                    string attr = Attributes.FirstOrDefault(a => string.Equals(a, kvp.Key, StringComparison.OrdinalIgnoreCase));
+                    float val = ParseNum(kvp.Value);
+                    if (attr != null && val != 0f) parsed[attr] = val;
+                }
             }
 
             switch (node.type)
             {
-                case WebNodeType.Basic:
-                    // Basic budget: Exactly 1 attribute, clamped +2..+4
-                    string basicAttr = node.stats.Keys.FirstOrDefault() ?? primaryAttr;
-                    float val = node.stats[basicAttr];
-                    node.stats.Clear();
-                    node.stats[basicAttr] = Mathf.Clamp(val, 2f, 4f);
-                    node.traits.Clear();
-                    node.keystoneRule = null;
+                case WebNodeType.Notable:
+                    r.stats[sector.attr] = Mathf.Clamp(Mathf.Round(Get(parsed, sector.attr, 2)), 2, 3);
+                    r.stats[sector.altAttr] = Mathf.Clamp(Mathf.Round(Get(parsed, sector.altAttr, 1)), 1, 2);
+                    r.traits = OneTrait(r.traits, node);
                     break;
 
-                case WebNodeType.Notable:
                 case WebNodeType.Confluence:
-                    // Notable budget: <= 2 attributes, total value +6..+10, exactly 1 trait
-                    var notableKeys = node.stats.Keys.Take(2).ToList();
-                    float sum = notableKeys.Sum(k => Mathf.Max(0f, node.stats[k]));
-                    if (sum < 6f || sum > 10f)
-                    {
-                        float scale = sum > 0 ? Mathf.Clamp(8f / sum, 0.5f, 2f) : 1f;
-                        foreach (var k in notableKeys)
-                        {
-                            node.stats[k] = Mathf.Round(Mathf.Clamp(node.stats[k] * scale, 2f, 8f));
-                        }
-                    }
-                    var cleanStats = new Dictionary<string, float>();
-                    foreach (var k in notableKeys)
-                    {
-                        if (node.stats[k] > 0) cleanStats[k] = node.stats[k];
-                    }
-                    if (cleanStats.Count == 0) cleanStats[primaryAttr] = 6f;
-                    node.stats = cleanStats;
-
-                    // Ensure exactly 1 trait
-                    if (node.traits.Count == 0)
-                    {
-                        string[] traits = ThemeLexicon.Traits[primaryAttr];
-                        node.traits.Add(traits[new System.Random(node.id.GetHashCode()).Next(traits.Length)]);
-                    }
-                    else if (node.traits.Count > 1)
-                    {
-                        node.traits = new List<string> { node.traits[0] };
-                    }
-                    node.keystoneRule = null;
+                    // Keep the attributes the generator chose (they encode which sectors it joins).
+                    foreach (var kv in node.stats) r.stats[kv.Key] = kv.Value;
+                    r.traits = OneTrait(r.traits, node);
                     break;
 
                 case WebNodeType.Keystone:
-                    // Keystone budget: 1 positive (+10..+14), 1 negative (-4..-6), 1 trait, 1 rule
-                    string posKey = node.stats.Keys.FirstOrDefault(k => node.stats[k] > 0) ?? primaryAttr;
-                    string negKey = node.stats.Keys.FirstOrDefault(k => node.stats[k] < 0 && k != posKey);
-                    if (negKey == null)
-                    {
-                        negKey = Attributes.FirstOrDefault(k => k != posKey) ?? "Dexterity";
-                    }
-
-                    float posVal = Mathf.Clamp(node.stats.ContainsKey(posKey) ? node.stats[posKey] : 12f, 10f, 14f);
-                    float negVal = -Mathf.Clamp(node.stats.ContainsKey(negKey) ? Mathf.Abs(node.stats[negKey]) : 5f, 4f, 6f);
-
-                    node.stats.Clear();
-                    node.stats[posKey] = posVal;
-                    node.stats[negKey] = negVal;
-
-                    if (node.traits.Count == 0)
-                    {
-                        string[] traits = ThemeLexicon.Traits[primaryAttr];
-                        node.traits.Add(traits[new System.Random(node.id.GetHashCode()).Next(traits.Length)]);
-                    }
-                    else if (node.traits.Count > 1)
-                    {
-                        node.traits = new List<string> { node.traits[0] };
-                    }
-
-                    if (string.IsNullOrEmpty(node.keystoneRule))
-                    {
-                        node.keystoneRule = ThemeLexicon.GenericKeystoneRules[new System.Random(node.id.GetHashCode()).Next(ThemeLexicon.GenericKeystoneRules.Length)];
-                    }
+                {
+                    r.stats[sector.attr] = Mathf.Clamp(Mathf.Round(Get(parsed, sector.attr, 5)), 4, 6);
+                    string neg = parsed.Where(kv => kv.Value < 0 && kv.Key != sector.attr).Select(kv => kv.Key).FirstOrDefault()
+                              ?? node.stats.Where(kv => kv.Value < 0).Select(kv => kv.Key).FirstOrDefault()
+                              ?? Attributes.First(a => a != sector.attr && a != sector.altAttr);
+                    r.stats[neg] = -Mathf.Clamp(Mathf.Round(Mathf.Abs(Get(parsed, neg, 2))), 1, 3);
+                    r.traits = new List<string>();
+                    r.keystoneRule = string.IsNullOrWhiteSpace(info.keystoneRule) ? node.keystoneRule : info.keystoneRule.Trim();
+                    r.abilityName = string.IsNullOrWhiteSpace(info.abilityName) ? node.abilityName : info.abilityName.Trim();
                     break;
+                }
+
+                case WebNodeType.Mastery:
+                {
+                    var opts = (info.options ?? new List<string>()).Where(o => !string.IsNullOrWhiteSpace(o)).Select(o => o.Trim()).ToList();
+                    // Top up from the offline options if the AI returned fewer than three.
+                    foreach (var o in node.masteryOptions ?? new List<string>())
+                        if (opts.Count < 3 && !opts.Contains(o)) opts.Add(o);
+                    r.masteryOptions = opts.Take(3).ToList();
+                    r.traits = new List<string>();
+                    break;
+                }
             }
+            return r;
         }
+
+        static List<string> OneTrait(List<string> traits, WebNode node)
+        {
+            if (traits.Count > 0) return new List<string> { traits[0] };
+            return node.traits.Count > 0 ? new List<string> { node.traits[0] } : new List<string>();
+        }
+
+        static float Get(Dictionary<string, float> d, string key, float fallback) =>
+            d.TryGetValue(key, out float v) ? v : fallback;
 
         private static float ParseNum(object value)
         {
@@ -331,7 +267,7 @@ namespace AIROG_SkillWeb
                 if (value is string str)
                 {
                     string clean = new string(str.Where(c => char.IsDigit(c) || c == '.' || c == '-').ToArray());
-                    if (float.TryParse(clean, out float r)) return r;
+                    if (float.TryParse(clean, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float r)) return r;
                 }
             }
             catch { }

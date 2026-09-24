@@ -59,7 +59,7 @@ namespace AIROG_SkillWeb
         /// <summary>Fire-and-forget: generates (if missing and eligible) an icon for this node.</summary>
         public static void EnsureIconAsync(WebNode node)
         {
-            if (node == null || node.type == WebNodeType.Basic || HasIcon(node)) return;
+            if (node == null || node.type == WebNodeType.Basic || node.type == WebNodeType.Travel || node.IsOrigin || HasIcon(node)) return;
 
             // Already generating this node, or it failed recently — don't pile another request onto
             // the backend queue. Refresh() calls this for every visible node many times per second.
@@ -101,8 +101,7 @@ namespace AIROG_SkillWeb
                 }
 
                 succeeded = true;
-                if (SkillWebUI.Instance != null && SkillWebUI.Instance.gameObject.activeSelf)
-                    SkillWebUI.Instance.Refresh();
+                SkillWebUI.Instance?.OnIconReady(node.id);
             }
             catch (Exception ex)
             {
@@ -133,6 +132,7 @@ namespace AIROG_SkillWeb
                 WebNodeType.Keystone => "a powerful mythic rune-sigil",
                 WebNodeType.Anchor => "a glowing anchor-star emblem",
                 WebNodeType.Confluence => "a fused dual-toned emblem",
+                WebNodeType.Mastery => "an ornate circular mastery seal",
                 _ => "a small passive-skill emblem",
             };
             return $"A single centered icon: {kind} representing '{node.name}' ({node.description}). " +
