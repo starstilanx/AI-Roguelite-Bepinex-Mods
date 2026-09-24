@@ -28,9 +28,9 @@ namespace AIROG_NPCExpansion
 
             if (data.AllowSelfPreservation)
             {
-                bool wasLowHealth = npc.health < npc.GetMaxHealth() * 0.5f;
+                bool wasLowHealth = npc.GetHealth() < npc.GetMaxHealth() * 0.5f;
                 NPCSelfPreservationAutonomy.SelfPreservation(npc, data, manager);
-                if (wasLowHealth && npc.health >= npc.GetMaxHealth() * 0.5f)
+                if (wasLowHealth && npc.GetHealth() >= npc.GetMaxHealth() * 0.5f)
                     _ = NPCReputationSystem.AddReputationFromAction(npc, data, "healed themselves when nearly dead");
             }
 

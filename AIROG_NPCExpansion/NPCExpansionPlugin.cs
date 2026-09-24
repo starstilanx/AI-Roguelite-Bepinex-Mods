@@ -20,7 +20,7 @@ namespace AIROG_NPCExpansion
     {
         public const string PLUGIN_GUID = "com.airog.npcexpansion";
         public const string PLUGIN_NAME = "NPC Expansion";
-        public const string PLUGIN_VERSION = "4.4.0";
+        public const string PLUGIN_VERSION = "4.5.0";
 
         public static NPCExpansionPlugin Instance { get; private set; }
         public static string NPCDataPath => Path.Combine(Paths.PluginPath, "AIROG_NPCExpansion", "NPCData");
@@ -496,7 +496,7 @@ namespace AIROG_NPCExpansion
                 bool hasLore = NPCData.HasProfile(npc, npcData);
                 bool isAlive = npc.corpseState == GameCharacter.CorpseState.NONE;
 
-                menuItems.Add(new DropdownMenuItem("<color=#ffff00>Examine</color>", () =>
+                menuItems.Add(new DropdownMenuItem("<color=#ffff00>Dossier</color>", () =>
                 {
                     NPCExamineUI.OpenFor(npc, manager);
                     return Task.CompletedTask;
@@ -517,7 +517,7 @@ namespace AIROG_NPCExpansion
                 menuItems.Add(new DropdownMenuItem(profileLabel, async () =>
                 {
                     if (hasExtendedData)
-                        NPCUI.ShowLoreEditor(npc, manager);
+                        NPCExamineUI.OpenFor(npc, manager, NPCExamineUI.Tab.Profile, edit: true);
                     else
                         await NPCGenerator.GenerateLore(npc, manager.GetContextForQuickActions());
                 }));

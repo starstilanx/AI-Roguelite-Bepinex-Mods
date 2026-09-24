@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine;
 using Newtonsoft.Json.Linq;
@@ -62,7 +63,23 @@ namespace AIROG_NPCExpansion
                 if (context.Length > 3000) context = context.Substring(context.Length - 3000);
 
                 string playerName = (npc.manager as GameplayManager)?.playerCharacter?.pcGameEntity?.name ?? "the player";
+
+                // Private dwellings are off limits: the NPC must not be written as going to, entering
+                // or turning up at one (unless it is where they already are).
+                var forbidden = PrivateDwellingGuard.ForbiddenDwellingNames(npc);
+                var playerPlace = (npc.manager as GameplayManager)?.currentPlace;
+                bool playerAtHome = PrivateDwellingGuard.IsPrivate(playerPlace) && npc.parentPlace != playerPlace;
+                string privacyRule = "";
+                if (forbidden.Count > 0)
+                    privacyRule += $"PRIVACY RULE: These places are private homes: {string.Join(", ", forbidden.Select(n => $"'{n}'"))}. " +
+                                   $"Do NOT place, move, send or have '{npc.GetPrettyName()}' visit, enter or arrive at any of them.\n";
+                if (playerAtHome)
+                    privacyRule += $"{playerName} is inside a private home right now. '{npc.GetPrettyName()}' is NOT there and cannot see what happens inside; " +
+                                   $"describe them going about their own business elsewhere.\n";
+                if (privacyRule.Length > 0) privacyRule += "\n";
+
                 string prompt = $"You are a creative writer for a fantasy RPG. You are updating the situation for an NPC named '{npc.GetPrettyName()}'.\n" +
+                                privacyRule +
                                 $"IMPORTANT: In the context below, 'You' refers to the player character, '{playerName}'. " +
                                 $"The NPC '{npc.GetPrettyName()}' is a separate entity. Do NOT confuse the NPC with the player.\n\n" +
                                 $"The NPC's current situation:\n{data.Scenario}\n\n" +
@@ -79,6 +96,15 @@ namespace AIROG_NPCExpansion
                 );
 
                 Debug.Log($"[AIROG_NPCExpansion] UpdateScenario AI response for {npc.GetPrettyName()}: {updatedScenario}");
+
+                // Backstop for the privacy rule: models do not always obey it, so an update that still
+                // puts the NPC at someone's private home is dropped and the previous situation kept.
+                string intrusion = PrivateDwellingGuard.MentionedDwelling(updatedScenario, forbidden);
+                if (intrusion != null)
+                {
+                    Debug.Log($"[AIROG_NPCExpansion] Discarded scenario update for {npc.GetPrettyName()}: it mentions the private dwelling '{intrusion}'.");
+                    return false;
+                }
 
                 if (!string.IsNullOrEmpty(updatedScenario))
                 {

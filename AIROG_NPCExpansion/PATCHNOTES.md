@@ -2,6 +2,22 @@
 
 ---
 
+## v4.5.0: *The Dossier*
+
+- **A new NPC panel replaces the old Examine window.** Choose **Dossier** from an NPC's menu to open one window with everything the mod knows about them, split into eight sections: Overview, Profile, Mind, Bonds, Secrets, Combat, Quests and Autonomy. Press Tab and Shift+Tab to move between sections and Esc to close.
+- **Nothing behind the panel reacts while it is open.** The game is paused for input underneath it, so clicking or scrolling in the dossier can no longer trigger the game UI behind it. Pin the panel if you want to keep it open while you play.
+- **Edit profiles in place.** Switch the Profile section to Edit to change personality, background, visual description, first words, greetings, tags and the advanced card fields directly, instead of in a popup. Fields the AI actually reads are marked IN PROMPT, and changed fields are marked EDITED. Nothing is written until you press Save, and closing with unsaved changes asks whether to save or discard them.
+- **Visual descriptions can now be edited,** and saving mirrors personality, background and appearance into the game's own character sheet.
+- **See what was hidden before:** long-term memories (which you can now remove or add), relationship milestones, how the NPC feels about other characters, secrets you have uncovered, rumours they carry, techniques they taught you, equipped gear, and every quest they have given you.
+- **Act from the panel.** Talk, Give item and Trade use the game's own actions. Ask secret, Teach me, Ask for a quest and Equipment are one click away, and locked options say exactly what they need, such as "Needs Confidant (75 affinity)".
+- **Autonomy switches** (auto-equip, self-preservation, economic activity, world interaction, nemesis) now live in their own section and apply immediately. World interaction could not be toggled from the menu at all before.
+- **Step through everyone nearby** with the arrows in the header without closing the panel.
+- The old popup lore editor has been removed; **Edit Extended Profile** now opens the dossier straight into editing.
+- **NPCs respect private dwellings** (alpha game builds). The background situation updates could write a character as heading to, or turning up at, someone's private home, and the storyteller would then play that out. These updates are now told which places are private homes and to keep characters out of them, and any update that still puts a character in one is thrown away. Someone who is already inside a home, such as the person who lives there, is unaffected. NPCs also no longer help themselves to loose items inside a private home. On game builds without private dwellings nothing changes.
+- **Self-preservation never actually healed anyone.** It read an NPC's health from a field the game no longer updates, which always said zero, so every NPC counted as badly hurt and burned through their healing items, and the healing itself landed on that same dead field. NPCs now heal only when they are really below half health, and the healing sticks.
+
+---
+
 ## v4.4.0
 
 - Secrets an NPC confided in you were never passed to the storyteller. You could earn a character's deepest trust, listen to them admit something terrible, and have the story carry on as though the conversation had never happened. Secrets you have earned now shape how the AI writes that character. Secrets you have *not* earned stay sealed, so nothing can slip out that you were never told.

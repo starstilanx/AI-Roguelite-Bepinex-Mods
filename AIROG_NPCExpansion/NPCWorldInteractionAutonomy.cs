@@ -37,9 +37,12 @@ namespace AIROG_NPCExpansion
                  isFollower = manager.playerCharacter.pcGameEntity.followers.Contains(npc);
             }
 
+            // Nobody helps themselves to things lying around a private home.
+            bool inPrivateDwelling = PrivateDwellingGuard.IsPrivate(manager.currentPlace);
+
             // 1. Look for items to pick up (Smarter logic)
             // Skip looting for followers
-            if (!isFollower && npc.items.Count < 20)
+            if (!isFollower && !inPrivateDwelling && npc.items.Count < 20)
             {
                 var candidates = new List<(ThingGameEntity source, GameItem item)>();
 
