@@ -155,6 +155,9 @@ namespace AIROG_SkillWeb
                 {
                     SkillConfig = Newtonsoft.Json.JsonConvert.DeserializeObject<SkillWebConfig>(
                         File.ReadAllText(path)) ?? new SkillWebConfig();
+                    // Write back so options added since the file was created (e.g. WebSize) show up in it.
+                    File.WriteAllText(path,
+                        Newtonsoft.Json.JsonConvert.SerializeObject(SkillConfig, Newtonsoft.Json.Formatting.Indented));
                 }
                 catch (Exception ex)
                 {
