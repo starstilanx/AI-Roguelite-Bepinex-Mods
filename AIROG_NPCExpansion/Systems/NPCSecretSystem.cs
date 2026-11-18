@@ -28,7 +28,7 @@ namespace AIROG_NPCExpansion
 
             string prompt = $"NPC: {npc.GetPrettyName()}\n" +
                             $"Personality: {NPCData.GetPersonality(npc, data)}\n" +
-                            $"Scenario: {NPCData.GetBackground(npc, data)}\n" +
+                            $"Background: {NPCData.GetBackground(npc, data)}\n" +
                             $"World context: {context}\n\n" +
                             $"Generate 1-2 secrets this NPC is hiding from the world. Each must be dark, surprising, or deeply personal.\n" +
                             $"Format each secret on its own line exactly as:\n" +

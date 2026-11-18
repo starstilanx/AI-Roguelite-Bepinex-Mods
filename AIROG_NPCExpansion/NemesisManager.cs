@@ -28,7 +28,8 @@ namespace AIROG_NPCExpansion
         public static void PromoteKiller(GameCharacter killer, GameplayManager manager = null)
         {
             if (killer == null) return;
-            if (manager == null) manager = killer.manager as GameplayManager;
+            // Not killer.manager: entities that came out of the new-game menu still point at the menu.
+            if (manager == null) manager = SS.I?.hackyManager;
 
             // 1. Load or Create Data
             NPCData data = NPCData.Load(killer.uuid);
@@ -108,7 +109,7 @@ namespace AIROG_NPCExpansion
             // 5. Nemesis Flag & Loot Logic
             data.IsNemesis = true;
             if (IsNemesisLootingEnabled())
-                LootPlayer(killer, manager);
+                LootPlayer(killer, manager, data);
 
             // 6. Save
             NPCData.Save(killer.uuid, data);
@@ -125,7 +126,7 @@ namespace AIROG_NPCExpansion
                     $"They will remember this victory."));
         }
 
-        private static void LootPlayer(GameCharacter killer, GameplayManager manager)
+        private static void LootPlayer(GameCharacter killer, GameplayManager manager, NPCData data)
         {
             if (manager == null || manager.equipmentPanel == null) return;
 
@@ -138,8 +139,9 @@ namespace AIROG_NPCExpansion
 
             Debug.Log($"[Nemesis] Looting {item.GetPrettyName()} from player!");
 
-            // Remove from player equipment slot
-            victimSlot.item = null;
+            // Remove from the player. Clearing the panel's slot only blanked the tile: the item stayed
+            // in the character's equippedItems, so it was back after a reload and the nemesis had a copy.
+            item.DetachFromOwner();
 
             // Transfer to killer
             item.SetParentEnt(killer);
@@ -147,12 +149,12 @@ namespace AIROG_NPCExpansion
             if (killer.items == null) killer.items = new List<GameItem>();
             killer.items.Add(item);
 
-            // Record the trophy
-            NPCData data = NPCData.Load(killer.uuid);
+            // Record the trophy on the data being promoted (the caller saves it). Loading it again
+            // here returned null for a killer with no earlier profile, and the memory was dropped.
             if (data != null)
             {
+                if (data.LongTermMemories == null) data.LongTermMemories = new List<string>();
                 data.LongTermMemories.Add($"I took {item.GetPrettyName()} as a trophy from the player.");
-                NPCData.Save(killer.uuid, data);
             }
 
             if (manager?.gameLogView != null)

@@ -42,6 +42,13 @@ namespace AIROG_NPCExpansion
             Instance.Show(manager);
         }
 
+        public static void Hide()
+        {
+            if (Instance == null) return;
+            if (Instance._window != null) Instance._window.SetActive(false);
+            if (Instance._modalBlocker != null) Instance._modalBlocker.SetActive(false);
+        }
+
         private void Show(GameplayManager manager)
         {
             if (!NPCUI.TryResolveManager(manager, "QuestUI", out _manager)) return;

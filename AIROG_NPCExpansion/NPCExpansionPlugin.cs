@@ -20,7 +20,7 @@ namespace AIROG_NPCExpansion
     {
         public const string PLUGIN_GUID = "com.airog.npcexpansion";
         public const string PLUGIN_NAME = "NPC Expansion";
-        public const string PLUGIN_VERSION = "4.5.0";
+        public const string PLUGIN_VERSION = "4.6.0";
 
         public static NPCExpansionPlugin Instance { get; private set; }
         public static string NPCDataPath => Path.Combine(Paths.PluginPath, "AIROG_NPCExpansion", "NPCData");
@@ -67,11 +67,54 @@ namespace AIROG_NPCExpansion
             NPCExamineUI.Init();
             QuestUI.Init();
             HallOfFallenUI.Init();
+
+            // Only raises a flag: the switch can report a change from inside another mod's
+            // IsEnabled() call, mid-load, where touching UI or mod state would be unsafe.
+            ModSwitch.Subscribe(() => _switchChanged = true);
         }
+
+        private static volatile bool _switchChanged;
 
         private void Update()
         {
-            NPCUI.Update();
+            if (_switchChanged)
+            {
+                _switchChanged = false;
+                // UI only. Data for the new save is loaded by Postfix_ReadSaveFile, never from here.
+                if (!ModSwitch.Enabled) CloseAllPanels();
+            }
+            if (ModSwitch.Enabled) NPCUI.Update();
+        }
+
+        private static void CloseAllPanels()
+        {
+            try
+            {
+                NPCExamineUI.ForceClose();
+                NPCEquipmentUI.Hide();
+                QuestUI.Hide();
+                HallOfFallenUI.Hide();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[NPCExpansion] Closing panels failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Drops everything held in memory for the previous game. Runs as each game scene starts,
+        /// before the game reads a save, so a NEW game (which never goes through ReadSaveFile) and a
+        /// co-op join do not inherit the last save's NPCs, quests, taught skills or turn counter.
+        /// </summary>
+        private static void ResetSessionState()
+        {
+            NPCData.ResetSession();
+            QuestManager.AllQuests.Clear();
+            NPCTeachingSystem.PlayerTaughtSkills.Clear();
+            ScenarioUpdater.ResetSession();
+            _restockSavedItems.Clear();
+            _pendingNpcForMenu = null;
+            _lastClickedItemSlot = null;
         }
 
         // ─── Faction-Sentiment Bridge ──────────────────────────────────────────────
@@ -97,12 +140,21 @@ namespace AIROG_NPCExpansion
         /// all our systems (bark, secrets, arcs, etc.) recognise the NPC as profiled,
         /// then kicks off extended attribute/skill/ability generation in the background.
         /// </summary>
-        public static async void Postfix_GenerateImportantData(GameCharacter __instance)
+        public static async void Postfix_GenerateImportantData(GameCharacter __instance, Task __result)
         {
             try
             {
+                if (!ModSwitch.Enabled) return;
+                // The new-game menu generates character details too; there is no game to track yet.
+                if (SS.I?.hackyManager == null) return;
+                // GenerateImportantData is async: a postfix runs when it first yields, which is before
+                // the AI has answered and before importantData is assigned. Wait for the real result.
+                string saveAtStart = SS.I?.saveSubDirAsArg;
+                if (__result != null) await __result;
+                if (!string.Equals(saveAtStart, SS.I?.saveSubDirAsArg, StringComparison.Ordinal)) return;
+
                 var npc = __instance;
-                if (npc == null || npc.importantData == null) return;
+                if (npc == null || npc.importantData == null || npc.IsMainPlayer()) return;
                 if (string.IsNullOrEmpty(npc.importantData.personality)) return;
 
                 var data = NPCData.Load(npc.uuid) ?? NPCData.CreateDefault(npc.GetPrettyName());
@@ -122,8 +174,9 @@ namespace AIROG_NPCExpansion
                                   || data.Attributes.Values.All(v => v == 10);
                 if (needsExtended)
                 {
-                    string context = (npc.manager as GameplayManager)?.GetContextForQuickActions() ?? "";
-                    await NPCGenerator.GenerateLore(npc, context);
+                    string context = SS.I?.hackyManager?.GetContextForQuickActions() ?? "";
+                    // The game has just written the personality and background: keep them.
+                    await NPCGenerator.GenerateLore(npc, context, keepProfileText: true);
                 }
             }
             catch (Exception ex)
@@ -145,15 +198,31 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        [HarmonyPatch(typeof(NpcActionsHandler), "UpdateCurrentNpc")]
-        [HarmonyPostfix]
-        public static void Postfix_UpdateCurrentNpc(NpcActionsHandler __instance, GameCharacter npc)
+        // (A postfix on NpcActionsHandler.UpdateCurrentNpc used to live here, injecting the old
+        // per-NPC panel through NPCUI.TryInject. The game still has that method but nothing calls
+        // it any more - the bottom-bar talk selector replaced the old NPC view - so the patch bound
+        // and never ran. Removed; tools\patch-audit.ps1 reports such hooks as [NOCALLERS].)
+
+        // The game also receives every Esc press (GameplayManager.EscKey): it closes whichever of
+        // its own windows is open and otherwise opens the settings menu. It does not know the
+        // dossier, so the press that closed the dossier (or just left one of its text boxes) also
+        // popped the game menu. Skipped while the dossier is open or handled Esc this frame; a
+        // game modal on top keeps its normal handling. EscKey is a plain void method.
+        [HarmonyPatch(typeof(GameplayManager), "EscKey")]
+        [HarmonyPrefix]
+        public static bool Prefix_EscKey()
         {
-            if (__instance != null && npc != null)
+            try
             {
-                NPCUI.TryInject(__instance);
-                NPCUI.TryUpdateText(__instance);
+                if (MessageModal.I != null && MessageModal.I.IsShowing()) return true;
+                if (ModalWindow.I != null && ModalWindow.I.IsShowing()) return true;
+                if (NTextPromptModal.I != null && NTextPromptModal.I.IsShowing()) return true;
+
+                bool ours = (NPCExamineUI.Instance != null && NPCExamineUI.Instance.IsOpen)
+                         || NPCExamineUI.EscConsumedFrame == Time.frameCount;
+                return !ours;
             }
+            catch { return true; }
         }
 
         [HarmonyPatch(typeof(GameplayManager), "Start")]
@@ -165,6 +234,11 @@ namespace AIROG_NPCExpansion
                 // Scenario Update Hook
                 GameplayManager.TurnHappenedEvent -= ScenarioUpdater.OnTurnHappened;
                 GameplayManager.TurnHappenedEvent += ScenarioUpdater.OnTurnHappened;
+
+                // Start is async and this runs at its first yield, which is before it reads the save
+                // (see GameplayManager.StartGame), so a load refills what is cleared here.
+                try { ResetSessionState(); }
+                catch (Exception ex) { Debug.LogWarning($"[NPCExpansion] Session reset failed: {ex.Message}"); }
             }
         }
 
@@ -172,8 +246,12 @@ namespace AIROG_NPCExpansion
         [HarmonyPostfix]
         public static void Postfix_UpdateNpcConvoSelectorDropdown(GameplayManager __instance)
         {
-            if (__instance != null)
-                NPCUI.TryUpdateTextForBottomBar(__instance);
+            try
+            {
+                if (__instance != null && ModSwitch.Enabled)
+                    NPCUI.TryUpdateTextForBottomBar(__instance);
+            }
+            catch (Exception ex) { Debug.LogWarning($"[NPCExpansion] Bottom-bar update failed: {ex.Message}"); }
         }
 
         // Hook into dropdown change to maybe update text if needed
@@ -183,10 +261,12 @@ namespace AIROG_NPCExpansion
         {
              // This method runs when user selects new NPC in the bottom bar.
              // We can check the selected NPC and inject text.
-             if (__instance != null)
+             try
              {
-                 NPCUI.TryUpdateTextForBottomBar(__instance);
+                 if (__instance != null && ModSwitch.Enabled)
+                     NPCUI.TryUpdateTextForBottomBar(__instance);
              }
+             catch (Exception ex) { Debug.LogWarning($"[NPCExpansion] Bottom-bar update failed: {ex.Message}"); }
         }
 
         // Prevents the merchant restock cycle from firing on non-merchant NPCs.
@@ -197,6 +277,7 @@ namespace AIROG_NPCExpansion
         [HarmonyPrefix]
         public static bool Prefix_NeedsRestock(GameCharacter __instance, ref bool __result)
         {
+            if (!ModSwitch.Enabled) return true;
             if (!__instance.isMerchant)
             {
                 __result = false;
@@ -221,24 +302,33 @@ namespace AIROG_NPCExpansion
         [HarmonyPrefix]
         public static void Prefix_TurnHappened(GameCharacter __instance)
         {
-            if (string.IsNullOrEmpty(__instance.uuid)) return;
-            _restockSavedItems.Remove(__instance.uuid);
-            if (__instance.items == null || __instance.items.Count == 0) return;
-
-            List<GameItem> toSave;
-            if (__instance.isMerchant)
+            // Runs for every character on every turn, inside the game's turn event: must not throw.
+            try
             {
-                var data = NPCData.Load(__instance.uuid);
-                var playerUuids = data?.PlayerPlacedItemUuids ?? new HashSet<string>();
-                toSave = __instance.items.Where(i => !string.IsNullOrEmpty(i.uuid) && playerUuids.Contains(i.uuid)).ToList();
-            }
-            else
-            {
-                toSave = __instance.items.ToList();
-            }
+                if (string.IsNullOrEmpty(__instance.uuid)) return;
+                _restockSavedItems.Remove(__instance.uuid);
+                if (!ModSwitch.Enabled) return;
+                if (__instance.items == null || __instance.items.Count == 0) return;
 
-            if (toSave.Count > 0)
-                _restockSavedItems[__instance.uuid] = toSave;
+                List<GameItem> toSave;
+                if (__instance.isMerchant)
+                {
+                    var data = NPCData.Load(__instance.uuid);
+                    var playerUuids = data?.PlayerPlacedItemUuids ?? new HashSet<string>();
+                    toSave = __instance.items.Where(i => i != null && !string.IsNullOrEmpty(i.uuid) && playerUuids.Contains(i.uuid)).ToList();
+                }
+                else
+                {
+                    toSave = __instance.items.ToList();
+                }
+
+                if (toSave.Count > 0)
+                    _restockSavedItems[__instance.uuid] = toSave;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] Restock snapshot failed: {ex.Message}");
+            }
         }
 
         // After each TurnHappened: restore any items that were wiped by the restock logic.
@@ -247,32 +337,39 @@ namespace AIROG_NPCExpansion
         [HarmonyPostfix]
         public static void Postfix_TurnHappened(GameCharacter __instance)
         {
-            if (string.IsNullOrEmpty(__instance.uuid)) return;
-            if (!_restockSavedItems.TryGetValue(__instance.uuid, out var saved)) return;
-            _restockSavedItems.Remove(__instance.uuid);
-            if (saved == null || saved.Count == 0) return;
-            if (__instance.items == null) __instance.items = new List<GameItem>();
-
-            int restored = 0;
-            foreach (var item in saved)
+            try
             {
-                if (!__instance.items.Contains(item))
+                if (string.IsNullOrEmpty(__instance.uuid)) return;
+                if (!_restockSavedItems.TryGetValue(__instance.uuid, out var saved)) return;
+                _restockSavedItems.Remove(__instance.uuid);
+                if (saved == null || saved.Count == 0) return;
+                if (__instance.items == null) __instance.items = new List<GameItem>();
+
+                int restored = 0;
+                foreach (var item in saved)
                 {
-                    item.itemState = GameItem.ItemState.INVENTORY;
-                    __instance.items.Add(item);
-                    restored++;
+                    if (!__instance.items.Contains(item))
+                    {
+                        item.itemState = GameItem.ItemState.INVENTORY;
+                        __instance.items.Add(item);
+                        restored++;
+                    }
+                }
+
+                if (restored > 0)
+                {
+                    // For non-merchants whose items were wiped by an inlined NeedsRestock call,
+                    // set state to FINISHED so "Trade" doesn't trigger spurious GenerateItems().
+                    if (!__instance.isMerchant)
+                        __instance.merchantGenerationState = GameCharacter.MerchantGenerationState.FINISHED;
+
+                    string ctx = __instance.isMerchant ? "merchant" : "non-merchant NPC";
+                    Debug.Log($"[AIROG_NPCExpansion] Preserved {restored} item(s) for {ctx} {__instance.GetPrettyName()} across restock.");
                 }
             }
-
-            if (restored > 0)
+            catch (Exception ex)
             {
-                // For non-merchants whose items were wiped by an inlined NeedsRestock call,
-                // set state to FINISHED so "Trade" doesn't trigger spurious GenerateItems().
-                if (!__instance.isMerchant)
-                    __instance.merchantGenerationState = GameCharacter.MerchantGenerationState.FINISHED;
-
-                string ctx = __instance.isMerchant ? "merchant" : "non-merchant NPC";
-                Debug.Log($"[AIROG_NPCExpansion] Preserved {restored} item(s) for {ctx} {__instance.GetPrettyName()} across restock.");
+                Debug.LogWarning($"[AIROG_NPCExpansion] Restock restore failed: {ex.Message}");
             }
         }
 
@@ -285,6 +382,7 @@ namespace AIROG_NPCExpansion
         {
             try
             {
+                if (!ModSwitch.Enabled) return;
                 // Check master switch — soft-dep on GenContext; default ON if unavailable
                 bool nemesisEnabled = true;
                 try { nemesisEnabled = AIROG_GenContext.ContextManager.GetGlobalSetting("NemesisSystem"); }
@@ -305,16 +403,28 @@ namespace AIROG_NPCExpansion
 
         [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]
         [HarmonyPostfix]
-        public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+        // No injected args: WriteSaveFile's first parameter is MmCtxGetter since the 07/28 build,
+        // so declaring it as GameplayManager was an unchecked type mismatch.
+        public static void Postfix_WriteSaveFile()
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+            // Not gated by the per-save switch: a switched-off mod still keeps its files current.
+            try
             {
-                string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
-                NPCData.SaveSessionLore(saveDir);
-                QuestManager.SaveQuests();
-                NPCDeathTracker.SaveMemorial();
-                NPCTeachingSystem.SavePlayerSkills();
-                ScenarioUpdater.SaveState(saveDir);
+                // Everything held in memory belongs to the save the session started on; never write
+                // it into a folder the game has since been pointed at.
+                if (SS.I != null && NPCData.CacheBelongsToCurrentSave)
+                {
+                    string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
+                    NPCData.SaveSessionLore(saveDir);
+                    QuestManager.SaveQuests();
+                    NPCDeathTracker.SaveMemorial();
+                    NPCTeachingSystem.SavePlayerSkills();
+                    ScenarioUpdater.SaveState(saveDir);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] Saving mod data failed: {ex.Message}");
             }
         }
 
@@ -322,10 +432,18 @@ namespace AIROG_NPCExpansion
         [HarmonyPostfix]
         public static void Postfix_ReadSaveFile(string saveSubDir, GameSaveData __result)
         {
-            if (__result != null && SS.I != null)
+            try
             {
+                if (__result == null || SS.I == null) return;
+                // The main menu also calls ReadSaveFile, to rebuild a missing preview for ANY save
+                // in the list. Only the save actually being loaded may replace our state.
+                if (!string.Equals(saveSubDir, SS.I.saveSubDirAsArg, StringComparison.Ordinal)) return;
+
                 string saveDir = Path.Combine(SS.I.saveTopLvlDir, saveSubDir);
                 NPCData.LoadSessionLore(saveDir);
+                // No-op unless the load just migrated old entries; then GenContext, which reads the
+                // file rather than our memory, sees the new shape from the first prompt on.
+                NPCData.FlushSessionLore();
                 QuestManager.LoadQuests(saveDir);
                 NPCTeachingSystem.LoadPlayerSkills(saveDir);
                 ScenarioUpdater.LoadState(saveDir);
@@ -334,6 +452,11 @@ namespace AIROG_NPCExpansion
                 // Sync all loaded affinities into game sentiment values
                 foreach (var kvp in NPCData.LoreCache)
                     SyncAffinityToGame(kvp.Key, kvp.Value);
+            }
+            catch (Exception ex)
+            {
+                // Must not escape: this runs inside the game's own load.
+                Debug.LogWarning($"[AIROG_NPCExpansion] Loading mod data failed: {ex.Message}");
             }
         }
 
@@ -344,85 +467,208 @@ namespace AIROG_NPCExpansion
         // handler (MpCommands.cs) calls DoSellItemToMerchant directly for a non-host client's
         // sale, bypassing SellItemToMerchant entirely. DoSellItemToMerchant is the common
         // downstream of both paths, so patching it here covers host-local and relayed sales alike.
+        // Items already on the merchant when a sale starts. Since the 11/18 build items stack, so the
+        // thing that lands on the merchant can be a split-off copy with a new uuid, not the `item`
+        // argument (which, for a partial sale, is the stack the player keeps).
+        private static HashSet<GameItem> _merchantItemsBeforeSale;
+
+        [HarmonyPatch(typeof(GameplayManager), "DoSellItemToMerchant")]
+        [HarmonyPrefix]
+        public static void Prefix_SellItem(GameCharacter merchant)
+        {
+            _merchantItemsBeforeSale = null;
+            try
+            {
+                if (ModSwitch.Enabled && merchant?.items != null)
+                    _merchantItemsBeforeSale = new HashSet<GameItem>(merchant.items);
+            }
+            catch { /* tracking only */ }
+        }
+
         [HarmonyPatch(typeof(GameplayManager), "DoSellItemToMerchant")]
         [HarmonyPostfix]
         public static void Postfix_SellItem(GameItem item, GameCharacter merchant)
         {
-            if (item == null || merchant == null) return;
-
-            var npc = merchant;
-            var data = NPCData.Load(npc.uuid);
-            if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
-
-            data.ChangeAffinity(3, $"Sold {item.GetPrettyName()} to them.");
-            if (!string.IsNullOrEmpty(item.uuid))
-                data.PlayerPlacedItemUuids.Add(item.uuid);
-            NPCData.Save(npc.uuid, data);
-            SyncAffinityToGame(npc.uuid, data);
-        }
-
-        [HarmonyPatch(typeof(GameplayManager), "ProcessInteractionInfoNoTryStr")]
-        [HarmonyPostfix]
-        public static void Postfix_ProcessInteractionInfoNoTryStr(InteractionInfo interactionInfo)
-        {
-            if (interactionInfo == null || interactionInfo.interacteeInfo == null || interactionInfo.interacterInfo == null) return;
-
-            if (interactionInfo.interacteeInfo.interacteeEntity is GameCharacter npc)
+            var before = _merchantItemsBeforeSale;
+            _merchantItemsBeforeSale = null;
+            try
             {
+                if (!ModSwitch.Enabled) return;
+                if (item == null || merchant == null) return;
+
+                var npc = merchant;
                 var data = NPCData.Load(npc.uuid);
                 if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
 
-                var interType = interactionInfo.interacterInfo.interacterType;
-                int oldAffinity = data.Affinity; // capture before ChangeAffinity
-                int affinityDelta = 0;
+                int oldAffinity = data.Affinity;
+                data.ChangeAffinity(3, $"Sold {item.GetPrettyName()} to them.");
+                if (before != null && npc.items != null)
+                {
+                    foreach (var sold in npc.items)
+                        if (sold != null && !before.Contains(sold) && !string.IsNullOrEmpty(sold.uuid))
+                            data.PlayerPlacedItemUuids.Add(sold.uuid);
+                }
+                NPCData.Save(npc.uuid, data);
+                SyncAffinityToGame(npc.uuid, data);
 
-                if (interType == InteracterInfo.InteracterType.OFFER_ITEM)
-                {
-                    var item = interactionInfo.interacterInfo.item;
-                    affinityDelta = 10;
-                    data.ChangeAffinity(affinityDelta, $"Received {item?.GetPrettyName() ?? "an item"} as a gift.");
-                }
-                else if (interType == InteracterInfo.InteracterType.TXT_INPUT || interType == InteracterInfo.InteracterType.INTERACT)
-                {
-                    affinityDelta = 1;
-                    data.ChangeAffinity(affinityDelta, "Spent time talking to them.");
-                }
-                else if (interType == InteracterInfo.InteracterType.ATTACK_WITH_ITEM || interType == InteracterInfo.InteracterType.ABILITY)
-                {
-                    affinityDelta = -10;
-                    data.ChangeAffinity(affinityDelta, $"Was attacked by the player with {interactionInfo.interacterInfo.item?.GetPrettyName() ?? "something"}.");
-                }
+                var manager = SS.I?.hackyManager;
+                if (manager != null) RelationshipArcSystem.CheckArcAdvancement(npc, data, manager, oldAffinity);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] Sale tracking failed: {ex.Message}");
+            }
+        }
 
+        // Every player action on an NPC (talk, gift, attack) feeds affinity, interaction history,
+        // arc milestones, ripples, gossip and death tracking from here.
+        //
+        // This used to be a postfix on ProcessInteractionInfoNoTryStr. Since the 07/28 multiplayer
+        // build the game calls ProcessTurnNoTryStr directly and the old method is a wrapper nothing
+        // calls, so none of the above ever happened and the dossier's Bonds tab stayed empty.
+        [HarmonyPatch(typeof(GameplayManager), "ProcessTurnNoTryStr")]
+        [HarmonyPostfix]
+        public static void Postfix_ProcessTurnNoTryStr(List<TurnAction> batch, Task<GameEventResult> __result)
+        {
+            try
+            {
+                if (!ModSwitch.Enabled || batch == null) return;
+
+                // The method is async, so this runs at its first yield: before the turn resolves.
+                // Health is read now so the handler can tell afterwards whether the NPC was hurt.
+                var pending = new List<(InteractionInfo info, GameCharacter npc, long hpBefore, bool wasHostile)>();
+                foreach (var action in batch)
+                {
+                    var info = action?.info;
+                    if (info?.interacterInfo == null) continue;
+                    // Player characters (your own, or another player's in co-op) are not NPCs.
+                    if (info.interacteeInfo?.interacteeEntity is GameCharacter npc && !npc.IsMainPlayer() && !npc.IsMpOwnedPc())
+                        pending.Add((info, npc, npc.GetHealth(), npc.IsEnemyType()));
+                }
+                _ = ApplyInteractionsWhenTurnEnds(pending, __result);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] Interaction tracking failed: {ex.Message}");
+            }
+        }
+
+        private static async Task ApplyInteractionsWhenTurnEnds(
+            List<(InteractionInfo info, GameCharacter npc, long hpBefore, bool wasHostile)> pending, Task<GameEventResult> turn)
+        {
+            try
+            {
+                string saveAtStart = SS.I?.saveSubDirAsArg;
+                // A null result is an action the game blocked as implausible: nothing happened.
+                GameEventResult result = turn != null ? await turn : null;
+                if (result == null) return;
+                var manager = SS.I?.hackyManager;
+                if (manager == null || !ModSwitch.Enabled) return;
+                if (!string.Equals(saveAtStart, SS.I.saveSubDirAsArg, StringComparison.Ordinal)) return;
+
+                foreach (var (info, npc, hpBefore, wasHostile) in pending)
+                    ApplyInteraction(info, npc, hpBefore, wasHostile, manager);
+                ApplyStoryOpinions(result, manager);
+                NPCData.FlushSessionLore();
+
+                // Quest completion is judged on the finished story text of the turn. (It used to read
+                // the raw AI reply from a patch on AIAsker.GenerateTxtNoTryStrStyle: that is JSON in the
+                // unified flow, and turns sent with a scene image go through a different method entirely.)
+                string story = result.storyTurn?.resultingStoryStr;
+                if (!string.IsNullOrWhiteSpace(story) && QuestManager.HasActiveQuests)
+                    _ = QuestManager.CheckCompletion(story, manager);
+            }
+            catch (OperationCanceledException) { /* the player cancelled the turn */ }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AIROG_NPCExpansion] Interaction tracking failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// The storyteller's own verdicts on how a turn changed an NPC's opinion of the player (the
+        /// "npc_sentiments" entries behind the game's "sentiment +5" lines) also move our affinity.
+        /// Without this only actions aimed at an NPC through the talk dropdown or a menu counted, and
+        /// someone who plays in free text never saw the relationship arc move at all.
+        /// </summary>
+        private static void ApplyStoryOpinions(GameEventResult result, GameplayManager manager)
+        {
+            if (result.npcsOpinionChanges == null) return;
+            foreach (var change in result.npcsOpinionChanges)
+            {
+                var npc = change.Key?.apiVal;
+                int delta = change.Value.Item1;
+                var toward = change.Value.Item2; // null = toward the acting player
+                if (npc == null || delta == 0 || string.IsNullOrEmpty(npc.uuid)) continue;
+                if (npc.IsMainPlayer() || npc.IsMpOwnedPc()) continue;
+                if (toward != null && !toward.IsMainPlayer()) continue; // our affinity is "toward you" only
+
+                var data = NPCData.Load(npc.uuid) ?? NPCData.CreateDefault(npc.GetPrettyName());
+                int oldAffinity = data.Affinity;
+                data.ChangeAffinity(delta, delta > 0
+                    ? $"Thought better of you after what happened (+{delta})."
+                    : $"Thought worse of you after what happened ({delta}).");
+                NPCData.Save(npc.uuid, data);
+                RelationshipArcSystem.CheckArcAdvancement(npc, data, manager, oldAffinity);
+                if (npc.corpseState == GameCharacter.CorpseState.NONE)
+                    NPCSecretSystem.CheckAutoReveal(npc, data, manager);
+            }
+        }
+
+        private static void ApplyInteraction(InteractionInfo interactionInfo, GameCharacter npc, long hpBefore, bool wasHostile, GameplayManager manager)
+        {
+            var data = NPCData.Load(npc.uuid);
+            if (data == null) data = NPCData.CreateDefault(npc.GetPrettyName());
+
+            var interType = interactionInfo.interacterInfo.interacterType;
+            int oldAffinity = data.Affinity; // capture before ChangeAffinity
+            int affinityDelta = 0;
+            bool died = npc.corpseState != GameCharacter.CorpseState.NONE;
+            bool hurt = died || npc.GetHealth() < hpBefore;
+            bool attacked = false;
+
+            if (interType == InteracterInfo.InteracterType.OFFER_ITEM)
+            {
+                var item = interactionInfo.interacterInfo.item;
+                affinityDelta = 10;
+                data.ChangeAffinity(affinityDelta, $"Received {item?.GetPrettyName() ?? "an item"} as a gift.");
+            }
+            else if (interType == InteracterInfo.InteracterType.TXT_INPUT || interType == InteracterInfo.InteracterType.INTERACT)
+            {
+                affinityDelta = 1;
+                data.ChangeAffinity(affinityDelta, "Spent time talking to them.");
+            }
+            // An ability is not always an attack (heals and buffs use the same action), so it only
+            // counts against the player when it actually hurt the NPC.
+            else if (interType == InteracterInfo.InteracterType.ATTACK_WITH_ITEM
+                     || (interType == InteracterInfo.InteracterType.ABILITY && hurt))
+            {
+                attacked = true;
+                affinityDelta = -10;
+                string weapon = interactionInfo.interacterInfo.item?.GetPrettyName()
+                                ?? interactionInfo.interacterInfo.ability?.GetPrettyName() ?? "something";
+                data.ChangeAffinity(affinityDelta, $"Was attacked by the player with {weapon}.");
+            }
+
+            if (affinityDelta != 0)
+            {
                 NPCData.Save(npc.uuid, data);
                 SyncAffinityToGame(npc.uuid, data);
 
                 // Social Ripple + Gossip + Arc Advancement + Secret Auto-Reveal
-                if (affinityDelta != 0)
-                {
-                    var manager = SS.I?.hackyManager;
-                    if (manager != null)
-                    {
-                        SocialRippleSystem.Process(npc.uuid, npc.GetPrettyName(), affinityDelta, manager);
-                        WorldGossipSystem.SeedPlayerGossip(npc.uuid, npc.GetPrettyName(), affinityDelta);
-                        RelationshipArcSystem.CheckArcAdvancement(npc, data, manager, oldAffinity);
-                        NPCSecretSystem.CheckAutoReveal(npc, data, manager);
-                    }
-                }
-
-                // Death Detection: if the NPC just died (corpseState changed to non-NONE)
-                if (npc.corpseState != GameCharacter.CorpseState.NONE && !data.IsDeceased)
-                {
-                    var manager = SS.I?.hackyManager;
-                    if (manager != null)
-                    {
-                        string killerName = interType == InteracterInfo.InteracterType.ATTACK_WITH_ITEM ||
-                                            interType == InteracterInfo.InteracterType.ABILITY
-                            ? "the player"
-                            : "unknown causes";
-                        NPCDeathTracker.OnNpcDied(npc, killerName, ScenarioUpdater.GlobalTurn, manager, data);
-                    }
-                }
+                SocialRippleSystem.Process(npc.uuid, npc.GetPrettyName(), affinityDelta, manager);
+                // Fighting a hostile is not a scandal: without this every attack on a monster became
+                // "Player acted against <monster>" and cost affinity with each NPC the rumour reached.
+                // (Judged on how they stood BEFORE the turn: a friend you attack turns hostile during it.)
+                if (!wasHostile)
+                    WorldGossipSystem.SeedPlayerGossip(npc.uuid, npc.GetPrettyName(), affinityDelta);
+                RelationshipArcSystem.CheckArcAdvancement(npc, data, manager, oldAffinity);
+                if (!died) NPCSecretSystem.CheckAutoReveal(npc, data, manager);
             }
+
+            // Death Detection: the NPC did not survive this turn
+            if (died && !data.IsDeceased)
+                NPCDeathTracker.OnNpcDied(npc, attacked ? "the player" : "unknown causes", ScenarioUpdater.GlobalTurn, manager, data);
         }
 
         // --- NPC Action Menu Injection ---
@@ -434,7 +680,25 @@ namespace AIROG_NPCExpansion
         [HarmonyPrefix]
         public static void Prefix_PresentNpcMenu(GameCharacter npc)
         {
-            _pendingNpcForMenu = npc;
+            // The game uses this same menu for the player's own portrait and, in co-op, for other
+            // players' characters. Those are not NPCs: no dossier, quests or gear for them.
+            _pendingNpcForMenu = null;
+            try
+            {
+                if (ModSwitch.Enabled && npc != null && !npc.IsMainPlayer() && !npc.IsMpOwnedPc())
+                    _pendingNpcForMenu = npc;
+            }
+            catch { /* menu opens without our entries */ }
+        }
+
+        // PresentNpcMenu opens no menu at all when the character has no actions (clicking your own
+        // portrait, or any character while input is locked). Without this the pending NPC survived
+        // and its Dossier/Quest entries were appended to the next unrelated menu (an item, a chest).
+        [HarmonyPatch(typeof(GameplayManager), "PresentNpcMenu")]
+        [HarmonyPostfix]
+        public static void Postfix_PresentNpcMenu()
+        {
+            _pendingNpcForMenu = null;
         }
 
         // --- Gear System Helper ---
@@ -442,9 +706,31 @@ namespace AIROG_NPCExpansion
 
         [HarmonyPatch(typeof(GameplayManager), "OnItemSlotClicked")]
         [HarmonyPrefix]
-        public static void Prefix_OnItemSlotClicked(ItemSlot itemSlot)
+        public static bool Prefix_OnItemSlotClicked(ItemSlot itemSlot)
         {
-            _lastClickedItemSlot = itemSlot;
+            _lastClickedItemSlot = null;
+            try
+            {
+                // Slots in our own gear window are clones of the game's inventory slot, so a click on
+                // one also reaches this handler, which would open the PLAYER's equip/use/drop menu for
+                // an item the NPC is holding. The window handles its own clicks.
+                var gear = NPCEquipmentUI.Instance;
+                if (itemSlot != null && gear != null && gear._window != null && itemSlot.transform.IsChildOf(gear._window.transform))
+                    return false;
+
+                if (ModSwitch.Enabled) _lastClickedItemSlot = itemSlot;
+            }
+            catch { /* fall through to the game's handler */ }
+            return true;
+        }
+
+        // The item menu, when there is one, opens inside OnItemSlotClicked. A click that opens none
+        // (right click, merchant stock) must not leave its slot behind for a later menu to pick up.
+        [HarmonyPatch(typeof(GameplayManager), "OnItemSlotClicked")]
+        [HarmonyPostfix]
+        public static void Postfix_OnItemSlotClicked()
+        {
+            _lastClickedItemSlot = null;
         }
 
         private static GameCharacter GetCurrentlySelectedNpc(GameplayManager manager)
@@ -489,6 +775,11 @@ namespace AIROG_NPCExpansion
             // --- NPC action menu injection ---
             var npc = _pendingNpcForMenu;
             _pendingNpcForMenu = null;
+            if (!ModSwitch.Enabled || menuItems == null)
+            {
+                _lastClickedItemSlot = null;
+                return;
+            }
             if (npc != null)
             {
                 var manager = __instance.manager ?? SS.I?.hackyManager;
@@ -519,7 +810,11 @@ namespace AIROG_NPCExpansion
                     if (hasExtendedData)
                         NPCExamineUI.OpenFor(npc, manager, NPCExamineUI.Tab.Profile, edit: true);
                     else
-                        await NPCGenerator.GenerateLore(npc, manager.GetContextForQuickActions());
+                    {
+                        // Fills in stats, traits and goals around whatever personality/background
+                        // already exists; only the dossier's Regenerate rewrites those two.
+                        await NPCGenerator.GenerateLore(npc, manager?.GetContextForQuickActions(), keepProfileText: true);
+                    }
                 }));
 
                 if (isAlive && !npc.IsEnemyType())
@@ -534,7 +829,8 @@ namespace AIROG_NPCExpansion
                     {
                         menuItems.Add(new DropdownMenuItem("<color=#ffd700>Accept Quest</color>", async () =>
                         {
-                            await QuestManager.GenerateQuest(npc, npcData, manager);
+                            // npcData is null for an NPC the game profiled itself; the quest prompt needs an entry.
+                            await QuestManager.GenerateQuest(npc, NPCData.LoadOrCreate(npc), manager);
                         }));
                     }
 
@@ -578,7 +874,10 @@ namespace AIROG_NPCExpansion
             var itemManager = __instance.manager ?? SS.I?.hackyManager;
             var currentNpc = GetCurrentlySelectedNpc(itemManager);
 
-            if (currentNpc != null && !currentNpc.IsEnemyType())
+            // Not for player characters or playable party members: those have a real inventory the
+            // game moves items into itself, and our gift lands in the separate NPC gear list.
+            if (currentNpc != null && !currentNpc.IsEnemyType()
+                && !currentNpc.IsMainPlayer() && !currentNpc.IsMpOwnedPc() && !currentNpc.IsPlayable())
             {
                 string giveText = $"Give to {currentNpc.GetPrettyName()}";
                 if (!menuItems.Any(m => m.menuItemText.Contains("Give to") || m.menuItemText.Contains("<color=#00ff00>")))
@@ -600,7 +899,9 @@ namespace AIROG_NPCExpansion
         [HarmonyPrefix]
         public static bool Prefix_HandleEnemyInjury(EnemyActionsHandler __instance, GameCharacter ene, long damage, ref bool __result)
         {
-            if (ene == null) 
+            if (!ModSwitch.Enabled) return true; // no gear effects: let the game's own method run
+
+            if (ene == null)
             {
                 __result = false;
                 return false;
@@ -659,19 +960,20 @@ namespace AIROG_NPCExpansion
         [HarmonyPostfix]
         public static void Postfix_GetPlayerBarDmg(CauseOfEvent causeOfEvent, ref long __result, GameplayManager __instance)
         {
+            if (!ModSwitch.Enabled) return;
             if (causeOfEvent != null && causeOfEvent.currentEntity is GameCharacter npc)
             {
                 var data = NPCData.Load(npc.uuid);
-                if (data != null && data.EquippedUuids.TryGetValue("WEAPON1", out string weaponUuid))
+                if (data != null && data.EquippedUuids != null && npc.items != null && data.EquippedUuids.TryGetValue("WEAPON1", out string weaponUuid))
                 {
-                    var weapon = npc.items.Find(i => i.uuid == weaponUuid);
+                    var weapon = npc.items.Find(i => i != null && i.uuid == weaponUuid);
                     if (weapon != null)
                     {
                         var difficulty = __instance.GetDifficulty();
                         long weaponDmg = Utils.CalculatePlayerDamage(npc.level, new CauseOfEvent(weapon), npc.level, difficulty);
                         long baseDmg = Utils.CalculatePlayerDamage(npc.level, new CauseOfEvent(npc), npc.level, difficulty);
                         
-                        if (weaponDmg > baseDmg)
+                        if (baseDmg > 0 && weaponDmg > baseDmg)
                         {
                             double ratio = (double)weaponDmg / baseDmg;
                             long oldDmg = __result;
@@ -686,53 +988,16 @@ namespace AIROG_NPCExpansion
 
         // REMOVED: Postfix_GetDetailsForPromptStr logic moved to AIROG_GenContext per architecture guidelines.
 
-        // ─── Quest Completion Observer ─────────────────────────────────────────────
-        // Observes story results (STORY_COMPLETER / UNIFIED) to auto-detect quest completion.
-        // Does NOT modify the result — read-only observation.
-        [HarmonyPatch(typeof(AIAsker), nameof(AIAsker.GenerateTxtNoTryStrStyle))]
-        [HarmonyPostfix]
-        public static void Postfix_StoryCompletionObserver(
-            System.Threading.Tasks.Task<string> __result,
-            AIAsker.ChatGptPromptType chatGptPromptType)
-        {
-            if (chatGptPromptType != AIAsker.ChatGptPromptType.STORY_COMPLETER &&
-                chatGptPromptType != AIAsker.ChatGptPromptType.UNIFIED) return;
-            if (!QuestManager.HasActiveQuests) return;
-            _ = ObserveStoryForQuests(__result);
-        }
-
-        private static async System.Threading.Tasks.Task ObserveStoryForQuests(
-            System.Threading.Tasks.Task<string> resultTask)
-        {
-            try
-            {
-                string text = await resultTask;
-                if (string.IsNullOrEmpty(text)) return;
-                var manager = SS.I?.hackyManager;
-                if (manager != null) _ = QuestManager.CheckCompletion(text, manager);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[NPCExpansion] Quest observer error: {ex.Message}");
-            }
-        }
-
-
         [HarmonyPatch(typeof(GameplayManager), "GetCharsForNpcConvoSelectorDropdown")]
         [HarmonyPrefix]
         public static bool Prefix_GetCharsForNpcConvoSelectorDropdown(GameplayManager __instance, ref List<GameCharacter> __result)
         {
             if (__instance.currentPlace == null)
             {
-                // If currentPlace is null, return just followers (if any) or an empty list
-                if (__instance.playerCharacter?.pcGameEntity?.followers != null)
-                {
-                    __result = __instance.playerCharacter.pcGameEntity.followers.ToList();
-                }
-                else
-                {
-                    __result = new List<GameCharacter>();
-                }
+                // If currentPlace is null, return just followers (if any) or an empty list.
+                // scenarioState.followers is the live list; playerCharacter.pcGameEntity is the
+                // legacy player object and is null on current saves.
+                __result = __instance.scenarioState?.followers?.ToList() ?? new List<GameCharacter>();
                 return false; // Skip original method
             }
             return true; // Run original method
@@ -743,20 +1008,30 @@ namespace AIROG_NPCExpansion
         {
             if (item == null || npc == null || manager == null) return;
 
+            // The gift turn that ran just before this can consume the item or merge it into another
+            // stack (stacks are new in the 11/18 build); either way the object has been torn down.
+            if (string.IsNullOrEmpty(item.uuid) || SS.I?.uuidToGameEntityMap == null || !SS.I.uuidToGameEntityMap.ContainsKey(item.uuid))
+            {
+                Debug.Log("[AIROG_NPCExpansion] Item no longer exists after the gift turn; nothing left to hand over.");
+                return;
+            }
+
             Debug.Log($"[AIROG_NPCExpansion] Transferring {item.GetPrettyName()} to {npc.GetPrettyName()} directly.");
 
-            // 1. Remove from Player/World Inventory context
-            // Using REMOVE_BUT_KEEP_IN_CTX ensures it's not deleted from memory, just from the list
-            manager.inventory.RemoveItemIfExists(item.uuid);
-            
+            // 1. Take it away from whoever holds it now. inventory.RemoveItemIfExists only removes the
+            // inventory panel's tile; the item stayed in the owner's real inventory (invItems /
+            // equippedItems) and came back on the next load, so every gift duplicated the item.
+            // DetachFromOwner is what the game's own transfers use; it also refreshes the panels.
+            item.DetachFromOwner();
+
             // 2. Update Item Entity Data
             item.itemState = GameItem.ItemState.INVENTORY;
-            item.parentEnt = npc; 
+            item.parentEnt = npc;
             item.SetParentEnt(npc);
-            
+
             // 3. Add to NPC
             if (npc.items == null) npc.items = new List<GameItem>();
-            npc.items.Add(item);
+            if (!npc.items.Contains(item)) npc.items.Add(item);
 
             // Track as player-placed so it survives merchant restock wipes
             if (!string.IsNullOrEmpty(item.uuid))
@@ -768,8 +1043,50 @@ namespace AIROG_NPCExpansion
 
             // 4. Force UI Refresh
             manager.inventory.RefreshInvDisplay();
-            
+
             Debug.Log($"[AIROG_NPCExpansion] Transfer complete. NPC now has {npc.items.Count} items.");
+        }
+    }
+
+    /// <summary>
+    /// The per-save master switch: the "NPC Expansion" row of GenContext's Mods checklist.
+    /// GenContext is a soft dependency, so every touch of its types lives in its own
+    /// non-inlined method behind a try/catch; when the assembly is missing the mod is simply on.
+    /// </summary>
+    internal static class ModSwitch
+    {
+        private static bool _unavailable;
+
+        public static bool Enabled
+        {
+            get
+            {
+                if (_unavailable) return true;
+                try { return Query(); }
+                catch { _unavailable = true; return true; }
+            }
+        }
+
+        /// <summary>Calls <paramref name="onChanged"/> when this mod's switch flips or another save's switches load. May be raised mid-load and off the main thread: only set a flag in it.</summary>
+        public static void Subscribe(Action onChanged)
+        {
+            if (_unavailable) return;
+            try { DoSubscribe(onChanged); }
+            catch { _unavailable = true; }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool Query() =>
+            AIROG_GenContext.ModToggles.IsEnabled(AIROG_GenContext.ModToggles.Keys.NPCExpansion);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void DoSubscribe(Action onChanged)
+        {
+            AIROG_GenContext.ModToggles.Changed += (key, enabled) =>
+            {
+                if (key == AIROG_GenContext.ModToggles.Keys.NPCExpansion) onChanged();
+            };
+            AIROG_GenContext.ModToggles.Reloaded += onChanged;
         }
     }
 }

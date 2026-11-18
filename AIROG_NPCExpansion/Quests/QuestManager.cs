@@ -44,6 +44,9 @@ namespace AIROG_NPCExpansion
                     AIAsker.ChatGptPostprocessingType.NONE);
 
                 if (string.IsNullOrEmpty(result)) return null;
+                // AllQuests belongs to whichever save is loaded NOW; drop the quest if the player
+                // left this NPC's save while the AI was answering.
+                if (manager != SS.I?.hackyManager || (data != null && !data.IsFromCurrentSave)) return null;
 
                 var quest = new QuestData
                 {
@@ -135,6 +138,9 @@ namespace AIROG_NPCExpansion
                     AIAsker.ChatGptPostprocessingType.NONE);
 
                 if (string.IsNullOrEmpty(answer)) return;
+                // The game left this scene (other save, main menu) while the AI was answering:
+                // these quests and this manager belong to a session that is gone.
+                if (manager == null || manager != SS.I?.hackyManager || !ModSwitch.Enabled) return;
 
                 foreach (var line in answer.Split('\n'))
                 {
@@ -161,9 +167,11 @@ namespace AIROG_NPCExpansion
         {
             quest.Status = QuestStatus.Completed;
 
-            // Gold reward
-            if (quest.RewardGold > 0 && manager.playerCharacter?.pcGameEntity != null)
-                manager.playerCharacter.pcGameEntity.numGold += quest.RewardGold;
+            // Gold reward. IncrGold pays the player's live character and refreshes the gold display;
+            // playerCharacter.pcGameEntity is the legacy player object (null on current saves), so
+            // paying into it meant quest gold was announced but never received.
+            if (quest.RewardGold > 0 && manager.playerCharacter?.GetPcGameCharacter() != null)
+                manager.playerCharacter.IncrGold(quest.RewardGold);
 
             // Affinity reward + memory
             if (!string.IsNullOrEmpty(quest.GiverId))
@@ -175,12 +183,16 @@ namespace AIROG_NPCExpansion
                     var data = NPCData.Load(giver.uuid);
                     if (data != null)
                     {
+                        int oldAffinity = data.Affinity;
                         data.ChangeAffinity(quest.RewardAffinity, $"Player completed quest: {quest.ObjectiveText}");
                         if (data.LongTermMemories == null) data.LongTermMemories = new System.Collections.Generic.List<string>();
                         data.LongTermMemories.Add($"The player fulfilled my quest: {quest.ObjectiveText}");
                         while (data.LongTermMemories.Count > 10) data.LongTermMemories.RemoveAt(0);
                         NPCData.Save(giver.uuid, data);
                         NPCExpansionPlugin.SyncAffinityToGame(giver.uuid, data);
+                        // A quest reward is the biggest single affinity jump there is; it used to
+                        // cross relationship stages without the milestone ever being recorded.
+                        RelationshipArcSystem.CheckArcAdvancement(giver, data, manager, oldAffinity);
                     }
                 }
             }

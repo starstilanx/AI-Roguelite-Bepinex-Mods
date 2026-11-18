@@ -95,6 +95,7 @@ namespace AIROG_NPCExpansion
                     NPCExpansionPlugin.SyncAffinityToGame(targetNpc.uuid, targetData);
                 }
 
+                RumorNetwork.GrowBond(npc, data, targetNpc, targetData);
                 NPCData.Save(targetNpc.uuid, targetData);
                 Debug.Log($"[GossipSystem] {npc.GetPrettyName()} → {targetNpc.GetPrettyName()}: '{spread}' (Δ{delta:+#;-#;0})");
             }

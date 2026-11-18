@@ -39,6 +39,30 @@ namespace AIROG_NPCExpansion
             }
         }
 
+        // Place.parentPlace and GameCharacter.parentPlace are legacy fields: the game only fills them
+        // when it hydrates an old save and never keeps them current. Walking them meant the loops
+        // below only ever looked at the place itself, and every character counted as being nowhere.
+        // The live tree hangs off the parent entity.
+        private static Place ParentOf(Place place) => place?.parentInGameEnt?.ParentPl();
+
+        /// <summary>
+        /// Where the character actually is. Party members are not children of any place, so for
+        /// them it is wherever the player is.
+        /// </summary>
+        public static Place PlaceOf(GameCharacter npc)
+        {
+            if (npc == null) return null;
+            try
+            {
+                if (npc.IsInParty()) return SS.I?.hackyManager?.currentPlace;
+                return npc.parentInGameEnt?.ParentPl();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         /// <summary>True if the place, or any place it sits inside (a room in a house), is a private dwelling.</summary>
         public static bool IsPrivate(Place place)
         {
@@ -47,7 +71,7 @@ namespace AIROG_NPCExpansion
             try
             {
                 int guard = 0;
-                for (var p = place; p != null && guard < 16; p = p.parentPlace, guard++)
+                for (var p = place; p != null && guard < 16; p = ParentOf(p), guard++)
                     if (f.GetValue(p) is bool b && b) return true;
             }
             catch (Exception ex)
@@ -64,28 +88,33 @@ namespace AIROG_NPCExpansion
             if (f == null || place == null) return null;
             Place found = null;
             int guard = 0;
-            for (var p = place; p != null && guard < 16; p = p.parentPlace, guard++)
+            for (var p = place; p != null && guard < 16; p = ParentOf(p), guard++)
                 if (f.GetValue(p) is bool b && b) found = p;
             return found;
         }
 
         /// <summary>
         /// Names of every private dwelling in the world except the one <paramref name="npc"/> is
-        /// currently inside (someone already at home may stay there).
+        /// currently inside (someone already at home may stay there), rooms of that home included.
         /// </summary>
         public static List<string> ForbiddenDwellingNames(GameCharacter npc)
         {
             var names = new List<string>();
             if (Field == null || SS.I?.uuidToGameEntityMap == null) return names;
             Place own = null;
-            try { own = DwellingOf(npc?.parentPlace); } catch { }
+            try { own = DwellingOf(PlaceOf(npc)); } catch { }
 
             try
             {
-                foreach (var ent in SS.I.uuidToGameEntityMap.Values)
+                // The game locks this map whenever it adds entities, which it does from background tasks.
+                List<Place> places;
+                lock (SS.I.uuidToGameEntityMap)
+                    places = SS.I.uuidToGameEntityMap.Values.OfType<Place>().ToList();
+
+                foreach (var pl in places)
                 {
-                    if (!(ent is Place pl) || pl == own) continue;
                     if (!(Field.GetValue(pl) is bool b) || !b) continue;
+                    if (own != null && (pl == own || DwellingOf(pl) == own)) continue;
                     string n = pl.GetPrettyName();
                     if (!string.IsNullOrWhiteSpace(n) && !names.Contains(n)) names.Add(n.Trim());
                 }

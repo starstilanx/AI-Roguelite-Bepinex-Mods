@@ -18,8 +18,9 @@ namespace AIROG_NPCExpansion
             // --- ENEMY HOSTILITY EARLY BAIL-OUT ---
             // Hostile enemies should NOT be casually examining objects when the player is present.
             // They should be focused on combat, not admiring art or warming by fires.
-            bool isHostile = npc.IsEnemyType() || npc.sentimentV2 <= -2.0f; // Scorned or worse
-            bool playerIsInSamePlace = manager.playerCharacter != null && manager.currentPlace == npc.parentPlace;
+            bool isHostile = IsHostileToPlayer(npc);
+            // PlaceOf, not npc.parentPlace (a legacy field that is null on current saves, so this was never true).
+            bool playerIsInSamePlace = manager.playerCharacter != null && manager.currentPlace == PrivateDwellingGuard.PlaceOf(npc);
 
             if (isHostile && playerIsInSamePlace)
             {
@@ -31,11 +32,9 @@ namespace AIROG_NPCExpansion
             // --- 0. COMPANION ANTI-LOOT CHECK ---
             // If NPC is a follower, they should NOT auto-loot containers or loose items.
             // They wait for the player to distribute equipment.
-            bool isFollower = false;
-            if (manager.playerCharacter != null && manager.playerCharacter.pcGameEntity != null && manager.playerCharacter.pcGameEntity.followers != null)
-            {
-                 isFollower = manager.playerCharacter.pcGameEntity.followers.Contains(npc);
-            }
+            // scenarioState.followers is the live party list. The legacy playerCharacter.pcGameEntity
+            // this used to read is null on current saves, so companions were never recognised here.
+            bool isFollower = manager.scenarioState?.followers != null && manager.scenarioState.followers.Contains(npc);
 
             // Nobody helps themselves to things lying around a private home.
             bool inPrivateDwelling = PrivateDwellingGuard.IsPrivate(manager.currentPlace);
@@ -74,7 +73,7 @@ namespace AIROG_NPCExpansion
                         // Create a temporary item for evaluation (not yet in global map)
                         try
                         {
-                            GameItem tempItem = await GameItem.Create(thing.GetPrettyName(), thing.description, manager, npc.level, 0, GameItem.ItemQuality.COMMON, true);
+                            GameItem tempItem = await GameItem.Create(thing.GetPrettyName(), thing.GetPotentiallyNullDescription(), manager, npc.level, 0, GameItem.ItemQuality.COMMON, true);
                             if (tempItem != null) candidates.Add((thing, tempItem));
                         }
                         catch (Exception ex)
@@ -162,6 +161,15 @@ namespace AIROG_NPCExpansion
             }
         }
 
+        // GameCharacter.sentimentV2 is a legacy field the game only carries through the save file; the
+        // live value is per-target and read through GetSentimentStanding() (-1 = slightly negative).
+        private static bool IsHostileToPlayer(GameCharacter npc)
+        {
+            if (npc.IsEnemyType()) return true;
+            try { return npc.GetSentimentStanding() <= -1; }
+            catch { return false; }
+        }
+
         private static void PerformIdleBark(GameCharacter npc, NPCData data, GameplayManager manager)
         {
             // Simple flavor thoughts based on traits
@@ -205,8 +213,8 @@ namespace AIROG_NPCExpansion
 
             // --- HOSTILITY CHECK ---
             // If NPC is hostile and player is present, they shouldn't do "relaxed" things like sitting or warming hands.
-            bool isHostile = npc.IsEnemyType() || npc.sentimentV2 <= -2.0f; // Scorned or worse
-            bool playerIsHere = (manager != null && manager.currentPlace == npc.parentPlace);
+            bool isHostile = IsHostileToPlayer(npc);
+            bool playerIsHere = (manager != null && manager.currentPlace == PrivateDwellingGuard.PlaceOf(npc));
 
             // Use NPC tags for logic
             bool isBeast = data.Tags != null && data.Tags.Any(t => t.ToLower().Contains("beast") || t.ToLower().Contains("animal") || t.ToLower().Contains("spider") || t.ToLower().Contains("monster"));

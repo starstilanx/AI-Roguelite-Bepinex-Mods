@@ -55,7 +55,7 @@ namespace AIROG_NPCExpansion
             b.SetInteractable(!busy);
             DK.Text(card, hasProfile
                 ? "Rewrites personality, background, traits and abilities. Memories, affinity, secrets and quests are kept. Unsaved edits on this page are replaced."
-                : "Builds a full profile from the current scene. Your hint steers it.", 12, DK.Faint);
+                : "Builds a full profile from the current scene. Your hint steers it. A background you have already written is kept.", 12, DK.Faint);
         }
 
         // ─── Overview ─────────────────────────────────────────────────────────────
@@ -92,6 +92,13 @@ namespace AIROG_NPCExpansion
             }
             DK.Button(goal, "Open Mind", DK.BtnStyle.Ghost, () => SwitchTab(Tab.Mind));
 
+            // What they are doing right now (its own field; the Background box is no longer used for this).
+            var act = DK.CardBox(_content, 8);
+            DK.Label(act, "Current activity");
+            if (string.IsNullOrWhiteSpace(data.CurrentActivity))
+                Empty(act, IsAlive ? "Nothing noted yet. This fills in on its own after a few turns near them." : "None.");
+            else DK.Text(act, DK.Esc(data.CurrentActivity), 14, DK.Body);
+
             var cols = DK.Columns(_content, 16, 1, 1);
 
             var thoughts = DK.CardBox(cols[0], 12);
@@ -121,9 +128,9 @@ namespace AIROG_NPCExpansion
                 DK.Chip(flow, DK.Esc(s.Trim()), bg, fg);
         }
 
-        private static void HistoryRows(Transform parent, NPCData data, int max)
+        private static void HistoryRows(Transform parent, NPCData data, int max, string emptyText = "No interactions recorded yet.")
         {
-            if (data.InteractionHistory == null || data.InteractionHistory.Count == 0) { Empty(parent, "No interactions recorded yet."); return; }
+            if (data.InteractionHistory == null || data.InteractionHistory.Count == 0) { Empty(parent, emptyText); return; }
             foreach (var h in data.InteractionHistory.Take(max))
             {
                 DK.Rule(parent, DK.ChipBg);
@@ -157,7 +164,9 @@ namespace AIROG_NPCExpansion
 
             var r1 = DK.Columns(_content, 16, 1, 1);
             FieldCard(r1[0], "personality", "Personality", true, 150);
-            FieldCard(r1[1], "background", "Background / situation", true, 150);
+            FieldCard(r1[1], "background", "Background", true, 150);
+            FieldCard(_content, "activity", "Current activity", true, 72);
+            DK.Text(_content, "Background is yours: the mod never rewrites it on its own. Current activity is what they are doing right now and is rewritten every few turns while you are near them.", 12, DK.Faint);
             FieldCard(_content, "visual", "Visual description", true, 96);
             var r2 = DK.Columns(_content, 16, 1, 1);
             FieldCard(r2[0], "firstMessage", "First words", false, 96, italic: true);
@@ -316,9 +325,12 @@ namespace AIROG_NPCExpansion
             }
             if (aff <= -20)
                 DK.Text(arc, $"Currently <b>{RelationshipArcSystem.GetArcStage(data)}</b>. They hold you in contempt.", 13, DK.Neg);
+            // Says what feeds this tab, so an NPC you have barely dealt with does not just look broken.
+            DK.Text(arc, $"Affinity is <b><color=#ebe5d6>{(aff > 0 ? "+" : "")}{aff}</color></b>. It follows the storyteller's own sentiment changes for them, and also moves when you address them through the talk selector (+1 each time), give them a gift (+10), sell to them (+3), finish their quests (+15 or more) or attack them (-10). Gossip about you from other characters nudges it too.", 12, DK.Faint);
 
             var ms = DK.VStack(arc, 0, null, "Milestones");
-            if (data.ArcMilestones == null || data.ArcMilestones.Count == 0) Empty(ms, "No milestones yet.");
+            if (data.ArcMilestones == null || data.ArcMilestones.Count == 0)
+                Empty(ms, "No milestones yet. One is recorded each time the relationship changes stage (the first is Acquaintance at 20), when they confide a secret, when they teach you, and when you finish a quest chain for them.");
             else foreach (var m in data.ArcMilestones)
             {
                 var match = MilestoneTurn.Match(m ?? "");
@@ -342,7 +354,8 @@ namespace AIROG_NPCExpansion
                 .OrderByDescending(e => Math.Abs(e.value))
                 .Take(8)
                 .ToList();
-            if (entries.Count == 0) Empty(net, "No strong feelings about anyone else yet.");
+            if (entries.Count == 0)
+                Empty(net, "No bonds with other characters yet. They grow a little each time two characters in the same place trade a rumour, which happens every few turns while you are there; hostile and friendly characters do not bond.");
             foreach (var e in entries)
             {
                 var block = DK.VStack(net, 6, null, "Bond");
@@ -355,7 +368,7 @@ namespace AIROG_NPCExpansion
 
             var hist = DK.CardBox(cols[1], 4);
             DK.Label(hist, "Interaction history");
-            HistoryRows(hist, data, 20);
+            HistoryRows(hist, data, 20, "Nothing recorded yet. Conversations, gifts, sales, quests and fights with them are listed here, newest first.");
         }
 
         private static string ResolveName(string uuid)

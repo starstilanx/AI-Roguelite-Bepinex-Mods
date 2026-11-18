@@ -93,12 +93,21 @@ namespace AIROG_NPCExpansion
 
         public static void OpenFor(GameCharacter npc, GameplayManager manager, Tab tab, bool edit)
         {
-            if (npc == null) return;
+            if (npc == null || !ModSwitch.Enabled) return;
             Init();
             Instance.Show(npc, manager, tab, edit);
         }
 
+        /// <summary>Closes the dossier at once, dropping unsaved edits (the mod was switched off for this save).</summary>
+        public static void ForceClose()
+        {
+            if (Instance != null && Instance.IsOpen) Instance.CloseNow();
+        }
+
         public bool IsOpen => _window != null && _window.gameObject.activeSelf;
+
+        /// <summary>Frame in which the dossier handled Esc itself (see NPCExpansionPlugin.Prefix_EscKey).</summary>
+        internal static int EscConsumedFrame = -1;
 
         public void RefreshIfNpc(string uuid)
         {
@@ -193,6 +202,7 @@ namespace AIROG_NPCExpansion
 
             if (kb.escapeKey.wasPressedThisFrame)
             {
+                EscConsumedFrame = Time.frameCount;
                 if (typing) { focusedInput.DeactivateInputField(); EventSystem.current.SetSelectedGameObject(null); }
                 else if (_pendingAfterConfirm != null) { _pendingAfterConfirm = null; BuildFooter(); }
                 else RequestClose();
@@ -208,7 +218,15 @@ namespace AIROG_NPCExpansion
         private void OnTurnHappened(int numTurns, long secs)
         {
             // Only a pinned dossier can be open while turns pass.
-            if (IsOpen && !IsDirty) { LoadDraft(); Refresh(); }
+            // A subscriber of the game's turn event: rebuilding the panel must never throw into it.
+            try
+            {
+                if (IsOpen && !IsDirty) { LoadDraft(); Refresh(); }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[NPCDossier] Refresh on turn failed: " + ex.Message);
+            }
         }
 
         // ─── Shell construction (once per canvas) ────────────────────────────────
@@ -414,7 +432,8 @@ namespace AIROG_NPCExpansion
 
         private string SafePlaceName()
         {
-            try { return _npc.parentPlace?.GetPrettyName() ?? ""; } catch { return ""; }
+            // PlaceOf, not _npc.parentPlace: that legacy field is null on current saves, so the header never showed a place.
+            try { return PrivateDwellingGuard.PlaceOf(_npc)?.GetPrettyName() ?? ""; } catch { return ""; }
         }
 
         private List<GameCharacter> NearbyNpcs()
@@ -771,7 +790,8 @@ namespace AIROG_NPCExpansion
             var d = new Draft();
             d.text["personality"]  = NPCData.GetPersonality(_npc, data);
             d.text["background"]   = NPCData.GetBackground(_npc, data);
-            d.text["visual"]       = !string.IsNullOrEmpty(_npc.importantData?.visualDescription) ? _npc.importantData.visualDescription : (data.Description ?? "");
+            d.text["activity"]     = data.CurrentActivity ?? "";
+            d.text["visual"]       =!string.IsNullOrEmpty(_npc.importantData?.visualDescription) ? _npc.importantData.visualDescription : (data.Description ?? "");
             d.text["firstMessage"] = data.FirstMessage ?? "";
             d.text["greetings"]    = string.Join("\n", data.AlternateGreetings ?? new List<string>());
             d.text["nature"]       = string.Join(", ", data.Tags ?? new List<string>());
@@ -847,8 +867,15 @@ namespace AIROG_NPCExpansion
             try
             {
                 var data = Data ?? NPCData.CreateDefault(_npc.GetPrettyName());
+                // The activity and the memories keep changing in the background while the panel is
+                // open (scenario update, memory synthesis). Only write them back if the player
+                // actually edited them, or an untouched stale copy would undo that newer text.
+                bool activityEdited = IsFieldDirty("activity");
+                bool memoriesEdited = _orig == null || !_draft.memories.SequenceEqual(_orig.memories);
+
                 data.Personality = t["personality"];
                 data.Scenario = t["background"];
+                if (activityEdited) data.CurrentActivity = t["activity"];
                 data.Description = t["visual"];
                 data.FirstMessage = t["firstMessage"];
                 data.AlternateGreetings = SplitLines(t["greetings"]);
@@ -860,10 +887,12 @@ namespace AIROG_NPCExpansion
                 data.PostHistoryInstructions = t["posthist"];
                 data.Extensions = ext ?? new Dictionary<string, string>();
                 data.Attributes = new Dictionary<SS.PlayerAttribute, long>(_draft.attrs);
-                data.LongTermMemories = new List<string>(_draft.memories);
+                if (memoriesEdited) data.LongTermMemories = new List<string>(_draft.memories);
 
                 NPCData.Save(_npc.uuid, data);
-                NPCData.SyncToNativeImportantData(_npc, data.Personality, data.Scenario, data.Description);
+                // exact: the native sheet mirrors the boxes, including one the player emptied.
+                // (Fill-only syncing meant a cleared Background refilled itself from the native copy.)
+                NPCData.SyncToNativeImportantData(_npc, data.Personality, data.Scenario, data.Description, exact: true);
                 NPCData.FlushSessionLore();
                 NPCUI.RefreshAll();
 
@@ -957,7 +986,10 @@ namespace AIROG_NPCExpansion
             _busy.Add("generate");
             BuildContent();
             bool ok = false;
-            try { ok = await NPCGenerator.GenerateLore(npc, _manager.GetContextForQuickActions()); }
+            // "Regenerate profile" rewrites personality and background, as its card says. A first
+            // generation only fills gaps, so a background the player wrote beforehand is kept.
+            bool regenerate = NPCData.HasProfile(npc, Data);
+            try { ok = await NPCGenerator.GenerateLore(npc, _manager.GetContextForQuickActions(), keepProfileText: !regenerate); }
             catch (Exception ex) { Debug.LogWarning("[NPCDossier] Generation failed: " + ex.Message); }
             finally
             {
@@ -973,8 +1005,10 @@ namespace AIROG_NPCExpansion
 
         private async void DoRequestQuest()
         {
-            var npc = _npc; var data = Data;
-            if (npc == null || data == null || _busy.Contains("quest")) return;
+            var npc = _npc;
+            if (npc == null || _busy.Contains("quest")) return;
+            // An NPC the game profiled on its own passes the button's profile check but has no entry of ours yet.
+            var data = NPCData.LoadOrCreate(npc);
             _busy.Add("quest");
             BuildContent();
             try { await QuestManager.GenerateQuest(npc, data, _manager); }
