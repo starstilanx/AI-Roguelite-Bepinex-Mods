@@ -20,7 +20,7 @@ namespace AIROG_FontModifier
     {
         public const string PLUGIN_GUID = "com.antigravity.airog.fontmodifier.v3";
         public const string PLUGIN_NAME = "Font Modifier V3";
-        public const string PLUGIN_VERSION = "2.2.1";
+        public const string PLUGIN_VERSION = "2.2.2";
         
         internal static ManualLogSource Log;
 
@@ -56,7 +56,15 @@ namespace AIROG_FontModifier
             
             SceneManager.sceneLoaded += OnSceneLoaded;
             
-            Harmony.CreateAndPatchAll(typeof(FontModifierPlugin));
+            try
+            {
+                Harmony.CreateAndPatchAll(typeof(FontModifierPlugin));
+            }
+            catch (Exception ex)
+            {
+                // The scene-load sweep above still works without the lifecycle patches.
+                Log.LogError($"[FontMod] Could not patch text OnEnable; text shown after a scene has loaded will keep the game's font: {ex}");
+            }
             Log.LogInfo($"Plugin {PLUGIN_GUID} loaded.");
         }
 
@@ -171,7 +179,10 @@ namespace AIROG_FontModifier
             if (_uiInjected && _fontDropdownObj == null) _uiInjected = false;
             if (_uiInjected) return;
 
-            var mainMenu = FindObjectOfType<MainMenu>();
+            // MainMenu registers itself here on Start and GameplayManager clears it when a save
+            // starts. FindObjectOfType scanned every loaded object, every frame, for the whole
+            // time a save was being played.
+            var mainMenu = SS.I != null ? SS.I.hackyMenu : null;
             if (mainMenu != null)
             {
                 InjectUI(mainMenu);
@@ -430,32 +441,70 @@ namespace AIROG_FontModifier
              t.font = _activeLegacyFont;
         }
 
-        [HarmonyPatch(typeof(TMP_Text), "OnEnable")]
-        [HarmonyPatch(typeof(TMP_Text), "Start")]
-        [HarmonyPatch(typeof(TMP_Text), "text", MethodType.Setter)] // Aggressive maintenance
-        public static class TMP_Text_Lifecycle_Patch
+        // Lifecycle patches: the font for text that was not on screen when UpdateAllText ran.
+        // That sweep only reaches text that is active at that moment, so without these every
+        // panel opened later and every line added to the story log kept the game's own font.
+        // OnEnable runs each time a text component becomes active, which covers both text that
+        // is created later and text that was sitting in a closed panel.
+        //
+        // These live on the plugin class itself because CreateAndPatchAll(typeof(FontModifierPlugin))
+        // does not look inside nested classes. One method per target: stacking several
+        // [HarmonyPatch] attributes on one class merges them into a single target. And each names
+        // the type that DECLARES OnEnable - TMP_Text does not, its two concrete components do.
+        // (Neither TMP_Text nor Text declares Start.) The text setter is deliberately left alone:
+        // it runs on every label update in the game, and a font applied on enable stays applied.
+        [HarmonyPatch(typeof(TextMeshProUGUI), "OnEnable")]
+        [HarmonyPostfix]
+        public static void TextMeshProUGUI_OnEnable_Postfix(TextMeshProUGUI __instance)
         {
-            public static void Postfix(TMP_Text __instance)
+            MaintainTmpFont(__instance);
+        }
+
+        [HarmonyPatch(typeof(TextMeshPro), "OnEnable")]
+        [HarmonyPostfix]
+        public static void TextMeshPro_OnEnable_Postfix(TextMeshPro __instance)
+        {
+            MaintainTmpFont(__instance);
+        }
+
+        [HarmonyPatch(typeof(Text), "OnEnable")]
+        [HarmonyPostfix]
+        public static void LegacyText_OnEnable_Postfix(Text __instance)
+        {
+            try
             {
-                 if (_activeTmpFontAsset != null && __instance.font != _activeTmpFontAsset)
-                 {
-                     ApplyToText(__instance);
-                 }
+                if ((object)_activeLegacyFont == null || ReferenceEquals(__instance.font, _activeLegacyFont)) return;
+                ApplyToLegacy(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogLifecycleFailure(ex);
             }
         }
-        
-        [HarmonyPatch(typeof(Text), "OnEnable")]
-        [HarmonyPatch(typeof(Text), "Start")]
-        [HarmonyPatch(typeof(Text), "text", MethodType.Setter)] // Aggressive maintenance
-        public static class LegacyText_Lifecycle_Patch
+
+        private static void MaintainTmpFont(TMP_Text t)
         {
-            public static void Postfix(Text __instance)
+            try
             {
-                 if (_activeLegacyFont != null && __instance.font != _activeLegacyFont)
-                 {
-                     ApplyToLegacy(__instance);
-                 }
+                // Runs for every text component the game activates, so the already-applied case
+                // has to stay a plain reference compare.
+                if ((object)_activeTmpFontAsset == null || ReferenceEquals(t.font, _activeTmpFontAsset)) return;
+                ApplyToText(t);
             }
+            catch (Exception ex)
+            {
+                LogLifecycleFailure(ex);
+            }
+        }
+
+        private static bool _lifecycleFailureLogged;
+
+        private static void LogLifecycleFailure(Exception ex)
+        {
+            // Once is enough: this can be reached for every text object in a scene.
+            if (_lifecycleFailureLogged) return;
+            _lifecycleFailureLogged = true;
+            Log.LogWarning($"[FontMod] Could not apply the font to a text component as it was enabled: {ex.Message}");
         }
 
 
@@ -483,6 +532,16 @@ namespace AIROG_FontModifier
 
                 // Populate
                 var dropdown = _fontDropdownObj.GetComponent<TMP_Dropdown>();
+
+                // The clone keeps the inspector-assigned callback of the dropdown it was copied
+                // from (MainMenu.OnTextGenerationDropdownChanged). RemoveAllListeners below only
+                // drops runtime listeners, so without this every font pick also re-ran the game's
+                // text-backend handler.
+                for (int i = 0; i < dropdown.onValueChanged.GetPersistentEventCount(); i++)
+                {
+                    dropdown.onValueChanged.SetPersistentListenerState(i, UnityEngine.Events.UnityEventCallState.Off);
+                }
+
                 dropdown.ClearOptions();
 
                 List<string> options = new List<string>();

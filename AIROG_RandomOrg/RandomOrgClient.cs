@@ -26,6 +26,13 @@ namespace AIROG_RandomOrg
         private static volatile bool _fetching = false;
         private static int _requestIdSeed = 0;
 
+        // After a failed fetch no new one is started until this time. Without it every roll made
+        // while offline or over quota fired another request the moment the last one failed, and
+        // Random.org bans clients that keep asking once their allowance is spent.
+        // Both guarded by _lock.
+        private static DateTime _retryNotBeforeUtc = DateTime.MinValue;
+        private static int _consecutiveFailures = 0;
+
         // Random.org plain-text endpoint (anonymous, no API key)
         private const string BASIC_URL =
             "https://www.random.org/integers/?num={0}&min=1&max=1000000&col=1&base=10&format=plain&rnd=new";
@@ -55,7 +62,7 @@ namespace AIROG_RandomOrg
                 got = _buffer.Count > 0;
                 raw = got ? _buffer.Dequeue() : 0;
 
-                if (_buffer.Count < 200 && !_fetching)
+                if (_buffer.Count < 200 && CanStartFetch())
                     ScheduleFetch(RandomOrgPlugin.BufferSize.Value);
             }
 
@@ -65,30 +72,57 @@ namespace AIROG_RandomOrg
         }
 
         /// <summary>Kick off an initial fetch when the mod is first enabled.</summary>
-        public static void PrimeFetch() => ScheduleFetch(RandomOrgPlugin.BufferSize.Value);
+        public static void PrimeFetch()
+        {
+            // The Mods menu calls this on every Confirm while the buffer is empty, so it must not
+            // start a second request on top of one already in flight.
+            lock (_lock)
+            {
+                if (CanStartFetch())
+                    ScheduleFetch(RandomOrgPlugin.BufferSize.Value);
+            }
+        }
 
         // -----------------------------------------------------------------------
 
+        /// <summary>Caller holds _lock.</summary>
+        private static bool CanStartFetch() => !_fetching && DateTime.UtcNow >= _retryNotBeforeUtc;
+
+        /// <summary>Caller holds _lock.</summary>
         private static void ScheduleFetch(int count)
         {
+            // Both Random.org interfaces reject n outside 1..10000, which would fail every fetch.
+            count = Math.Max(1, Math.Min(10000, count));
+
             _fetching = true;
             Task.Run(async () =>
             {
                 try
                 {
                     int[] numbers = await FetchAsync(count);
+                    if (numbers == null || numbers.Length == 0)
+                        throw new Exception("Random.org returned no numbers.");
                     lock (_lock)
                     {
                         foreach (int n in numbers)
                             _buffer.Enqueue(n);
+                        _consecutiveFailures = 0;
                     }
                     RandomOrgPlugin.Log.LogInfo(
                         $"[RandomOrg] Fetched {numbers.Length} numbers. Buffer: {BufferCount}");
                 }
                 catch (Exception ex)
                 {
+                    int waitSeconds;
+                    lock (_lock)
+                    {
+                        // 1, 2, 4, 8, then 10 minutes.
+                        waitSeconds = Math.Min(600, 60 << Math.Min(_consecutiveFailures, 4));
+                        _consecutiveFailures++;
+                        _retryNotBeforeUtc = DateTime.UtcNow.AddSeconds(waitSeconds);
+                    }
                     RandomOrgPlugin.Log.LogWarning(
-                        $"[RandomOrg] Fetch failed — using System.Random as fallback: {ex.Message}");
+                        $"[RandomOrg] Fetch failed — using System.Random as fallback, retrying in {waitSeconds}s: {ex.Message}");
                 }
                 finally
                 {

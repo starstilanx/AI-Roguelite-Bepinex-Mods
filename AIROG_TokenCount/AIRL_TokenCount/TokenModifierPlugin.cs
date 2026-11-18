@@ -13,7 +13,7 @@ namespace AIROG_TokenModifierPlugin
     {
         public const string PLUGIN_GUID = "com.airog.tokenmodifier";
         public const string PLUGIN_NAME = "Token Modifier";
-        public const string PLUGIN_VERSION = "1.0.5";
+        public const string PLUGIN_VERSION = "1.0.6";
 
         public static TokenModifierPlugin Instance { get; private set; }
 
@@ -28,16 +28,44 @@ namespace AIROG_TokenModifierPlugin
             Logger.LogInfo($"Plugin {PLUGIN_GUID} is loaded!");
 
             // Bind configuration
-            _maxTokensStory = Config.Bind("General", "MaxTokens_Story", 220, "Max tokens for story completion");
-            _maxTokensChat = Config.Bind("General", "MaxTokens_Chat", 1090, "Max tokens for general chat/questions");
-            _maxTokensEvent = Config.Bind("General", "MaxTokens_Event", 550, "Max tokens for event checks");
-
-
-            // Apply overrides initially (still good to do for dictionary-based lookups)
-            ApplyOverrides();
+            _maxTokensStory = Config.Bind("General", "MaxTokens_Story", 220,
+                "Raise the token limit of story-completion requests (specialized pipeline) to at least this. " +
+                "Never lowers what the game itself asks for.");
+            _maxTokensChat = Config.Bind("General", "MaxTokens_Chat", 1090,
+                "Raise the token limit of general / unified-turn / world-generation requests to at least this. " +
+                "Never lowers what the game itself asks for.");
+            _maxTokensEvent = Config.Bind("General", "MaxTokens_Event", 550,
+                "Raise the token limit of event-check requests to at least this. " +
+                "Never lowers what the game itself asks for.");
 
             // apply Harmony patches
             Harmony.CreateAndPatchAll(typeof(TokenModifierPlugin));
+        }
+
+        /// <summary>
+        /// Maps the limit the game put in a request to the limit that should be sent.
+        ///
+        /// The request body does not say which kind of call it is, so the kind is inferred from
+        /// the value OpenaiApiClient hard-codes for it (11/18 build):
+        ///   16 / 160   short answers, character descriptions - left alone
+        ///   260        story completion (220 in old builds)
+        ///   1000       event checks (550 in old builds)
+        ///   3000       general, 5000 unified turn, 15000 grid/world generation
+        ///
+        /// A setting only ever RAISES the game's value. The settings' defaults date from when the
+        /// game asked for 220/1090/550; it has since moved to 260/3000-5000/1000, and replacing
+        /// outright meant an untouched config cut every unified turn from 5000 tokens to 1090
+        /// (truncated JSON). It also means a zero or negative setting can never reach the API.
+        /// </summary>
+        internal static int ResolveMaxTokens(int gameMax, int story, int evt, int chat)
+        {
+            int wanted;
+            if (gameMax >= 200 && gameMax <= 400) wanted = story;
+            else if (gameMax >= 450 && gameMax <= 1050) wanted = evt;
+            else if (gameMax > 1050) wanted = chat;
+            else return gameMax;
+
+            return System.Math.Max(gameMax, wanted);
         }
 
         [HarmonyPatch(typeof(MyHttpClient), "DoHttpRequest")]
@@ -55,32 +83,7 @@ namespace AIROG_TokenModifierPlugin
                 if (json["max_tokens"] != null)
                 {
                     int currentMax = json["max_tokens"].Value<int>();
-                    int newMax = currentMax;
-
-                    // Map game values to config by range:
-                    //   Story Completer:       ~260 (was 220 in older game versions)
-                    //   Event Checks:          550
-                    //   Char Description:      160  — leave alone (too small to usefully boost)
-                    //   Short Q&A:              16  — leave alone
-                    //   General/Chat/Unified: 1090-1850+ (varied by version and prompt type)
-                    //   GRD (high-cost):      15000 — safety valve handles this
-
-                    if (currentMax >= 200 && currentMax <= 400)
-                    {
-                        // Story Completer range (game uses 220 or 260 depending on version)
-                        newMax = _maxTokensStory.Value;
-                    }
-                    else if (currentMax >= 450 && currentMax <= 650)
-                    {
-                        // Event Checks range (550)
-                        newMax = _maxTokensEvent.Value;
-                    }
-                    else if (currentMax >= 800)
-                    {
-                        // General Question / Chat / Unified range (1090, 1590, 1850, etc.)
-                        newMax = _maxTokensChat.Value;
-                    }
-                    // Values outside ranges (16, 160) are left alone.
+                    int newMax = ResolveMaxTokens(currentMax, _maxTokensStory.Value, _maxTokensEvent.Value, _maxTokensChat.Value);
 
                     if (newMax != currentMax)
                     {
@@ -117,8 +120,10 @@ namespace AIROG_TokenModifierPlugin
 
             if (_uiInjected) return;
 
-            // Wait for MainMenu context
-            var mainMenu = FindObjectOfType<MainMenu>();
+            // Wait for MainMenu context. MainMenu registers itself here on Start and GameplayManager
+            // clears it when a save starts, so this stays a cheap check for the whole play session
+            // where FindObjectOfType scanned every loaded object every frame.
+            var mainMenu = SS.I != null ? SS.I.hackyMenu : null;
             if (mainMenu != null)
             {
                 InjectUI(mainMenu);
@@ -240,7 +245,10 @@ namespace AIROG_TokenModifierPlugin
                 {
                     if (b == null || b is TMP_InputField) continue;
                     var type = b.GetType();
-                    if (!type.Namespace.StartsWith("UnityEngine") && !type.Namespace.StartsWith("TMPro"))
+                    // The game's own scripts - the ones this is meant to remove - live in the
+                    // global namespace, where Type.Namespace is null.
+                    string ns = type.Namespace ?? "";
+                    if (!ns.StartsWith("UnityEngine") && !ns.StartsWith("TMPro"))
                     {
                         Logger.LogInfo($"Removing script {type.Name} from cloned input field.");
                         DestroyImmediate(b);
@@ -259,7 +267,6 @@ namespace AIROG_TokenModifierPlugin
                         _maxTokensChat.Value = intVal;
                         _maxTokensStory.Value = intVal;
                         _maxTokensEvent.Value = intVal;
-                        ApplyOverrides();
                         newInput.text = intVal.ToString();
                         Logger.LogInfo($"Token count updated to: {intVal}");
                     }
@@ -285,41 +292,13 @@ namespace AIROG_TokenModifierPlugin
             // Leaving empty to satisfy any lingering calls or remove if unused.
         }
 
-        // If the original game uses a specific label update method, we might miss it.
-        // But modifying the children text is a good best-effort.
-        private void ApplyOverrides()
-        {
-            if (SS.I == null)
-            {
-                Logger.LogError("SS.I is null. Cannot apply overrides yet.");
-                return;
-            }
-
-            Logger.LogInfo("Applying Token Count Overrides...");
-
-            // Helper to set max_tokens for a specific prompt type
-            void SetMaxTokens(AIAsker.ChatGptPromptType type, int tokens)
-            {
-                if (!SS.I.moddableOpenaiapiCommonParams.ContainsKey(type) || SS.I.moddableOpenaiapiCommonParams[type] == null)
-                {
-                    SS.I.moddableOpenaiapiCommonParams[type] = new JObject();
-                }
-
-                SS.I.moddableOpenaiapiCommonParams[type]["max_tokens"] = tokens;
-                Logger.LogInfo($"Set {type} max_tokens to {tokens}");
-            }
-
-            // Apply to specific types
-            SetMaxTokens(AIAsker.ChatGptPromptType.STORY_COMPLETER, _maxTokensStory.Value);
-            SetMaxTokens(AIAsker.ChatGptPromptType.GENERAL_QUESTION_ANSWERER, _maxTokensChat.Value);
-            SetMaxTokens(AIAsker.ChatGptPromptType.EVENT_CHECKS_ANSWERER, _maxTokensEvent.Value);
-
-            // Also apply to NONE as a fallback/base if needed, though specific types usually override
-            // SetMaxTokens(AIAsker.ChatGptPromptType.NONE, _maxTokensChat.Value);
-
-            Logger.LogInfo("Overrides Applied Successfully.");
-
-        }
+        // No per-prompt-type override is written into SS.I.moddableOpenaiapiCommonParams any more.
+        // Those entries replaced the game's value before the request reached the prefix above,
+        // which then saw only the configured number: it could no longer tell what the game had
+        // asked for (so could not avoid lowering it), and re-sorted the configured number into
+        // whichever range it happened to fall in - MaxTokens_Story = 1000 was sent as
+        // MaxTokens_Chat. Every request passes through the prefix, so it is the single place
+        // the limit is adjusted.
     }
 }
 

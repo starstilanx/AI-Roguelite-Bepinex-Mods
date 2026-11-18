@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_RandomOrg</AssemblyName>
     <Description>BepInEx plugin that replaces pseudo-random dice rolls with true randomness sourced from Random.org.</Description>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>..\AIROG_GenContext\bin\Debug\net472\</OutputPath>

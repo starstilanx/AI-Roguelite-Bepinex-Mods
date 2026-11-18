@@ -43,7 +43,15 @@ namespace AIROG_LoopBeGone
                 string normalizedPast = Normalize(pastTurn);
                 if (normalizedPast.Length < 20) continue;
 
-                if (normalizedText.Contains(normalizedPast) || normalizedPast.Contains(normalizedText))
+                // A past turn found inside the new text only counts when it makes up at least half
+                // of it. The story chain also holds the game's one-line system turns ("You arrive
+                // at the Rusty Tankard."), and a GM that opens an otherwise fresh response by
+                // echoing one of those is not looping.
+                bool repeatsPastTurn = normalizedPast.Length * 2 >= normalizedText.Length
+                                       && normalizedText.Contains(normalizedPast);
+                bool insidePastTurn = normalizedText.Length >= 20 && normalizedPast.Contains(normalizedText);
+
+                if (repeatsPastTurn || insidePastTurn)
                 {
                     return new DetectionResult
                     {
@@ -104,9 +112,12 @@ namespace AIROG_LoopBeGone
 
             if (currentLines.Count < 3) return new DetectionResult { IsLoop = false };
 
-            // Flag if the same word starts 4+ sentences AND makes up >70% of all sentence starts
+            // Flag if the same opening starts 4+ sentences AND makes up >70% of all sentence starts.
+            // The opening is the first TWO words: the game narrates in second person, so an
+            // ordinary turn has most of its sentences starting with "You" ("You duck... You raise...
+            // You count..."). A stuck model repeats the verb too ("You feel... You feel...").
             var starts = currentLines
-                .Select(l => l.Split(' ').FirstOrDefault()?.ToLower())
+                .Select(l => string.Join(" ", l.Split(new[] { ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries).Take(2)).ToLower())
                 .Where(s => !string.IsNullOrEmpty(s))
                 .ToList();
 

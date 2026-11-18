@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_OpenAI5</AssemblyName>
     <Description>BepInEx plugin that rewrites max_tokens to max_completion_tokens for newer OpenAI models (gpt-4.1, o1, o3, o4, ...).</Description>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>..\AIROG_GenContext\bin\Debug\net472\</OutputPath>

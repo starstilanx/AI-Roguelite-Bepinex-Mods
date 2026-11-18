@@ -9,7 +9,7 @@ using UnityEngine.Networking;
 
 namespace AIROG_MusicExpansion
 {
-    [BepInPlugin("com.airog.musicexpansion", "AI Roguelite Music Expansion", "1.1.0")]
+    [BepInPlugin("com.airog.musicexpansion", "AI Roguelite Music Expansion", "1.1.1")]
     public class MusicExpansionPlugin : BaseUnityPlugin
     {
         private void Awake()
@@ -31,9 +31,17 @@ namespace AIROG_MusicExpansion
         private static List<AudioClip> s_ambientCache;
         private static List<AudioClip> s_combatCache;
 
+        // True only once every file has been through the decoder. The decode coroutine runs on
+        // the scene's music manager and dies with it, so leaving the scene mid-decode (loading a
+        // second save straight away, or backing out to the menu) used to freeze the playlist for
+        // the rest of the session at however many tracks had made it in. Until this is set, the
+        // next manager picks the decode up where it stopped.
+        private static bool s_cacheReady;
+        private static readonly HashSet<string> s_handledFiles = new HashSet<string>();
+
         public static void Postfix(GameMusicManager __instance)
         {
-            if (s_ambientCache != null)
+            if (s_cacheReady)
             {
                 // Cache is warm: inject the already-decoded clips synchronously and keep playing.
                 // No buffering needed — this completes within the same frame as Awake.
@@ -66,8 +74,8 @@ namespace AIROG_MusicExpansion
 
         private static IEnumerator FirstLoad(GameMusicManager manager)
         {
-            s_ambientCache = new List<AudioClip>();
-            s_combatCache = new List<AudioClip>();
+            if (s_ambientCache == null) s_ambientCache = new List<AudioClip>();
+            if (s_combatCache == null) s_combatCache = new List<AudioClip>();
 
             string musicPath = Path.Combine(Application.streamingAssetsPath, "Music");
             if (Directory.Exists(musicPath))
@@ -76,11 +84,32 @@ namespace AIROG_MusicExpansion
                 yield return DecodeFolder(Path.Combine(musicPath, "Encounter"), s_combatCache);
             }
 
+            s_cacheReady = true;
             InjectCached(manager);
 
             // Buffering done — let the game play from the freshly-extended, shuffled lists.
-            SetShouldPlay(manager, true);
-            Debug.Log($"[MusicExpansion] Decoded {s_ambientCache.Count} ambient + {s_combatCache.Count} encounter tracks once; cached for all future loads.");
+            // Unless a fight began while we were decoding: the game then has the ambient channel
+            // parked and restarts it itself when the fight ends, and switching it on here would
+            // start an ambient track underneath the combat music.
+            if (!IsCombatPlaylistActive(manager)) SetShouldPlay(manager, true);
+
+            // The plugin ships without the audio library by default; say nothing in that case.
+            if (s_ambientCache.Count > 0 || s_combatCache.Count > 0)
+            {
+                Debug.Log($"[MusicExpansion] Decoded {s_ambientCache.Count} ambient + {s_combatCache.Count} encounter tracks once; cached for all future loads.");
+            }
+        }
+
+        private static bool IsCombatPlaylistActive(GameMusicManager manager)
+        {
+            try
+            {
+                return (bool)AccessTools.Field(typeof(GameMusicManager), "currentlyPlayingCombat").GetValue(manager);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private static IEnumerator DecodeFolder(string folder, List<AudioClip> into)
@@ -92,6 +121,7 @@ namespace AIROG_MusicExpansion
                 if (file.EndsWith(".meta")) continue;
                 AudioType type = GetAudioType(file);
                 if (type == AudioType.UNKNOWN) continue;
+                if (s_handledFiles.Contains(file)) continue; // done by an earlier, interrupted pass
 
                 using (var www = UnityWebRequestMultimedia.GetAudioClip("file://" + file, type))
                 {
@@ -101,6 +131,8 @@ namespace AIROG_MusicExpansion
                     ((DownloadHandlerAudioClip)www.downloadHandler).compressed = true;
 
                     yield return www.SendWebRequest();
+
+                    s_handledFiles.Add(file);
 
                     if (www.result != UnityWebRequest.Result.Success)
                     {
