@@ -23,12 +23,15 @@ namespace AIROG_GenContext.Patches
             }
         }
 
-        public static bool Prefix_CreateVideoFromSingleImg(string imgPath)
+        // Deliberately void, not bool: CreateVideoFromSingleImg is async, and a prefix that could
+        // skip it would hand the caller a null Task (the failure the game's HarmonyFaultDetector
+        // blames on mods). This prefix only ever waits; the original always runs.
+        public static void Prefix_CreateVideoFromSingleImg(string imgPath)
         {
             // Check config dynamically
             if (GenContextPlugin.EnableVideoGenFix != null && !GenContextPlugin.EnableVideoGenFix.Value)
             {
-                return true; // Skip fix if disabled
+                return; // Skip fix if disabled
             }
             if (!File.Exists(imgPath))
             {
@@ -40,14 +43,13 @@ namespace AIROG_GenContext.Patches
                     System.Threading.Thread.Sleep(100);
                     if (File.Exists(imgPath))
                     {
-                        Debug.Log($"[VideoGenFix] File appeared after {i * 100}ms!");
-                        return true;
+                        Debug.Log($"[VideoGenFix] File appeared after {(i + 1) * 100}ms!");
+                        return;
                     }
                 }
-                
+
                 Debug.LogError($"[VideoGenFix] File still missing after waiting: {imgPath}. Allowing original method to run (and likely crash).");
             }
-            return true;
         }
     }
 }

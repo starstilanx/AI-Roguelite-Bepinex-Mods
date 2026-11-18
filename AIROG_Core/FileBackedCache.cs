@@ -15,8 +15,10 @@ namespace AIROG_Core
     public abstract class FileBackedCache<T> where T : class
     {
         private T _cache;
+        private string _cachePath; // the file _cache was read from
         private float _lastLoadTime = float.NegativeInfinity;
         private readonly float _refreshRateSeconds;
+        private readonly object _lock = new object();
 
         protected FileBackedCache(float refreshRateSeconds)
         {
@@ -28,22 +30,33 @@ namespace AIROG_Core
 
         public T Get()
         {
-            ReloadIfStale();
-            return _cache;
+            lock (_lock)
+            {
+                ReloadIfStale();
+                return _cache;
+            }
         }
 
-        public void Invalidate() => _lastLoadTime = float.NegativeInfinity;
+        public void Invalidate()
+        {
+            lock (_lock) _lastLoadTime = float.NegativeInfinity;
+        }
 
         private void ReloadIfStale()
         {
-            if (_cache != null && Time.realtimeSinceStartup - _lastLoadTime < _refreshRateSeconds) return;
+            string path = ModSaveFile.Path(FileName);
+            // The path is part of the freshness test: the timer alone kept serving the previous
+            // save's data for the rest of the refresh window after the player switched saves.
+            if (_cache != null && path == _cachePath && Time.realtimeSinceStartup - _lastLoadTime < _refreshRateSeconds) return;
             _lastLoadTime = Time.realtimeSinceStartup;
-            Load();
+            Load(path);
         }
 
-        private void Load()
+        private void Load(string path)
         {
-            string path = ModSaveFile.Path(FileName);
+            bool sameFile = path == _cachePath;
+            _cachePath = path;
+
             if (path == null || !File.Exists(path))
             {
                 // No backing file for the currently active save (e.g. after a save switch, or
@@ -59,6 +72,9 @@ namespace AIROG_Core
             }
             catch (Exception ex)
             {
+                // A read that fails on the same file (caught mid-write) keeps the last good value;
+                // on a different save's file there is no good value to keep.
+                if (!sameFile) _cache = null;
                 Debug.LogWarning($"[FileBackedCache] Failed to load {FileName}: {ex.Message}");
             }
         }

@@ -12,10 +12,11 @@ namespace AIROG_GenContext
     {
         public const string PLUGIN_GUID = "com.airog.gencontext";
         public const string PLUGIN_NAME = "GenContext";
-        public const string PLUGIN_VERSION = "1.0.0";
+        public const string PLUGIN_VERSION = "1.1.0";
 
         public static GenContextPlugin Instance { get; private set; }
         public static ConfigEntry<bool> EnableVideoGenFix;
+        public static ConfigEntry<int> MaxPlannedThreadsPerPrompt;
 
         private void Awake()
         {
@@ -24,6 +25,15 @@ namespace AIROG_GenContext
 
             // Initialize Manager
             ContextManager.Init();
+
+            MaxPlannedThreadsPerPrompt = Config.Bind("DM Notes", "MaxPlannedThreadsPerPrompt", 3,
+                new ConfigDescription(
+                    "How many of your pending Planned Threads (DM Director panel) the AI is shown per turn: " +
+                    "overdue ones first, then the oldest. The rest wait in the queue.",
+                    new AcceptableValueRange<int>(1, 8)));
+            DMNotes.DmNotesManager.MaxThreadsPerPrompt = MaxPlannedThreadsPerPrompt.Value;
+            MaxPlannedThreadsPerPrompt.SettingChanged += (sender, args) =>
+                DMNotes.DmNotesManager.MaxThreadsPerPrompt = MaxPlannedThreadsPerPrompt.Value;
 
             // Apply Patches
             var harmony = new Harmony(PLUGIN_GUID);
@@ -70,9 +80,29 @@ namespace AIROG_GenContext
             Harmony.CreateAndPatchAll(typeof(DMNotes.DmNotesResponseInterceptor.Patch_DoNewGame));
             Harmony.CreateAndPatchAll(typeof(DMNotes.DmNotesPanel.Patch_MainLayouts));
 
+            // Truncated-JSON repair + the "RR Compat Mode" toggle. This class carried its
+            // [HarmonyPatch] attribute from the day it was written but was never passed to
+            // PatchAll (PatchAll(Type) does not descend into other types), so neither feature
+            // had ever been live. Isolated in a try so a future rename of Utils.GetAiJsonSubstr
+            // cannot take the rest of GenContext down with it.
+            try { Harmony.CreateAndPatchAll(typeof(Patches.Patch_GetAiJsonSubstr)); }
+            catch (Exception ex) { Logger.LogError($"[GenContext] JSON repair / RR Compat patch failed to apply: {ex.Message}"); }
+            // Tells the patch above which string is the story response. Without it, it does nothing.
+            TryPatch(typeof(Patches.Patch_GenerateUnifiedResponse), "Story response marker (JSON repair / RR Compat)");
+
+            TryPatch(typeof(DMNotes.DmNotesResponseInterceptor.Patch_GenerateTxtFromTxtAndImg), "DM Notes extraction for panorama turns");
+            TryPatch(typeof(Patches.Patch_AfterLoadOrNewGame), "Mod switch reload notification");
+
             // Fix Video Generation Race Condition
             EnableVideoGenFix = Config.Bind("General", "EnableVideoGenFix", true, "Fixes a crash during video generation by waiting for files to appear.");
             Patches.VideoGenFix.Patch(new Harmony(PLUGIN_GUID), EnableVideoGenFix.Value);
+        }
+
+        /// <summary>Applies one patch class on its own, so a target the game renamed cannot take the rest of Awake with it.</summary>
+        private void TryPatch(Type patchClass, string what)
+        {
+            try { Harmony.CreateAndPatchAll(patchClass); }
+            catch (Exception ex) { Logger.LogError($"[GenContext] {what} patch failed to apply: {ex.Message}"); }
         }
     }
 }

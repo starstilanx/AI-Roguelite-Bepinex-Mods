@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using HarmonyLib;
 using Newtonsoft.Json;
 using UnityEngine;
@@ -23,10 +24,20 @@ namespace AIROG_GenContext.Patches
     [HarmonyPatch(typeof(Utils), nameof(Utils.GetAiJsonSubstr))]
     public static class Patch_GetAiJsonSubstr
     {
+        /// <summary>The text of the latest UNIFIED story response, exactly as the game is about to parse it.</summary>
+        internal static string UnifiedStoryResponse;
+
         [HarmonyFinalizer]
         public static Exception Finalizer(Exception __exception, ref string __result, string s)
         {
             if (!(__exception is AiOutputException)) return __exception;
+
+            // Utils.GetAiJsonSubstr is shared by every JSON the game asks an AI for (perk trees,
+            // quests, calendars, encounters, ...), and most of those callers now regenerate when it
+            // throws. Both recoveries below are meant for the story response alone; applied to the
+            // others they turned a retry into a half-built perk tree, or into an object with every
+            // field empty.
+            if (s == null || s != UnifiedStoryResponse) return __exception;
 
             string trimmed = s.TrimStart();
 
@@ -34,6 +45,12 @@ namespace AIROG_GenContext.Patches
             if (trimmed.StartsWith("{"))
             {
                 string repaired = TryRepairTruncatedJson(s);
+                // Closing the open containers does not always yield JSON: a response cut off right
+                // after a key or a colon ({"story":"...","api":{"give_items":) closes into something
+                // unparseable. Handing that to the game would trade the AiOutputException it knows
+                // how to recover from for a raw JsonReaderException it does not, so only swallow
+                // the exception when the repair actually parses.
+                if (repaired != null && !IsParseableJson(repaired)) repaired = null;
                 if (repaired != null)
                 {
                     __result = repaired;
@@ -42,8 +59,9 @@ namespace AIROG_GenContext.Patches
                 }
             }
 
-            // Path 2: plain-text response (no JSON) — RRCompat wrap.
-            if (ContextManager.GetGlobalSetting("RRCompat"))
+            // Path 2: plain-text response (no JSON) — RRCompat wrap. Not for a response that set out
+            // as JSON and could not be repaired: wrapping that would print raw JSON as the story.
+            if (!trimmed.StartsWith("{") && ContextManager.GetGlobalSetting("RRCompat"))
             {
                 string storyJson = JsonConvert.SerializeObject(s);
                 __result = $"{{\"story\":{storyJson}}}";
@@ -52,6 +70,18 @@ namespace AIROG_GenContext.Patches
             }
 
             return __exception;
+        }
+
+        private static bool IsParseableJson(string candidate)
+        {
+            try
+            {
+                int start = candidate.IndexOf('{');
+                if (start < 0) return false;
+                Newtonsoft.Json.Linq.JToken.Parse(candidate.Substring(start));
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -90,6 +120,28 @@ namespace AIROG_GenContext.Patches
                 sb.Append(stack.Pop() == '{' ? '}' : ']');
 
             return sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Remembers the UNIFIED story response, so <see cref="Patch_GetAiJsonSubstr"/> can tell the
+    /// story's JSON from every other JSON that passes through Utils.GetAiJsonSubstr. The game hands
+    /// the string this method returns straight to that parser.
+    /// </summary>
+    [HarmonyPatch(typeof(GameplayManager), nameof(GameplayManager.GenerateUnifiedResponse))]
+    public static class Patch_GenerateUnifiedResponse
+    {
+        [HarmonyPostfix]
+        public static void Postfix(ref Task<string> __result)
+        {
+            if (__result != null) __result = Remember(__result);
+        }
+
+        private static async Task<string> Remember(Task<string> original)
+        {
+            string text = await original;
+            Patch_GetAiJsonSubstr.UnifiedStoryResponse = text;
+            return text;
         }
     }
 }

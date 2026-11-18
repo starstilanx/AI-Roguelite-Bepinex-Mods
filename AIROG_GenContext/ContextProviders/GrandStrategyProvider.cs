@@ -96,6 +96,10 @@ namespace AIROG_GenContext.ContextProviders
 
         public string GetContext(string prompt, int maxTokens)
         {
+            // The dominion exists only inside WorldExpansion's simulation: with "World State"
+            // switched off for this save, Grand Strategy is off too.
+            if (!ModToggles.IsEnabled(ModToggles.Keys.WorldExpansion)) return "";
+
             RefreshCacheIfNeeded();
             if (_cache == null || !_cache.Founded || string.IsNullOrEmpty(_cache.DominionName)) return "";
 
@@ -166,14 +170,21 @@ namespace AIROG_GenContext.ContextProviders
             }
         }
 
+        private string _cachePath; // file _cache was read from
+
         private void RefreshCacheIfNeeded()
         {
-            if (_cache != null && Time.realtimeSinceStartup - _lastLoadTime < CACHE_REFRESH_RATE) return;
+            // The cache is per save file: never serve the previous save's dominion after a load.
+            string path = null;
+            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                path = Path.Combine(SS.I.saveTopLvlDir ?? "", SS.I.saveSubDirAsArg, "grand_strategy_data.json");
+
+            if (path == _cachePath && _cache != null && Time.realtimeSinceStartup - _lastLoadTime < CACHE_REFRESH_RATE) return;
+            _cachePath = path;
             _lastLoadTime = Time.realtimeSinceStartup;
             try
             {
-                if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) { _cache = null; return; }
-                string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "grand_strategy_data.json");
+                if (path == null) { _cache = null; return; }
                 if (!File.Exists(path)) { _cache = null; return; }
                 _cache = JsonConvert.DeserializeObject<DominionStateStub>(File.ReadAllText(path));
             }
