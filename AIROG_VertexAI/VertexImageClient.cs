@@ -40,6 +40,10 @@ namespace AIROG_VertexAI
                 string size = VertexAIPlugin.CachedImageSize;
                 string aspectRatio = PickAspectRatio(widthOverHeight);
 
+                // Resolved before the request, like the game's own clients: the save folder can
+                // change while the request is in flight (quit to menu, load another save).
+                string path = (imgPathNoExtOverride ?? entity.GetImgPathNoExt(imgGenInfo.imgType)) + ".png";
+
                 var imageConfig = new JObject { ["aspectRatio"] = aspectRatio };
                 // imageSize defaults to 1K when omitted, so only send it when chosen.
                 if (!string.IsNullOrEmpty(size)) imageConfig["imageSize"] = size;
@@ -67,7 +71,7 @@ namespace AIROG_VertexAI
                 VertexAIPlugin.Log.LogInfo($"[VertexAI] image gen: model={model} size={(string.IsNullOrEmpty(size) ? "default" : size)} " +
                                            $"ratio={aspectRatio} for {entity.name}");
 
-                JObject response = await VertexApiClient.PostGenerateContent(model, body, ct);
+                JObject response = await VertexApiClient.PostGenerateContent(model, body, ct, imageRequest: true);
                 byte[] bytes = VertexApiClient.ExtractImageBytes(response, out string failureReason);
                 if (bytes == null)
                 {
@@ -75,7 +79,9 @@ namespace AIROG_VertexAI
                     return GameEntity.ImgGenState.REGULAR_FAILED;
                 }
 
-                string path = (imgPathNoExtOverride ?? entity.GetImgPathNoExt(imgGenInfo.imgType)) + ".png";
+                // The entity's save was unloaded while we waited; its folder is no longer ours to write to.
+                if (Utils.GenTargetAbandoned(entity)) return GameEntity.ImgGenState.REGULAR_FAILED;
+
                 string dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllBytes(path, bytes);

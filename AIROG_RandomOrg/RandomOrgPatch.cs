@@ -31,16 +31,26 @@ namespace AIROG_RandomOrg
             !RandomOrgPlugin.DiceRollsOnly.Value || Active;
     }
 
-    // 07/18 build appended a trailing optional `GameCharacter actor = null` param — the explicit
-    // Type[] must list it or Harmony's signature lookup fails with "Undefined target method".
-    [HarmonyPatch(typeof(Utils), "GetRollOutcome", new Type[]
-    {
-        typeof(GameplayManager), typeof(SS.PlayerAttribute), typeof(long),
-        typeof(PlayerSkill), typeof(InteractionInfo), typeof(PlausV2), typeof(SS.RollOutcome),
-        typeof(GameCharacter)
-    })]
+    // The game keeps appending trailing optional parameters to this method (07/18 added
+    // `GameCharacter actor`, the 11/18 Perks v2 build added `PerkNode passivePerk`), and every time
+    // an explicit Type[] goes stale the patch dies with "Undefined target method" - which, with
+    // DiceRollsOnly on, silently turns the whole mod off for skill checks. So the overload is picked
+    // by shape instead: the one whose first parameter is the GameplayManager (the other overload is
+    // the pure (double rollNum, double[] bkpts) maths helper, which must NOT open a roll scope).
+    [HarmonyPatch]
     public static class Patch_Utils_GetRollOutcome_Scope
     {
+        public static System.Reflection.MethodBase TargetMethod()
+        {
+            foreach (var m in AccessTools.GetDeclaredMethods(typeof(Utils)))
+            {
+                if (m.Name != "GetRollOutcome") continue;
+                var ps = m.GetParameters();
+                if (ps.Length > 0 && ps[0].ParameterType == typeof(GameplayManager)) return m;
+            }
+            return null;
+        }
+
         [HarmonyPrefix]
         public static void Prefix() => RollScope.Enter();
 
@@ -96,6 +106,9 @@ namespace AIROG_RandomOrg
         {
             if (!RandomOrgPlugin.Enabled.Value) return true;
             if (!RollScope.AllowTrueRandom) return true;
+            // Vanilla Random.Next(0) is 0 (and a negative n throws); the mapping below would
+            // answer -1. Leave degenerate ranges to the original.
+            if (n <= 0) return true;
             if (!RandomOrgClient.TryGetRandom(out double val)) return true;
 
             __result = Math.Min((int)(val * n), n - 1);
@@ -111,6 +124,9 @@ namespace AIROG_RandomOrg
         {
             if (!RandomOrgPlugin.Enabled.Value) return true;
             if (!RollScope.AllowTrueRandom) return true;
+            // An empty range (high < low) would come back as high, below the caller's minimum;
+            // vanilla returns low or throws. Leave it to the original.
+            if (high < low) return true;
             if (!RandomOrgClient.TryGetRandom(out double val)) return true;
 
             __result = Math.Min(low + (int)(val * (high - low + 1)), high);
@@ -137,6 +153,20 @@ namespace AIROG_RandomOrg
         {
             if (__1 != "GenContext Mod Manager") return;
 
+            // A prefix that throws stops PresentSelf, i.e. GenContext's whole Mods menu, from
+            // opening. Losing these three rows is the worst that should happen.
+            try
+            {
+                AppendToggles(__instance, __0);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[RandomOrg] Mods menu injection failed (non-fatal): {ex.Message}");
+            }
+        }
+
+        private static void AppendToggles(object __instance, object __0)
+        {
             var list = __0 as IList;
             if (list == null) return;
 

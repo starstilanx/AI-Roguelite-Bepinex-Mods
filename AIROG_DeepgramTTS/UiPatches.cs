@@ -1,6 +1,7 @@
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 using System.Collections.Generic;
 using System.Linq;
@@ -21,17 +22,37 @@ namespace AIROG_DeepgramTTS
         [HarmonyPatch("Options")]
         public static void OptionsPostfix(MainMenu __instance)
         {
-            Debug.Log("[DeepgramTTS] Options Postfix Triggered");
-            if (ttsProviderDropdown == null)
+            // Never let a UI hiccup escape: an exception here would abort the rest of the
+            // Options() postfix chain, which other mods rely on.
+            try
             {
-                Debug.Log("[DeepgramTTS] Creating UI...");
-                CreateUi(__instance);
-            }
+                Debug.Log("[DeepgramTTS] Options Postfix Triggered");
+                if (ttsProviderDropdown == null)
+                {
+                    Debug.Log("[DeepgramTTS] Creating UI...");
+                    CreateUi(__instance);
+                }
 
-            isInitializing = true;
-            UpdateProviderDropdownValue();
-            UpdateDeepgramVisibility();
-            isInitializing = false;
+                isInitializing = true;
+                UpdateProviderDropdownValue();
+                UpdateDeepgramVisibility();
+                if (apiKeyInput != null)
+                {
+                    // Follow the game's "hide keys" toggle, as its own key boxes do.
+                    apiKeyInput.contentType = __instance.keysVisible
+                        ? TMP_InputField.ContentType.Standard
+                        : TMP_InputField.ContentType.Password;
+                    apiKeyInput.ForceLabelUpdate();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"[DeepgramTTS] Options UI failed: {ex}");
+            }
+            finally
+            {
+                isInitializing = false;
+            }
         }
 
         private static void CreateUi(MainMenu __instance)
@@ -43,16 +64,25 @@ namespace AIROG_DeepgramTTS
             GameObject providerGo = Object.Instantiate(__instance.ttsOptions.ttsModeDropdown.gameObject, parent);
             providerGo.name = "DeepgramTTS_Provider_Dropdown";
             providerGo.transform.SetSiblingIndex(index);
-            
+
             ttsProviderDropdown = providerGo.GetComponent<TMP_Dropdown>();
+            // The TTS mode dropdown is filled by a LocalizeDropdown, which would refill the clone
+            // with the TTS mode names on a language change.
+            LocalizeDropdown localizer = providerGo.GetComponent<LocalizeDropdown>();
+            if (localizer != null) Object.DestroyImmediate(localizer);
+
+            // RemoveAllListeners does not drop the inspector-wired TtsOptions callback the clone
+            // inherited from the TTS mode dropdown.
+            for (int i = ttsProviderDropdown.onValueChanged.GetPersistentEventCount() - 1; i >= 0; i--)
+                ttsProviderDropdown.onValueChanged.SetPersistentListenerState(i, UnityEventCallState.Off);
             ttsProviderDropdown.onValueChanged.RemoveAllListeners();
             ttsProviderDropdown.ClearOptions();
-            
+
             // If Gemini is active, we might see it here, but they use their own static field.
             // For now, let's just add Deepgram.
-            
+
             ttsProviderDropdown.AddOptions(new List<string> { "TikTok (Default)", "Deepgram Aura" });
-            
+
             ttsProviderDropdown.onValueChanged.AddListener(val => {
                 if (isInitializing) return;
                 DeepgramTtsPlugin.UseDeepgramTts.Value = (val == 1);
@@ -66,10 +96,16 @@ namespace AIROG_DeepgramTTS
 
         private static void CreateApiKeyInput(MainMenu __instance, Transform parent, int index)
         {
-            // Use the Trans version as it usually includes the label
-            GameObject template = __instance.customerKeyTxtInputForAudioGenTrans != null ? 
-                __instance.customerKeyTxtInputForAudioGenTrans.gameObject : 
-                __instance.customerKeyTxtInputForAudioGen.gameObject;
+            // Use the Trans version as it usually includes the label. The two *ForAudioGen
+            // fields are leftovers the game no longer uses itself, so fall back to the key slot
+            // that replaced them if they are ever unassigned.
+            GameObject template = null;
+            if (__instance.customerKeyTxtInputForAudioGenTrans != null)
+                template = __instance.customerKeyTxtInputForAudioGenTrans.gameObject;
+            else if (__instance.customerKeyTxtInputForAudioGen != null)
+                template = __instance.customerKeyTxtInputForAudioGen.gameObject;
+            else if (__instance.customerKeySlotForAudioGen != null)
+                template = __instance.customerKeySlotForAudioGen.gameObject;
 
             if (template == null)
             {
@@ -80,20 +116,20 @@ namespace AIROG_DeepgramTTS
             GameObject keyGo = Object.Instantiate(template, parent);
             keyGo.name = "DeepgramTTS_ApiKey_Group";
             keyGo.transform.SetSiblingIndex(index);
-            
-            // SANITIZATION: Remove any logic scripts attached to the template 
+
+            // SANITIZATION: Remove any logic scripts attached to the template
             // that might be saving to the wrong PlayerPrefs key (e.g. Sapphire's key).
             var scripts = keyGo.GetComponentsInChildren<MonoBehaviour>(true);
             foreach (var script in scripts)
             {
                 // Keep standard UI components
-                if (script is TMP_InputField || script is TextMeshProUGUI || 
+                if (script is TMP_InputField || script is TextMeshProUGUI ||
                     script is UnityEngine.UI.Image || script is UnityEngine.UI.Graphic ||
                     script is UnityEngine.UI.Selectable || script is UnityEngine.EventSystems.UIBehaviour)
                 {
                     continue;
                 }
-                
+
                 // Destroy everything else (custom logic scripts)
                 Debug.Log($"[DeepgramTTS] Destroying helper script on clone: {script.GetType().Name}");
                 Object.DestroyImmediate(script);
@@ -101,7 +137,7 @@ namespace AIROG_DeepgramTTS
 
             deepgramSettingsGroup = keyGo;
             apiKeyInput = keyGo.GetComponentInChildren<TMP_InputField>();
-            
+
             if (apiKeyInput != null)
             {
                 apiKeyInput.name = "DeepgramApiKeyInput"; // Rename to avoid finding by name "CustomerKeyInput"
@@ -112,10 +148,10 @@ namespace AIROG_DeepgramTTS
                 apiKeyInput.onSelect = new TMP_InputField.SelectionEvent();
                 apiKeyInput.onDeselect = new TMP_InputField.SelectionEvent();
                 apiKeyInput.onSubmit = new TMP_InputField.SubmitEvent();
-                
-                apiKeyInput.contentType = TMP_InputField.ContentType.Standard; 
+
+                apiKeyInput.contentType = TMP_InputField.ContentType.Standard;
                 apiKeyInput.text = DeepgramTtsPlugin.DeepgramApiKey.Value;
-                
+
                 apiKeyInput.onValueChanged.AddListener(val => {
                     if (isInitializing) return;
                     DeepgramTtsPlugin.DeepgramApiKey.Value = val;

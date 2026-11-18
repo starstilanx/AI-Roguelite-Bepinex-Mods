@@ -64,6 +64,9 @@ namespace AIROG_NPCExpansion
                     AIAsker.ChatGptPostprocessingType.NONE);
 
                 if (string.IsNullOrEmpty(result)) return;
+                // The list below belongs to whichever save is loaded NOW; drop the lesson if the
+                // player left this NPC's save while the AI was answering.
+                if (!data.IsFromCurrentSave) return;
 
                 string skillName = "";
                 string skillDesc = "";

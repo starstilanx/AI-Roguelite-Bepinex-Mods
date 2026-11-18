@@ -33,6 +33,7 @@ The following mods represent the most significant transformations to the AI Rogu
 | **Settlement** | Transform the game into a town-builder. Found settlements, manage structures, and navigate faction politics. | ✅ |
 | **History Tab** | Solve "AI amnesia" with a persistent repository of past events injected into current prompts. | ⚠️ (High Tokens) |
 | **Preset Exporter** | A utility for world-builders to export their custom rules and scenarios as shareable presets. | ✅ |
+| **Schedules** | Weekly timetables for places and routines for characters, following the in-game clock. The storyteller is told what is happening where you are and who should be there. | ✅ |
 
 ---
 
@@ -56,6 +57,13 @@ Enhance immersion by giving different characters unique voices.
 - **Gen Context:** A powerful tool for power users to toggle context truncation and manage how much history the AI "sees."
 - **Token Manager:** Real-time tracking and fine-tuning of API token usage to balance narrative depth with cost.
 - **Random.org:** Replaces pseudorandom hardware generators with **true randomness** sourced from atmospheric noise.
+- **Wildcards:** A1111 Dynamic Prompts syntax (`__name__`, `{a|b|c}`) in your generation rules, spawn boxes and image prompt formats. The mod makes the random pick before the AI sees the text, and reads existing sd-dynamic-prompts wildcard files unchanged.
+- **Directed Updates:** Lets the GM attach an instruction to an entity update and a destination to a departing character, and lets you right-click any entity to instruct an update yourself.
+- **Per-save mod switches:** The in-game Mods checklist (Gen Context) turns each gameplay mod fully on or off for the save you are in.
+
+### Developer tools
+
+- **`tools/patch-audit.ps1`:** binds every mod's Harmony patches against the current game assembly without launching the game, and reports targets that no longer bind, stale reflection names, and hooks on methods the game no longer calls. Run it after every game update.
 
 ---
 

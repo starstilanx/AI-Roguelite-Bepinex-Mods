@@ -70,6 +70,7 @@ namespace AIROG_WorldExpansion
             try
             {
                 int wanted = (needLeader ? 1 : 0) + needLts;
+                var stateAtStart = WorldData.CurrentState;
                 List<FactionFigure> figures = null;
                 try
                 {
@@ -79,6 +80,11 @@ namespace AIROG_WorldExpansion
                 {
                     Debug.LogWarning($"[WorldExpansion] AI court generation failed for {data.Name}: {e.Message}");
                 }
+
+                // `data` belongs to the world that was current when the call started. If another
+                // save was loaded (or a new game begun) meanwhile, drop the result rather than
+                // log it into - and save over - the wrong world.
+                if (!ReferenceEquals(stateAtStart, WorldData.CurrentState)) return;
 
                 if (figures == null) figures = new List<FactionFigure>();
                 while (figures.Count < wanted)
@@ -270,7 +276,11 @@ namespace AIROG_WorldExpansion
         [HarmonyPostfix]
         public static void Postfix_SetAsCorpse(GameCharacter __instance)
         {
-            try { HandleCharacterDeath(__instance); }
+            try
+            {
+                if (!ModSwitch.Enabled) return;
+                HandleCharacterDeath(__instance);
+            }
             catch (Exception e) { Debug.LogWarning($"[WorldExpansion] Court death handling failed: {e.Message}"); }
         }
 

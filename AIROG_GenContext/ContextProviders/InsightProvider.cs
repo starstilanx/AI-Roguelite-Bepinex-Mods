@@ -25,33 +25,50 @@ namespace AIROG_GenContext.ContextProviders
             public Dictionary<string, int> ConversationCounts;
             public Dictionary<string, int> InsightGainedAtCount;
             public Dictionary<string, int> PlaceInteractionCounts;
+            public string ActiveNpcUuid;
 #pragma warning restore 0649
         }
 
         private InsightDataStub _insightCache = new InsightDataStub();
-        private float _lastLoadTime = -999f;
-        private const float CACHE_REFRESH_RATE = 5f;
+        private string _cachePath;
+        private DateTime _cacheStamp;
 
         public string GetContext(string prompt, int maxTokens)
+        {
+            try
+            {
+                return BuildContext();
+            }
+            catch (Exception ex)
+            {
+                // Runs inside the game's prompt builder: a throw here would lose the whole turn.
+                Debug.LogWarning($"[GenContext] Insight context error: {ex.Message}");
+                return "";
+            }
+        }
+
+        private string BuildContext()
         {
             var manager = SS.I != null ? SS.I.hackyManager : null;
             if (manager == null) return "";
 
-            RefreshCacheIfNeeded();
+            RefreshCache();
 
             string context = "";
 
             // ── NPC Insight ─────────────────────────────────────────────────────
-            var npc = manager.npcActionsHandler?.currentNpc;
-            if (npc != null)
+            // The NPC this turn is aimed at, as recorded by AIROG_Insight at the start of the turn.
+            // (npcActionsHandler.currentNpc is never assigned by the game any more.)
+            string npcUuid = _insightCache.ActiveNpcUuid;
+            if (!string.IsNullOrEmpty(npcUuid))
             {
                 string existingInsight = null;
                 bool hasInsight = _insightCache.NpcInsights != null &&
-                                  _insightCache.NpcInsights.TryGetValue(npc.uuid, out existingInsight) &&
+                                  _insightCache.NpcInsights.TryGetValue(npcUuid, out existingInsight) &&
                                   !string.IsNullOrEmpty(existingInsight);
 
                 int convCount = 0;
-                _insightCache.ConversationCounts?.TryGetValue(npc.uuid, out convCount);
+                _insightCache.ConversationCounts?.TryGetValue(npcUuid, out convCount);
 
                 if (hasInsight)
                 {
@@ -60,7 +77,7 @@ namespace AIROG_GenContext.ContextProviders
 
                     // Enough further conversations? Ask the AI to reveal a deeper layer.
                     int gainedAt = 0;
-                    _insightCache.InsightGainedAtCount?.TryGetValue(npc.uuid, out gainedAt);
+                    _insightCache.InsightGainedAtCount?.TryGetValue(npcUuid, out gainedAt);
                     if (convCount - gainedAt >= DeepenThreshold)
                     {
                         context += "\n[INSIGHT DIRECTIVE — HIDDEN FROM PLAYER]\n" +
@@ -112,26 +129,34 @@ namespace AIROG_GenContext.ContextProviders
             return context;
         }
 
-        private void RefreshCacheIfNeeded()
+        /// <summary>
+        /// Re-reads insight_data.json whenever it changed on disk. AIROG_Insight rewrites it at the
+        /// start of every turn (who the turn is aimed at, updated counts) and the prompt is built
+        /// moments later, so a time-based cache would hand the AI the previous turn's target.
+        /// </summary>
+        private void RefreshCache()
         {
-            if (Time.time - _lastLoadTime > CACHE_REFRESH_RATE)
+            string path = null;
+            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "insight_data.json");
+
+            if (path == null || !File.Exists(path))
             {
-                LoadData();
-                _lastLoadTime = Time.time;
+                // No file for this save (yet): never keep serving another save's insights
+                _insightCache = new InsightDataStub();
+                _cachePath = null;
+                return;
             }
-        }
 
-        private void LoadData()
-        {
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
-
-            string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "insight_data.json");
-            if (!File.Exists(path)) return;
+            DateTime stamp = File.GetLastWriteTimeUtc(path);
+            if (path == _cachePath && stamp == _cacheStamp) return;
+            _cachePath = path;
+            _cacheStamp = stamp;
 
             try
             {
                 var loaded = JsonConvert.DeserializeObject<InsightDataStub>(File.ReadAllText(path));
-                if (loaded != null) _insightCache = loaded;
+                _insightCache = loaded ?? new InsightDataStub();
             }
             catch (Exception ex)
             {

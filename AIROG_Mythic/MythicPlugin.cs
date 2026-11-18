@@ -13,7 +13,7 @@ namespace AIROG_Mythic
     {
         public const string PLUGIN_GUID = "com.airog.mythic";
         public const string PLUGIN_NAME = "AIROG Mythic Director";
-        public const string PLUGIN_VERSION = "1.0.0";
+        public const string PLUGIN_VERSION = "1.1.0";
 
         public static MythicPlugin Instance { get; private set; }
 
@@ -60,6 +60,10 @@ namespace AIROG_Mythic
             Harmony.CreateAndPatchAll(typeof(ChaosEngine.Patch_SetAsCorpse));
             Harmony.CreateAndPatchAll(typeof(Patch_SaveLoad));
             Harmony.CreateAndPatchAll(typeof(ConsoleCommands));
+            // Last and guarded: RandomEvents only exists from the 11/18/2026 game build on, and a
+            // failure here must not take the patches above or the provider registration with it.
+            try { Harmony.CreateAndPatchAll(typeof(RandomEventEngine.Patch_NativeRandomEvent)); }
+            catch (Exception ex) { Logger.LogWarning($"[Mythic] Native random-event hook unavailable. ({ex.GetType().Name})"); }
 
             // Register with GenContext if present (soft dependency — inert without it)
             try
@@ -73,25 +77,64 @@ namespace AIROG_Mythic
             }
         }
 
+        // ── Per-save master switch (GenContext "Mods" checklist) ─────────────────
+
+        private static bool _noModToggles;
+
+        /// <summary>False when this save has the Mythic Director switched off. GenContext is a
+        /// soft dependency: when it (or its ModToggles) is absent the mod is always on.</summary>
+        public static bool SwitchedOn()
+        {
+            if (_noModToggles) return true;
+            try { return QuerySwitch(); }
+            catch { _noModToggles = true; return true; }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool QuerySwitch()
+        {
+            return AIROG_GenContext.ModToggles.IsEnabled(AIROG_GenContext.ModToggles.Keys.Mythic);
+        }
+
         // ── Save / load lifecycle ────────────────────────────────────────────────
 
         public static class Patch_SaveLoad
         {
             [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]
             [HarmonyPostfix]
-            public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+            // No injected args: WriteSaveFile's first parameter is MmCtxGetter since the 07/28 build,
+            // so declaring it as GameplayManager was an unchecked type mismatch.
+            public static void Postfix_WriteSaveFile()
             {
+                // LoadGame can autosave (every-turn autosave) before our LoadGame postfix has read
+                // this save's file. Memory still holds the previous save's state then - don't write it.
+                if (MythicData.Loading) return;
                 MythicData.SaveToCurrentDir();
+            }
+
+            [HarmonyPatch(typeof(GameplayManager), "LoadGame")]
+            [HarmonyPrefix]
+            public static void Prefix_LoadGame()
+            {
+                MythicData.Loading = true;
             }
 
             [HarmonyPatch(typeof(GameplayManager), "LoadGame")]
             [HarmonyPostfix]
             public static void Postfix_LoadGame(GameplayManager __instance)
             {
-                if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                try
                 {
-                    MythicData.Load(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
-                    ChaosEngine.OnAfterLoad();
+                    if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                    {
+                        MythicData.Load(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+                        ChaosEngine.OnAfterLoad();
+                    }
+                }
+                finally
+                {
+                    MythicData.Loading = false;
+                    RandomEventEngine.NativeEventThisTurn = false; // the turn it belonged to is gone
                 }
             }
 

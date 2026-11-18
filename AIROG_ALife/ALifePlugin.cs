@@ -15,7 +15,7 @@ namespace AIROG_ALife
     {
         public const string PLUGIN_GUID = "com.airog.alife";
         public const string PLUGIN_NAME = "AIROG A-Life";
-        public const string PLUGIN_VERSION = "2.3.1";
+        public const string PLUGIN_VERSION = "2.4.0";
 
         public static ALifePlugin Instance { get; private set; }
 
@@ -46,8 +46,16 @@ namespace AIROG_ALife
                 "Hard cap on live virtual squads. 0 = automatic (scales with world size and wars).");
             CfgMaterialize = Config.Bind("General", "MaterializeSquads", true,
                 "Spawn real characters when the player arrives where a virtual squad is present.");
-            CfgNpcMigration = Config.Bind("General", "NamedNpcMigration", true,
-                "Allow real named NPCs to occasionally travel to neighboring locations off-screen.");
+            // Opt-in, under a NEW key on purpose. This feature was bound as "NamedNpcMigration",
+            // default true, since v1 - but it tested a field the game no longer fills, so it never
+            // moved anyone. Every existing ALife.cfg therefore already says NamedNpcMigration = true.
+            // Had the repaired feature kept that key, it would have switched itself on for every
+            // player the day the fix shipped and begun relocating their named NPCs (quest givers,
+            // shopkeepers' neighbours, a school's students) at ~8% per turn with nobody having chosen it.
+            CfgNpcMigration = Config.Bind("General", "NamedNpcTravel", false,
+                "Allow real named NPCs to occasionally travel to a neighboring location while off-screen " +
+                "(never merchants, followers, or anyone where the player currently is). Off by default: " +
+                "over a long save this slowly moves characters away from where the story left them.");
             CfgMigrationChance = Config.Bind("General", "NpcMigrationChancePerTurn", 0.08,
                 "Per-turn chance that one off-screen named NPC relocates to an adjacent location.");
             CfgPersistentSquads = Config.Bind("v2", "PersistentSquads", true,
@@ -89,12 +97,74 @@ namespace AIROG_ALife
             {
                 Logger.LogWarning($"[ALife] GenContext not available — aftermath prompt injection disabled. ({ex.Message})");
             }
+
+            try { HookSwitchEvents(); }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[ALife] Per-save mod switches not available — A-Life is always on. ({ex.GetType().Name})");
+            }
+        }
+
+        // ---- Per-save master switch (GenContext "Mods" checklist) ----
+
+        private static bool _noModToggles;
+
+        /// <summary>False when this save has A-Life switched off. GenContext is a soft dependency:
+        /// when it (or its ModToggles) is absent the mod is always on.</summary>
+        public static bool SwitchedOn()
+        {
+            if (_noModToggles) return true;
+            try { return QuerySwitch(AIROG_GenContext.ModToggles.Keys.ALife); }
+            catch { _noModToggles = true; return true; }
+        }
+
+        /// <summary>False when this save has WorldExpansion ("World State") switched off, in which
+        /// case A-Life must neither read its frozen wars nor write into its data.</summary>
+        public static bool WorldSwitchedOn()
+        {
+            if (_noModToggles) return true;
+            try { return QuerySwitch(AIROG_GenContext.ModToggles.Keys.WorldExpansion); }
+            catch { _noModToggles = true; return true; }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool QuerySwitch(string key)
+        {
+            return AIROG_GenContext.ModToggles.IsEnabled(key);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void HookSwitchEvents()
+        {
+            AIROG_GenContext.ModToggles.Changed += (key, enabled) =>
+            {
+                if (key == AIROG_GenContext.ModToggles.Keys.ALife) ApplySwitchToUi();
+            };
+            // Raised from inside whichever IsEnabled call first notices the save folder changed,
+            // i.e. usually mid-load with the PREVIOUS save's squads still in memory. UI only:
+            // nothing here may simulate, load or save.
+            AIROG_GenContext.ModToggles.Reloaded += ApplySwitchToUi;
+        }
+
+        private static void ApplySwitchToUi()
+        {
+            try
+            {
+                ALifeRumorsUI.ApplySwitch();
+                ALifeTracksLens.ApplySwitch();
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning("[ALife] Could not apply the mod switch to the UI: " + ex.Message);
+            }
         }
 
         // ---- Save / load lifecycle ----
 
         public static class Patch_SaveLoad
         {
+            private static WeakReference _loadedManager; // weak: must not pin a finished scene's manager
+
             // NOTE: WriteSaveFile's first arg is MmCtxGetter (implemented by BOTH GameplayManager
             // and MainMenu) as of the 07/28 build. Taking no injected parameters avoids Harmony
             // emitting a castclass that would throw when the caller is a MainMenu.
@@ -102,6 +172,9 @@ namespace AIROG_ALife
             [HarmonyPostfix]
             public static void Postfix_WriteSaveFile()
             {
+                // LoadGame's arrival call can also autosave (every-turn autosave) before our
+                // LoadGame postfix has read this save's file - same race as the arrival itself.
+                if (ALifeMaterializer.SuppressArrival) return;
                 ALifeData.SaveToCurrentDir();
             }
 
@@ -125,13 +198,44 @@ namespace AIROG_ALife
             [HarmonyPostfix]
             public static void Postfix_LoadGame(GameplayManager __instance)
             {
-                if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                    ALifeData.Load(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
-                ALifeWorldBridge.Reset();
-                ALifeLegend.ResetDecayCarry();
-                ALifeMaterializer.SuppressArrival = false;
-                if (__instance.currentPlace != null)
-                    ALifeMaterializer.OnPlayerArrived(__instance, __instance.currentPlace);
+                // A save load always runs in a freshly loaded scene. LoadGame again on the same
+                // GameplayManager is Undo / Retry / the game's own error rollback.
+                bool rollback = _loadedManager != null && ReferenceEquals(_loadedManager.Target, __instance);
+                _loadedManager = new WeakReference(__instance);
+                try
+                {
+                    if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                        ALifeData.Load(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+                    ALifeWorldBridge.Reset();
+                    ALifeLegend.ResetDecayCarry();
+                    if (rollback) ALifeEmbodiment.ReconcileRollback(__instance);
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError("[ALife] Load hook failed: " + ex);
+                }
+                finally
+                {
+                    ALifeMaterializer.SuppressArrival = false;
+                }
+
+                // Replay the arrival that was suppressed above. An exception here would otherwise
+                // escape into the game's own LoadGame call and abort the load.
+                try
+                {
+                    if (__instance.currentPlace != null && SwitchedOn())
+                    {
+                        // The travel graph is otherwise only built on the first turn tick; until
+                        // then it still describes the previous save's map (or nothing), so a band
+                        // that should flee the player on this arrival would find no way out.
+                        ALifeGraph.EnsureBuilt(__instance);
+                        ALifeMaterializer.OnPlayerArrived(__instance, __instance.currentPlace);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError("[ALife] Arrival replay after load failed: " + ex);
+                }
             }
 
             [HarmonyPatch(typeof(MainMenu), "NewGame")]

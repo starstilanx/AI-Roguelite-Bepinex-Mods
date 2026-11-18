@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using AIROG_Core;
 using BepInEx;
 using BepInEx.Configuration;
@@ -39,11 +40,17 @@ namespace AIROG_ScenePace
     /// a mod writing there would both fight those edits and only take effect on new games.
     /// </summary>
     [BepInPlugin(PLUGIN_GUID, PLUGIN_NAME, PLUGIN_VERSION)]
+    // Soft: only used for the per-save on/off switch in GenContext's "Mods" checklist.
+    [BepInDependency("com.airog.gencontext", BepInDependency.DependencyFlags.SoftDependency)]
     public class ScenePacePlugin : BaseModPlugin
     {
         public const string PLUGIN_GUID = "com.airog.scenepace";
         public const string PLUGIN_NAME = "Scene Pace";
-        public const string PLUGIN_VERSION = "1.0.0";
+        public const string PLUGIN_VERSION = "1.1.0";
+
+        // Label of this mod's row in the GenContext "Mods" checklist, and its key in the save's
+        // airog_mod_toggles.json. Never rename: an old name in a save would silently stop applying.
+        private const string SAVE_SWITCH_KEY = "Scene Pace";
 
         private const string STORY_DESC_KEY = "json_substr_unified_story_desc_input.txt";
         private const string ROLL_GUIDANCE_KEY = "json_substr_unified_roll_guidance.txt";
@@ -63,7 +70,8 @@ namespace AIROG_ScenePace
             Instance = this;
 
             Enabled = Config.Bind("General", "Enabled", true,
-                "Master switch. When false, every hook passes straight through to vanilla behavior.");
+                "Master switch for every save. When false, every hook passes straight through to vanilla behavior. " +
+                "To switch the mod off for one save only, untick \"Scene Pace\" in the GenContext Mods menu instead.");
             RuleStrength = Config.Bind("General", "Strength", Strength.Firm,
                 "How hard the scene-scope rules are worded.\n" +
                 "Off = inject nothing.\n" +
@@ -96,6 +104,16 @@ namespace AIROG_ScenePace
                 PromptFiles.Seed(RuleKind.ActionSuffix, RuleStrength.Value);
             });
 
+            try
+            {
+                RegisterSaveSwitch();
+            }
+            catch (Exception)
+            {
+                genContextUnavailable = true;
+                Logger.LogInfo("AIROG_GenContext not found (or too old for per-save switches) - Scene Pace stays on for every save.");
+            }
+
             SafePatch(typeof(GameplayManager), "GetActionSuffix",
                 postfix: new HarmonyMethod(typeof(ScenePacePlugin), nameof(GetActionSuffix_Postfix)));
             SafePatch(typeof(UnifiedPromptBuilder), "GetStoryOrUnifiedPreambleStrInJarrayForm",
@@ -113,6 +131,37 @@ namespace AIROG_ScenePace
             Enabled != null && Enabled.Value &&
             RuleStrength != null && RuleStrength.Value != Strength.Off;
 
+        // Latched the first time a GenContext type fails to resolve, so a missing GenContext costs
+        // one exception per session instead of one per prompt build.
+        private static bool genContextUnavailable;
+
+        /// <summary>
+        /// This save's switch in the GenContext "Mods" checklist. GenContext is optional: without
+        /// it there is no switch, and the mod is simply on.
+        /// </summary>
+        private static bool SaveSwitchOn()
+        {
+            if (genContextUnavailable) return true;
+            try
+            {
+                return QuerySaveSwitch();
+            }
+            catch (Exception)
+            {
+                genContextUnavailable = true;
+                return true;
+            }
+        }
+
+        // The only two methods that name a GenContext type. They are kept apart and never inlined
+        // so that a missing AIROG_GenContext.dll fails here, inside the callers' try blocks,
+        // rather than when the JIT compiles Awake or one of the Harmony patch bodies.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool QuerySaveSwitch() => AIROG_GenContext.ModToggles.IsEnabled(SAVE_SWITCH_KEY);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void RegisterSaveSwitch() => AIROG_GenContext.ModToggles.Register(SAVE_SWITCH_KEY);
+
         private static string TextFor(RuleKind kind) =>
             (PromptFiles.Read(kind, RuleStrength.Value) ?? "").Trim();
 
@@ -126,6 +175,7 @@ namespace AIROG_ScenePace
         public static void GetActionSuffix_Postfix(GameplayManager __instance, ref string __result)
         {
             if (!Active || InjectActionSuffix == null || !InjectActionSuffix.Value) return;
+            if (!SaveSwitchOn()) return;
             try
             {
                 string note = TextFor(RuleKind.ActionSuffix);
@@ -142,7 +192,10 @@ namespace AIROG_ScenePace
                 string existing = __result ?? "";
                 if (existing.Contains(note)) return;
 
-                bool needsSpace = existing.Length > 0 && !char.IsWhiteSpace(existing[existing.Length - 1]);
+                // Both call sites concatenate the suffix straight onto the action text with no
+                // separator (the game's own suffix presets carry a leading space for that reason),
+                // so an empty Options suffix needs the space too.
+                bool needsSpace = existing.Length == 0 || !char.IsWhiteSpace(existing[existing.Length - 1]);
                 __result = existing + (needsSpace ? " " : "") + note;
 
                 if (LogInjections != null && LogInjections.Value) LogInfo($"Action suffix injected ({note.Length} chars).");
@@ -192,7 +245,10 @@ namespace AIROG_ScenePace
 
                 // Passing "" when switched off restores the vanilla text, so toggling Enabled,
                 // Strength or InjectIntoPreamble takes effect on the next turn without a restart.
-                bool on = Active && InjectIntoPreamble != null && InjectIntoPreamble.Value;
+                // The per-save switch goes through the same path rather than an early return:
+                // the dict is global, so text injected while playing one save has to be taken
+                // back out when a save with the mod switched off is loaded.
+                bool on = Active && InjectIntoPreamble != null && InjectIntoPreamble.Value && SaveSwitchOn();
                 Append(dict, STORY_DESC_KEY, on ? TextFor(RuleKind.StoryScope) : "");
                 Append(dict, ROLL_GUIDANCE_KEY, on ? TextFor(RuleKind.RollScope) : "");
             }

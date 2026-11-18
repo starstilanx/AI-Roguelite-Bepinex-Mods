@@ -23,15 +23,27 @@ namespace AIROG_Sapi5
         {
             Debug.Log("[SAPI5] OptionsPostfix triggered");
 
-            if (ttsProviderDropdown == null)
+            // Never let a UI hiccup escape: an exception here would abort the rest of the
+            // Options() postfix chain, which other mods rely on.
+            try
             {
-                Debug.Log("[SAPI5] Creating TTS Provider UI...");
-                CreateUi(__instance.ttsOptions);
-            }
+                if (ttsProviderDropdown == null)
+                {
+                    Debug.Log("[SAPI5] Creating TTS Provider UI...");
+                    CreateUi(__instance.ttsOptions);
+                }
 
-            isInitializing = true;
-            UpdateProviderDropdownValue();
-            isInitializing = false;
+                isInitializing = true;
+                UpdateProviderDropdownValue();
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"[SAPI5] Options UI failed: {ex}");
+            }
+            finally
+            {
+                isInitializing = false;
+            }
         }
 
         private static void CreateUi(TtsOptions ttsOptions)
@@ -59,6 +71,15 @@ namespace AIROG_Sapi5
                 return;
             }
 
+            // The TTS mode dropdown is filled by a LocalizeDropdown, which would refill the clone
+            // with the TTS mode names on a language change.
+            LocalizeDropdown localizer = providerGo.GetComponent<LocalizeDropdown>();
+            if (localizer != null) Object.DestroyImmediate(localizer);
+
+            // RemoveAllListeners does not drop the inspector-wired TtsOptions callback the clone
+            // inherited from the TTS mode dropdown.
+            for (int i = ttsProviderDropdown.onValueChanged.GetPersistentEventCount() - 1; i >= 0; i--)
+                ttsProviderDropdown.onValueChanged.SetPersistentListenerState(i, UnityEngine.Events.UnityEventCallState.Off);
             ttsProviderDropdown.onValueChanged.RemoveAllListeners();
             ttsProviderDropdown.ClearOptions();
             ttsProviderDropdown.AddOptions(new List<string> { "Cloud TTS (Game Default)", "SAPI5 (Windows)" });

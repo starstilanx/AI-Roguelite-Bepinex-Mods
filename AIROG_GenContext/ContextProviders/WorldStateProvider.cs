@@ -185,7 +185,35 @@ namespace AIROG_GenContext.ContextProviders
                 var curPlace = SS.I?.hackyManager?.currentPlace;
                 var topPlace = curPlace?.GetTopLvlPlace() ?? curPlace;
                 var owner    = topPlace?.faction ?? curPlace?.faction;
-                if (owner != null && topPlace != null)
+                var fallen   = _cache.EliminatedFactions ?? new List<string>();
+
+                // A holding of the player's own dominion (Grand Strategy). The game has no native
+                // faction for the player, so Place.faction there is empty, the previous owner, or
+                // whatever the game's classifier picked on first visit - WorldExpansion's claim
+                // list is the truth, and without this the prompt handed the player's own land to
+                // someone else in the same breath as listing it among their holdings.
+                var dominion = default(KeyValuePair<string, FactionExtDataStub>);
+                if (topPlace != null && _cache.Factions != null && ModToggles.IsEnabled(ModToggles.Keys.GrandStrategy))
+                    dominion = _cache.Factions.FirstOrDefault(kv =>
+                        kv.Value != null && kv.Value.Tag == "Player Dominion" && !fallen.Contains(kv.Key)
+                        && kv.Value.ClaimedPlaceUuids != null && kv.Value.ClaimedPlaceUuids.Contains(topPlace.uuid));
+
+                if (dominion.Value != null)
+                {
+                    string line = $"Current Location: {topPlace.GetPrettyName()} — a holding of {dominion.Value.Name}, the player's own dominion";
+                    var warHere = _cache.ActiveWars?.Values.FirstOrDefault(
+                        w => w.ActorUuid == dominion.Key || w.TargetUuid == dominion.Key);
+                    if (warHere != null)
+                    {
+                        string enemy = warHere.ActorUuid == dominion.Key ? warHere.TargetName : warHere.ActorName;
+                        line += $", currently at war with {enemy}";
+                        locationDirective = "this land is at war — patrols, checkpoints, conscription notices, wary locals";
+                    }
+                    data += line + "\n";
+                }
+                // (a fallen faction's name can linger natively on places it never formally
+                // claimed; never present those as its living territory)
+                else if (owner != null && topPlace != null && !fallen.Contains(owner.uuid))
                 {
                     string line = $"Current Location: {topPlace.GetPrettyName()} — territory of {owner.GetPrettyName()} (disposition toward player: {owner.GetStandingPromptStr()})";
                     if (_cache.Factions != null && _cache.Factions.TryGetValue(owner.uuid, out var ownerData))
@@ -338,20 +366,28 @@ namespace AIROG_GenContext.ContextProviders
             }
         }
 
+        private string _cachePath; // file _cache was read from
+
         private void RefreshCacheIfNeeded()
         {
-            if (Time.time - _lastLoadTime > CACHE_REFRESH_RATE)
-            {
-                LoadData();
-                _lastLoadTime = Time.time;
-            }
+            // The cache is per save file: after loading another save (or starting a new game,
+            // whose folder has no file until the first turn) the previous save's wars, factions
+            // and alerts must not be served for even one prompt.
+            string path = null;
+            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                path = Path.Combine(SS.I.saveTopLvlDir ?? "", SS.I.saveSubDirAsArg, "world_expansion_data.json");
+
+            if (path == _cachePath && Time.time - _lastLoadTime <= CACHE_REFRESH_RATE) return;
+
+            if (path != _cachePath) _cache = null;
+            _cachePath = path;
+            _lastLoadTime = Time.time;
+            LoadData(path);
         }
 
-        private void LoadData()
+        private void LoadData(string path)
         {
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
-            string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "world_expansion_data.json");
-            if (!File.Exists(path)) return;
+            if (path == null || !File.Exists(path)) { _cache = null; return; }
 
             try
             {

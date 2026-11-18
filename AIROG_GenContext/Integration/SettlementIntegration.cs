@@ -4,9 +4,17 @@ using System.Linq;
 
 namespace AIROG_GenContext.Integration
 {
+    /// <summary>
+    /// Hides/shows the Settlement mod's HUD button (and closes its panel and event popup) to
+    /// match the "Settlement Info" switch. Current Settlement builds do this themselves from
+    /// ModToggles; this stays as the fallback for an older AIROG_Settlement.dll, which knows
+    /// nothing about the switch. Loose coupling on purpose: objects are found by name.
+    /// </summary>
     public static class SettlementIntegration
     {
         public const string PROVIDER_NAME = "Settlement Info";
+
+        private static bool _hooked;
 
         public static void ApplyState()
         {
@@ -16,70 +24,73 @@ namespace AIROG_GenContext.Integration
 
         public static void ApplyState(bool enabled)
         {
-            // 1. HUD Button
-            // Usually located in MainLayouts.buttonsHolderHolder -> "SettlementButton"
-            // We can look up by name globally or via MainLayouts if available, but Find is safest for loose coupling
-            
-            // Try finding by precise path if possible or by global name search (expensive but safe for UI)
-            // "SettlementButton" is likely unique
-            var btn = GameObject.Find("SettlementButton");
-            if (btn != null)
+            try
             {
-                btn.SetActive(enabled);
+                ApplyState(enabled, null);
             }
-            else
+            catch (System.Exception ex)
             {
-                // Fallback: It might be under buttonsHolderHolder and disabled, so Find won't see it if we don't look carefully.
-                // However, GameObject.Find only finds active objects?
-                // Actually, GameObject.Find only finds ACTIVE objects. 
-                // If we disabled it, we can't find it back to enable it!
-                // We need a persistent reference or look through Root objects.
-                
-                // Better approach: Look into MainLayouts instance if it exists
-                var layouts = UnityEngine.Object.FindObjectOfType<MainLayouts>();
-                if (layouts != null && layouts.buttonsHolderHolder != null)
-                {
-                    var found = layouts.buttonsHolderHolder.Find("SettlementButton");
-                    if (found != null) found.gameObject.SetActive(enabled);
-                }
+                Debug.LogWarning($"[GenContext] Could not apply the Settlement switch to its UI: {ex.Message}");
+            }
+        }
+
+        private static void ApplyState(bool enabled, MainLayouts layouts)
+        {
+            // Always go through MainLayouts: Transform.Find also returns INACTIVE children, which
+            // GameObject.Find does not - so a button we hid earlier can be found again to show it.
+            if (layouts == null) layouts = SS.I?.hackyManager?.mainLayouts;
+            if (layouts == null) layouts = UnityEngine.Object.FindObjectOfType<MainLayouts>();
+            if (layouts == null) return; // main menu, or the HUD is not built yet
+
+            // 1. HUD button
+            if (layouts.buttonsHolderHolder != null)
+            {
+                var button = layouts.buttonsHolderHolder.Find("SettlementButton");
+                if (button != null && button.gameObject.activeSelf != enabled) button.gameObject.SetActive(enabled);
             }
 
-            // 2. Modal
-            var modal = GameObject.Find("SettlementModal");
-             if (modal != null)
+            // 2. Panel and event popup: closed when the mod is off (never opened from here)
+            if (!enabled && layouts.mainHolder != null)
             {
-                 // If we disable the modal entirely, the SettlementMod might lose reference or re-create it?
-                 // SettlementPlugin logic: checks if SettlementModalObj is null, if so errors?
-                 // If we just SetActive(false), it mimics closing it.
-                 // But if we want to "Disable" the mod, we should probably hide the button. 
-                 // Hiding the modal is default state anyway.
-                 // We don't need to force hide the modal unless it's open.
-                 // But if the mod is "Disabled", the modal should definitively be hidden/inactive.
-                 if (!enabled) modal.SetActive(false);
-            }
-            else
-            {
-                 // Try finding inactive via parent
-                 var layouts = UnityEngine.Object.FindObjectOfType<MainLayouts>();
-                 if (layouts != null && layouts.mainHolder != null)
-                 {
-                     var found = layouts.mainHolder.Find("SettlementModal");
-                     if (found != null && !enabled) found.gameObject.SetActive(false);
-                 }
+                var modal = layouts.mainHolder.Find("SettlementModal");
+                if (modal != null) modal.gameObject.SetActive(false);
+                var popup = layouts.mainHolder.Find("SettlementEventPopup");
+                if (popup != null) popup.gameObject.SetActive(false);
             }
         }
 
         [HarmonyPatch(typeof(MainLayouts), "InitCommonAnchs")]
         public static class Patch_MainLayouts_InitCommonAnchs_Integration
         {
+            // Priority.Last: this has to run AFTER the Settlement mod's own InitCommonAnchs
+            // postfix, which is what creates the button. GenContext loads (and so registers its
+            // patches) first, and at equal priority Harmony runs postfixes in registration order -
+            // so this used to look for a button that did not exist yet, and the button came back
+            // on every load no matter what the checklist said.
             [HarmonyPostfix]
-            public static void Postfix()
+            [HarmonyPriority(Priority.Last)]
+            public static void Postfix(MainLayouts __instance)
             {
-                // Run after SettlementMod's patch (which is also Postfix). 
-                // Harmony ordering isn't guaranteed without priority, but typically load order applies.
-                // We'll trust that running this will check the state.
-                ApplyState();
+                // InitCommonAnchs is called from GameplayManager.StartGame; never throw into it.
+                try
+                {
+                    HookSwitchEvents();
+                    ApplyState(ContextManager.IsProviderEnabled(PROVIDER_NAME), __instance);
+                }
+                catch (System.Exception ex)
+                {
+                    Debug.LogWarning($"[GenContext] Settlement integration failed: {ex.Message}");
+                }
             }
+        }
+
+        private static void HookSwitchEvents()
+        {
+            if (_hooked) return;
+            _hooked = true;
+            // UI only in both handlers (see the note on ModToggles.Reloaded).
+            ModToggles.Changed += (key, enabled) => { if (key == PROVIDER_NAME) ApplyState(enabled); };
+            ModToggles.Reloaded += ApplyState;
         }
     }
 }

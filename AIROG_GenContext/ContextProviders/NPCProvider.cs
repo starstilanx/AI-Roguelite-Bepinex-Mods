@@ -49,7 +49,8 @@ namespace AIROG_GenContext.ContextProviders
             public string Name;
             public string Description;
             public string Personality;
-            public string Scenario;
+            public string Scenario;        // the NPC's background (the JSON name predates CurrentActivity)
+            public string CurrentActivity; // what they are doing right now; rewritten every few turns
 
             // Character Card Fields (for context if needed)
             public string FirstMessage;
@@ -173,7 +174,7 @@ namespace AIROG_GenContext.ContextProviders
 
                 RefreshCacheIfNeeded();
 
-                var npc = manager.npcActionsHandler?.currentNpc;
+                var npc = manager.npcActionsHandler?.currentNpc ?? ConversationTarget(manager);
 
                 // Focused injection when in conversation; otherwise scan the prompt for
                 // nearby characters that the story just mentioned.
@@ -192,6 +193,32 @@ namespace AIROG_GenContext.ContextProviders
             {
                 Debug.LogWarning($"[GenContext] NPCProvider failed: {ex.Message}");
                 return "";
+            }
+        }
+
+        /// <summary>
+        /// The character the player is addressing: the selection in the bottom-bar "talk to" dropdown
+        /// (slot 0 is the open-ended entry). npcActionsHandler.currentNpc, which this provider used to
+        /// rely on alone, belongs to the old NPC sidebar and is never assigned by current game builds,
+        /// so the focused block below was never injected.
+        /// </summary>
+        private static GameCharacter ConversationTarget(GameplayManager manager)
+        {
+            try
+            {
+                if (manager.npcConvoSelectorDropdown == null || manager.currentPlace == null) return null;
+                int index = manager.npcConvoSelectorDropdown.value - 1;
+                if (index < 0) return null;
+                var chars = manager.GetCharsForNpcConvoSelectorDropdown();
+                if (chars == null || index >= chars.Count) return null;
+                var target = chars[index];
+                // The list also holds player characters (your own while you control a companion,
+                // other players' in co-op); those are not NPCs to role-play.
+                return target != null && !target.IsMainPlayer() && !target.IsMpOwnedPc() ? target : null;
+            }
+            catch
+            {
+                return null; // mid-load: the party or place is not ready yet
             }
         }
 
@@ -248,8 +275,9 @@ namespace AIROG_GenContext.ContextProviders
             // 3. Scene Snapshot (Current Context Summary)
             sb.Append(BuildSceneSnapshot(manager, npc));
 
-            // 4. Current State & Goals
-            if (!string.IsNullOrEmpty(data.Scenario)) sb.Append($"Current Status: {Clip(data.Scenario, MAX_SCENARIO)}\n");
+            // 4. Background, Current State & Goals
+            if (!string.IsNullOrEmpty(data.Scenario)) sb.Append($"Background: {Clip(data.Scenario, MAX_SCENARIO)}\n");
+            if (!string.IsNullOrEmpty(data.CurrentActivity)) sb.Append($"Current Activity: {Clip(data.CurrentActivity, MAX_SCENARIO)}\n");
             if (!string.IsNullOrEmpty(data.CurrentGoal))
             {
                 string goalLine = $"Current Goal: {Clip(data.CurrentGoal, MAX_GOAL)}";
@@ -264,8 +292,10 @@ namespace AIROG_GenContext.ContextProviders
             // 5. Relationship with Player
             sb.Append($"Relationship: {data.RelationshipStatus} (Affinity: {data.Affinity}/100)\n");
 
+            // The list is stored oldest first (new memories are appended, the oldest dropped), so the
+            // three that matter are the LAST three. Take(3) kept sending the three oldest for ever.
             if (data.LongTermMemories != null && data.LongTermMemories.Count > 0)
-                sb.Append("Key Memories: " + string.Join("; ", data.LongTermMemories.Take(3)) + "\n");
+                sb.Append("Key Memories: " + string.Join("; ", data.LongTermMemories.Skip(Math.Max(0, data.LongTermMemories.Count - 3))) + "\n");
 
             if (data.InteractionHistory != null && data.InteractionHistory.Count > 0)
                 sb.Append("Recent Interactions: " + string.Join("; ", data.InteractionHistory.Take(3)) + "\n");
@@ -355,9 +385,10 @@ namespace AIROG_GenContext.ContextProviders
         {
             if (manager.currentPlace == null) return "";
 
+            // The player's own character can sit in a place's character lists; it is not a bystander.
             var nearbyChars = (manager.currentPlace.GetAliveNpcs() ?? new List<GameCharacter>())
                 .Concat(manager.currentPlace.GetAliveEnemies() ?? new List<GameCharacter>())
-                .Where(c => c != null && c != npc).ToList();
+                .Where(c => c != null && c != npc && !c.IsMainPlayer()).ToList();
             if (nearbyChars.Count == 0) return "";
 
             var relations = new List<string>();
@@ -420,7 +451,7 @@ namespace AIROG_GenContext.ContextProviders
 
             var nearby = (manager.currentPlace.GetAliveNpcs() ?? new List<GameCharacter>())
                 .Concat(manager.currentPlace.GetAliveEnemies() ?? new List<GameCharacter>())
-                .Where(c => c != null && c != focused)
+                .Where(c => c != null && c != focused && !c.IsMainPlayer())
                 .ToList();
             if (nearby.Count == 0) return "";
 
@@ -438,8 +469,12 @@ namespace AIROG_GenContext.ContextProviders
                 var data = ResolveStub(other);
                 if (data == null || data.IsDeceased) continue;
 
+                // One line per bystander: who they are, then what they are doing (their background
+                // only when no activity has been noted yet).
                 string personality = !string.IsNullOrEmpty(data.Personality) ? Clip(data.Personality, MAX_DESCRIPTION) : "Unknown";
-                string status      = !string.IsNullOrEmpty(data.Scenario) ? Clip(data.Scenario, MAX_DESCRIPTION) : "No status";
+                string status      = !string.IsNullOrEmpty(data.CurrentActivity) ? "currently: " + Clip(data.CurrentActivity, MAX_DESCRIPTION)
+                                   : !string.IsNullOrEmpty(data.Scenario)        ? "background: " + Clip(data.Scenario, MAX_DESCRIPTION)
+                                   : "No status";
                 sb.Append($"\n[NPC '{data.Name}': {personality}, {status}]");
                 count++;
             }
@@ -494,8 +529,8 @@ namespace AIROG_GenContext.ContextProviders
             }
 
             // 2. Nearby Characters (summary)
-            var nearbyNpcs = manager.currentPlace.GetAliveNpcs()?.Where(c => c != npc).ToList();
-            var nearbyEnemies = manager.currentPlace.GetAliveEnemies()?.Where(c => c != npc).ToList();
+            var nearbyNpcs = manager.currentPlace.GetAliveNpcs()?.Where(c => c != null && c != npc && !c.IsMainPlayer()).ToList();
+            var nearbyEnemies = manager.currentPlace.GetAliveEnemies()?.Where(c => c != null && c != npc && !c.IsMainPlayer()).ToList();
 
             int npcCount = nearbyNpcs?.Count ?? 0;
             int enemyCount = nearbyEnemies?.Count ?? 0;
@@ -522,7 +557,9 @@ namespace AIROG_GenContext.ContextProviders
 
             // 3. Player presence — manager.currentPlace is the active scene shared by this NPC and the manager.
             // The player is "nearby" only if they exist and are in this same active scene (i.e. not dead/absent).
-            if (manager.playerCharacter != null && npc.parentPlace == manager.currentPlace)
+            // GameCharacter.parentPlace is a legacy field (null on current saves), which made this line
+            // unreachable. The live place hangs off the parent entity; party members travel with the player.
+            if (manager.playerCharacter != null && (npc.IsInParty() || npc.parentInGameEnt?.ParentPl() == manager.currentPlace))
                 sb.Append(" | Player nearby");
 
             sb.Append("]\n");
@@ -556,20 +593,48 @@ namespace AIROG_GenContext.ContextProviders
                 }
             }
 
-            // Layer in any native fields that our stub is missing (old save, generation still
-            // in progress, or details edited natively after our last write).
+            // The game's own character sheet wins wherever it has text: it is what the player sees and
+            // edits, and NPCExpansion's dossier reads it first as well. (This used to fill gaps only,
+            // so a background edited on the native sheet kept reaching the AI in its old wording.)
             if (native != null)
             {
-                if (string.IsNullOrEmpty(stub.Personality) && !string.IsNullOrEmpty(native.personality))
+                if (!string.IsNullOrEmpty(native.personality))
                     stub.Personality = native.personality;
-                if (string.IsNullOrEmpty(stub.Scenario) && !string.IsNullOrEmpty(native.background))
+                if (!string.IsNullOrEmpty(native.background) && !IsMirroredActivity(stub, native.background))
                     stub.Scenario = native.background;
-                if (string.IsNullOrEmpty(stub.Description) && !string.IsNullOrEmpty(native.visualDescription))
+                if (!string.IsNullOrEmpty(native.visualDescription))
                     stub.Description = native.visualDescription;
             }
 
             if (string.IsNullOrEmpty(stub.Name)) stub.Name = ch.GetPrettyName();
             return stub;
+        }
+
+        /// <summary>
+        /// Older NPCExpansion versions copied the NPC's activity text into the native background
+        /// field. Until the mod has handed that field back (it does so on the next turn near the
+        /// NPC) such text must not be presented as background. Same test the mod uses: it equals the
+        /// current activity, or one of the NPC's own rumours ("name: text", clipped) opens it.
+        /// </summary>
+        private static bool IsMirroredActivity(NPCDataStub stub, string nativeBackground)
+        {
+            string text = nativeBackground.Trim();
+            if (text.Length == 0) return false;
+            if (!string.IsNullOrEmpty(stub.CurrentActivity) && text == stub.CurrentActivity.Trim()) return true;
+            if (stub.KnownFacts == null) return false;
+            foreach (var fact in stub.KnownFacts)
+            {
+                if (string.IsNullOrEmpty(fact) || fact.StartsWith("News: ", StringComparison.Ordinal)) continue;
+                int sep = fact.IndexOf(": ", StringComparison.Ordinal);
+                if (sep < 0) continue;
+                string body = fact.Substring(sep + 2);
+                if (body.EndsWith("...")) body = body.Substring(0, body.Length - 3);
+                body = body.Trim();
+                // 20+ characters: the same strict bar the mod applies before it touches the native field.
+                if (body.Length < 20) continue;
+                if (text.StartsWith(body, StringComparison.Ordinal)) return true;
+            }
+            return false;
         }
 
         private static string Clip(string s, int max)

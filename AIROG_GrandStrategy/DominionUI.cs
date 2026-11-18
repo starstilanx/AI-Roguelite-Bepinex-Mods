@@ -52,15 +52,48 @@ namespace AIROG_GrandStrategy
         {
             try
             {
-                EnsureDominionButton(__instance);
-                EnsureCapitalMarker(__instance);
-                if (_panelOn) BuildPanel(__instance);
-                else ClearPanel(__instance);
+                ApplyToWorldView(__instance);
             }
             catch (Exception e)
             {
                 Debug.LogError($"[GrandStrategy] Dominion panel failed: {e}");
             }
+        }
+
+        private static void ApplyToWorldView(MapModal modal)
+        {
+            // The same MapModal also serves the main menu's world editor and the in-game
+            // "new world" preview, where there is no dominion to run.
+            if (!ModSwitch.Enabled || !modal.InRegularGameMap())
+            {
+                SetButtonVisible(modal, false);
+                ClearPanel(modal);
+                ClearCapitalMarker(modal);
+                _pickMode = PickMode.None;
+                return;
+            }
+            EnsureDominionButton(modal);
+            EnsureCapitalMarker(modal);
+            if (_panelOn) BuildPanel(modal);
+            else ClearPanel(modal);
+        }
+
+        /// Re-syncs the button/panel/marker with the per-save mod switch while the map is open
+        /// (the next ShowWorldView does the same for a closed map).
+        public static void ApplyModSwitch(MapModal modal)
+        {
+            if (modal == null || !modal.IsShowing() || modal.mode != MapModal.MapMode.WORLD) return;
+            ApplyToWorldView(modal);
+        }
+
+        /// Per-session panel state that refers to the save it was set in (a picked map target,
+        /// the last order's result line). Cleared on load and new game.
+        public static void ResetSessionState()
+        {
+            _pickMode = PickMode.None;
+            _pickedAnnexUuid = null;
+            _pickedCampaignUuid = null;
+            _lastResult = "";
         }
 
         [HarmonyPatch(typeof(MapModal), "ShowDetachedView")]
@@ -100,6 +133,7 @@ namespace AIROG_GrandStrategy
         public static bool Prefix_MapLocationPointerUp(MapLocation __instance, PointerEventData eventData)
         {
             if (_pickMode == PickMode.None) return true;
+            if (!ModSwitch.Enabled) { _pickMode = PickMode.None; return true; }
             if (eventData.button != PointerEventData.InputButton.Left) return true;
 
             Place place = __instance.GetPlace();
@@ -117,7 +151,9 @@ namespace AIROG_GrandStrategy
 
         private static void Click(MapModal modal)
         {
-            modal.manager?.soundManager?.smallClickSoundFxObj?.PlayNextSound();
+            // manager.soundManager is no longer wired since the 07/11 build (the old null-safe
+            // call here was simply silent) - use the singleton, as WorldExpansion's map UI does.
+            try { SoundManager.I.smallClickSoundFxObj.PlayNextSound(); } catch { }
         }
     }
 }

@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_NPCExpansion</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite to expand NPC lore and interactions.</Description>
-    <Version>4.5.0</Version>
+    <Version>4.6.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>bin\Debug\net472\</OutputPath>

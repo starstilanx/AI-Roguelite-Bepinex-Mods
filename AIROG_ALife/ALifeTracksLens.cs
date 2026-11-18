@@ -34,6 +34,14 @@ namespace AIROG_ALife
             try
             {
                 if (!ALifePlugin.CfgTracksLens.Value) return;
+                // The same MapModal class also draws the new-game world editor in the main menu
+                // (no game running), and the lens is hidden while A-Life is off for this save.
+                if (!__instance.InRegularGameMap() || !ALifePlugin.SwitchedOn())
+                {
+                    SetButtonVisible(__instance, false);
+                    ClearOverlay(__instance);
+                    return;
+                }
                 if (LensRequested) { _lensOn = true; LensRequested = false; }
                 EnsureLensButton(__instance);
                 if (_lensOn) BuildOverlay(__instance);
@@ -43,6 +51,21 @@ namespace AIROG_ALife
             {
                 Debug.LogError("[ALife] Tracks lens failed: " + e);
             }
+        }
+
+        /// <summary>
+        /// Re-apply the per-save switch to the live map: button and overlay go away when A-Life is
+        /// switched off. Switching back on needs nothing here - the ShowWorldView hook above
+        /// restores the button the next time the map is drawn.
+        /// </summary>
+        public static void ApplySwitch()
+        {
+            GameplayManager manager = SS.I != null ? SS.I.hackyManager : null;
+            if (manager == null) return; // main menu
+            MapModal modal = manager.mapModal;
+            if (modal == null || ALifePlugin.SwitchedOn()) return;
+            SetButtonVisible(modal, false);
+            ClearOverlay(modal);
         }
 
         [HarmonyPatch(typeof(MapModal), "ShowDetachedView")]
@@ -168,6 +191,15 @@ namespace AIROG_ALife
 
             TMP_FontAsset font = modal.voronoiWorldTitle != null ? modal.voronoiWorldTitle.font : null;
 
+            // Only places on the world being drawn. Markers are positioned in that world's map
+            // coordinates, so intel from another world would land on unrelated spots of this one.
+            VoronoiWorld shown = modal.LastDisplayedVw();
+            Place OnThisMap(string uuid)
+            {
+                Place p = ALifeGraph.PlaceByUuid(uuid);
+                return p != null && (shown == null || p.GetVw() == shown) ? p : null;
+            }
+
             // Recent known battle sites (the fields the whispers speak of)
             var battleSites = ALifeKnowledge.KnownEvents(60)
                 .Where(e => (e.Type == "BATTLE" || e.Type == "WIPE") && e.Turn >= state.CurrentTurn - 25)
@@ -175,7 +207,7 @@ namespace AIROG_ALife
                 .Select(g => g.Last()).ToList();
             foreach (var e in battleSites)
             {
-                Place pl = ALifeGraph.PlaceByUuid(e.PlaceUuid);
+                Place pl = OnThisMap(e.PlaceUuid);
                 if (pl == null) continue;
                 AddMarker(root, font, pl.worldCoords + new Vector2(0f, -26f), "⚔",
                     new Color(1f, 0.35f, 0.3f, 0.9f), 30, null, default);
@@ -184,7 +216,7 @@ namespace AIROG_ALife
             // Killing grounds (dread zones)
             foreach (var kv in state.DreadMap)
             {
-                Place pl = ALifeGraph.PlaceByUuid(kv.Key);
+                Place pl = OnThisMap(kv.Key);
                 if (pl == null) continue;
                 AddMarker(root, font, pl.worldCoords + new Vector2(0f, 26f), "☠",
                     new Color(0.85f, 0.2f, 0.2f, 0.85f), 32, null, default);
@@ -196,7 +228,7 @@ namespace AIROG_ALife
                 .GroupBy(k => k.LastKnownPlaceUuid);
             foreach (var grp in byPlace)
             {
-                Place pl = ALifeGraph.PlaceByUuid(grp.Key);
+                Place pl = OnThisMap(grp.Key);
                 if (pl == null) continue;
                 int slot = 0;
                 foreach (var k in grp.OrderByDescending(x => x.LastKnownTurn))

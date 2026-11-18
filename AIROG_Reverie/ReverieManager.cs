@@ -23,6 +23,17 @@ namespace AIROG_Reverie
 
         public static ReverieState State { get; private set; } = new ReverieState();
 
+        // The save folder State was loaded from / created for. Save() refuses to write anywhere
+        // else: between "the game points at another save" and "our load hook ran" the in-memory
+        // state still belongs to the previous save.
+        private static string _stateDir;
+
+        /// <summary>
+        /// False when Reverie is switched off for this save, and on a co-op client (the host
+        /// builds the prompts and narrates, so a dream begun locally would never be told).
+        /// </summary>
+        public static bool Active => ModSwitch.Enabled && !MpSession.IsClient;
+
         /// <summary>Set by REVERIE_TEST-adjacent flows to bypass roll + cooldown on the next rest.</summary>
         public static bool ForceNextDream;
 
@@ -47,13 +58,16 @@ namespace AIROG_Reverie
         {
             State = new ReverieState();
             GameplayManager.TurnHappenedEvent += OnTurnHappened;
+            ModSwitch.HookFlipped(OnSwitchFlipped);
             Debug.Log("[Reverie] ReverieManager initialized.");
         }
 
         public static void Reset()
         {
             State = new ReverieState();
+            _stateDir = SS.I != null ? SS.I.saveSubDirAsArg : null;
             ForceNextDream = false;
+            _pendingWakeSetTurn = -1;
             Resubscribe();
             Debug.Log("[Reverie] State reset for new game.");
         }
@@ -69,31 +83,87 @@ namespace AIROG_Reverie
 
         private static void OnTurnHappened(int numTurns, long secs)
         {
-            if (numTurns <= 0 || State == null) return;
-            State.GlobalTurn += numTurns;
-
-            // Expire omens / haunting
-            State.Omens?.RemoveAll(o => State.GlobalTurn >= o.ExpiresTurn);
-            if (State.ActiveHaunting != null && State.GlobalTurn >= State.ActiveHaunting.ExpiresTurn)
+            // Runs inside the game's turn pipeline: an exception here would break the turn.
+            try
             {
-                Debug.Log("[Reverie] The haunting has faded.");
-                State.ActiveHaunting = null;
-            }
+                if (numTurns <= 0 || State == null) return;
+                if (!Active)
+                {
+                    // Switched off: no clock, no expiry, no failsafe. A dream still marked as in
+                    // progress (a save made mid-dream, loaded with the switch off) is closed.
+                    if (!ModSwitch.Enabled) EndDreamSilently();
+                    return;
+                }
+                State.GlobalTurn += numTurns;
 
-            // Clear the one-shot [WAKING] directive once a full turn has passed with it live
-            if (State.PendingWake != WakeOutcome.None && State.GlobalTurn > _pendingWakeSetTurn)
-            {
-                State.PendingWake = WakeOutcome.None;
-                State.PendingWakeSummary = null;
-            }
+                // Expire omens / haunting
+                State.Omens?.RemoveAll(o => State.GlobalTurn >= o.ExpiresTurn);
+                if (State.ActiveHaunting != null && State.GlobalTurn >= State.ActiveHaunting.ExpiresTurn)
+                {
+                    Debug.Log("[Reverie] The haunting has faded.");
+                    State.ActiveHaunting = null;
+                }
 
-            // Failsafe: if DREAM_STATE blocks stop arriving, don't trap the player in the dream
-            if (State.Phase == DreamPhase.Dreaming && State.CurrentDream != null &&
-                State.GlobalTurn - State.CurrentDream.StartedTurn >= REAL_TURN_TIMEOUT)
-            {
-                Debug.LogWarning("[Reverie] Dream real-turn timeout hit — forcing wake.");
-                Wake(ResolveByProgress(State.CurrentDream), null);
+                // Clear the one-shot [WAKING] directive once a full turn has passed with it live
+                if (State.PendingWake != WakeOutcome.None && State.GlobalTurn > _pendingWakeSetTurn)
+                {
+                    State.PendingWake = WakeOutcome.None;
+                    State.PendingWakeSummary = null;
+                }
+
+                // Failsafe: if DREAM_STATE blocks stop arriving, don't trap the player in the dream
+                if (State.Phase == DreamPhase.Dreaming && State.CurrentDream != null &&
+                    State.GlobalTurn - State.CurrentDream.StartedTurn >= REAL_TURN_TIMEOUT)
+                {
+                    Debug.LogWarning("[Reverie] Dream real-turn timeout hit — forcing wake.");
+                    Wake(ResolveByProgress(State.CurrentDream), null);
+                }
             }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Reverie] Turn handler error: {ex.Message}");
+            }
+        }
+
+        // ---- On/off switch ----
+
+        private static void OnSwitchFlipped(bool enabled)
+        {
+            // Only meaningful while a game is running; from the main menu the state in memory is
+            // just whatever the last session left behind.
+            if (enabled || SS.I == null || SS.I.hackyManager == null) return;
+            EndDreamSilently();
+        }
+
+        /// <summary>
+        /// Ends a dream in progress with no narration and no outcome (Reverie was switched off
+        /// mid-dream): the body gets its falling-asleep health back, exactly as on a normal wake,
+        /// and nothing is written to the game log.
+        /// </summary>
+        public static void EndDreamSilently()
+        {
+            if (State == null || State.Phase != DreamPhase.Dreaming) return;
+
+            RestoreBody(State.CurrentDream);
+            State.Phase = DreamPhase.Awake;
+            State.CurrentDream = null;
+            State.LastDreamTurn = State.GlobalTurn;
+            State.PendingWake = WakeOutcome.None;
+            State.PendingWakeSummary = null;
+            Save();
+            Debug.Log("[Reverie] Switched off mid-dream: the dream was ended quietly.");
+        }
+
+        private static void RestoreBody(DreamRecord dream)
+        {
+            if (dream == null) return;
+            try
+            {
+                var pc = SS.I?.hackyManager?.playerCharacter?.GetPcGameCharacter();
+                if (pc != null && dream.HpSnapshot > 0 && pc.GetHealth() < dream.HpSnapshot)
+                    pc.SetHealth(dream.HpSnapshot);
+            }
+            catch (Exception ex) { Debug.LogWarning($"[Reverie] Could not restore HP: {ex.Message}"); }
         }
 
         private static int _pendingWakeSetTurn = -1;
@@ -106,6 +176,7 @@ namespace AIROG_Reverie
             if (State == null || State.Phase != DreamPhase.Awake) return;
             if (string.IsNullOrWhiteSpace(text)) return;
             if (manager?.enemyActionsHandler?.currentEnemy != null) return; // no dozing off mid-combat
+            if (manager?.scenarioState?.encounter != null) return;          // ...nor mid-encounter
 
             bool restIntent = StrongRestRegex.IsMatch(text) || WeakRestRegex.IsMatch(text);
             if (!restIntent) return;
@@ -163,7 +234,9 @@ namespace AIROG_Reverie
                 switch (key)
                 {
                     case "lucidity_delta":
-                        int.TryParse(value.TrimStart('+'), out lucidityDelta);
+                        // Tolerate the template's own brackets ("[-1]"), "+1" and a typographic minus
+                        var lm = Regex.Match(value.Replace('−', '-'), @"-?\d+");
+                        if (lm.Success) int.TryParse(lm.Value, out lucidityDelta);
                         lucidityDelta = Mathf.Clamp(lucidityDelta, -1, 1);
                         break;
                     case "progress":
@@ -194,6 +267,12 @@ namespace AIROG_Reverie
                 Wake(WakeOutcome.Triumph, omen);
             else if (dream.DreamTurnsRemaining <= 0)
                 Wake(ResolveByProgress(dream), omen);
+
+            // A block is processed while its turn's reply is still being handled, i.e. BEFORE that
+            // turn's own TurnHappened tick. Stamped with the current turn, the [WAKING] directive
+            // was cleared by that very tick and never reached a prompt.
+            if (State.Phase == DreamPhase.Awake && State.PendingWake != WakeOutcome.None)
+                _pendingWakeSetTurn = State.GlobalTurn + 1;
         }
 
         private static WakeOutcome ResolveByProgress(DreamRecord dream)
@@ -207,13 +286,7 @@ namespace AIROG_Reverie
             if (State.Phase != DreamPhase.Dreaming || dream == null) return;
 
             // The body was never in danger: restore the falling-asleep snapshot
-            try
-            {
-                var pc = SS.I?.hackyManager?.playerCharacter?.GetPcGameCharacter();
-                if (pc != null && dream.HpSnapshot > 0 && pc.GetHealth() < dream.HpSnapshot)
-                    pc.SetHealth(dream.HpSnapshot);
-            }
-            catch (Exception ex) { Debug.LogWarning($"[Reverie] Could not restore HP: {ex.Message}"); }
+            RestoreBody(dream);
 
             string logLine;
             switch (outcome)
@@ -282,6 +355,9 @@ namespace AIROG_Reverie
             try
             {
                 if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
+                if (SS.I.saveSubDirAsArg != _stateDir) return;
+                // Clients never write saves (the game's own WriteSaveFile returns early for them too)
+                if (MpSession.IsClient) return;
                 string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "reverie.json");
                 File.WriteAllText(path, JsonConvert.SerializeObject(State, Formatting.Indented));
             }
@@ -293,6 +369,11 @@ namespace AIROG_Reverie
             try
             {
                 State = new ReverieState();
+                _stateDir = saveSubDir;
+                ForceNextDream = false;
+                // Belongs to the previous save's turn count: left alone, a [WAKING] directive loaded
+                // from this save would stay in the prompt until this save's turn count passed it.
+                _pendingWakeSetTurn = -1;
                 if (SS.I == null || string.IsNullOrEmpty(saveSubDir)) return;
                 string path = Path.Combine(SS.I.saveTopLvlDir, saveSubDir, "reverie.json");
                 if (File.Exists(path))

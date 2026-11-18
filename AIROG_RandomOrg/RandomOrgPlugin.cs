@@ -7,7 +7,7 @@ using HarmonyLib;
 
 namespace AIROG_RandomOrg
 {
-    [BepInPlugin("com.airog.randomorg", "AIROG True Randomness (Random.org)", "1.1.0")]
+    [BepInPlugin("com.airog.randomorg", "AIROG True Randomness (Random.org)", "1.1.1")]
     // Soft-dep: if GenContext is present we inject into its Mods menu; not required.
     [BepInDependency("com.airog.gencontext", BepInDependency.DependencyFlags.SoftDependency)]
     public class RandomOrgPlugin : BaseUnityPlugin

@@ -10,7 +10,7 @@ namespace AIROG_LoopBeGone
     {
         public const string GUID = "com.airog.loopbegone";
         public const string NAME = "AIROG LoopBeGone";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.1.0";
 
         public static ConfigEntry<bool> Enabled;
         public static ConfigEntry<float> SeverityThreshold;

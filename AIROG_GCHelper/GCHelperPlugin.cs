@@ -6,7 +6,7 @@ using System.Reflection;
 
 namespace AIROG_GCHelper
 {
-    [BepInPlugin("com.airog.gchelper", "AIROG GC Helper", "1.0.0")]
+    [BepInPlugin("com.airog.gchelper", "AIROG GC Helper", "1.0.1")]
     public class GCHelperPlugin : BaseUnityPlugin
     {
         // Collect at most once every 30 seconds, and only every N turns.
@@ -40,6 +40,12 @@ namespace AIROG_GCHelper
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
+            // GameplayManager.ExitToMainMenu sets TurnHappenedEvent = null, which silently drops
+            // the subscription made in Awake - after the first trip back to the menu the
+            // every-N-turns collection never ran again. Re-attach on every scene load.
+            GameplayManager.TurnHappenedEvent -= OnTurnHappened;
+            GameplayManager.TurnHappenedEvent += OnTurnHappened;
+
             // Scene transitions are natural cleanup points; no time gate needed here.
             Collect("scene load: " + scene.name);
         }

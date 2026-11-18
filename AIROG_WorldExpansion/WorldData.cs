@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json;
 using UnityEngine;
 
@@ -32,15 +33,61 @@ namespace AIROG_WorldExpansion
     {
         public static WorldState CurrentState = new WorldState();
 
+        private const int MAX_MAJOR_EVENT_HISTORY = 50;
+
+        // Save folder CurrentState was loaded from, or first saved into (null = a fresh state
+        // not tied to a save yet). CurrentState outlives scene changes, and several paths save
+        // from a turn tick or an async continuation, so without this the state could be written
+        // into whichever folder the game points at now - including a save that is still loading,
+        // before our load hook has swapped the previous save's world out.
+        private static string _stateDir;
+
         public static void Reset()
         {
             CurrentState = new WorldState();
+            _stateDir = null;
+        }
+
+        private static string NormalizeDir(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return dir;
+            try { dir = Path.GetFullPath(dir); } catch { }
+            return dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        private static string CurrentSaveDir()
+        {
+            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return null;
+            return Path.Combine(SS.I.saveTopLvlDir ?? "", SS.I.saveSubDirAsArg);
+        }
+
+        /// If the in-memory world belongs to a different save than the one being played (a game
+        /// started through a path that ran neither our load hook nor our new-game reset), swap it
+        /// for this save's own data. Called from the turn tick.
+        public static void EnsureStateForCurrentSave()
+        {
+            string dir = CurrentSaveDir();
+            if (dir == null || _stateDir == null) return;
+            if (string.Equals(_stateDir, NormalizeDir(dir), StringComparison.OrdinalIgnoreCase)) return;
+            Debug.LogWarning("[WorldExpansion] World data in memory belongs to another save; loading this save's data instead.");
+            Load(dir);
         }
 
         public static void Save(string dir, bool quiet = false)
         {
             try
             {
+                string normalized = NormalizeDir(dir);
+                if (_stateDir == null) _stateDir = normalized;
+                else if (!string.Equals(_stateDir, normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    Debug.LogWarning($"[WorldExpansion] Not saving: world data in memory belongs to another save ({_stateDir}).");
+                    return;
+                }
+
+                while (CurrentState.MajorEventHistory.Count > MAX_MAJOR_EVENT_HISTORY)
+                    CurrentState.MajorEventHistory.RemoveAt(0);
+
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 string path = Path.Combine(dir, "world_expansion_data.json");
                 File.WriteAllText(path, JsonConvert.SerializeObject(CurrentState, Formatting.Indented));
@@ -56,12 +103,17 @@ namespace AIROG_WorldExpansion
         // so this must be called whenever world state changes mid-session (not just on game save).
         public static void SaveToCurrentDir(bool quiet = true)
         {
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
-            Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg), quiet);
+            // In the main menu saveSubDirAsArg is the new-game staging folder, whose files the
+            // game copies into the next new save.
+            if (SS.I == null || SS.I.hackyManager == null) return;
+            string dir = CurrentSaveDir();
+            if (dir == null) return;
+            Save(dir, quiet);
         }
 
         public static void Load(string dir)
         {
+            _stateDir = NormalizeDir(dir);
             try
             {
                 string path = Path.Combine(dir, "world_expansion_data.json");
@@ -100,6 +152,20 @@ namespace AIROG_WorldExpansion
             if (s.PendingWorldEvents == null)   s.PendingWorldEvents   = new List<PendingWorldEvent>();
             if (s.PlayerGrievances == null)     s.PlayerGrievances     = new Dictionary<string, int>();
             if (s.PlayerBounties == null)       s.PlayerBounties       = new HashSet<string>();
+
+            // Saves from before fallen factions were barred from posting bounties can carry one
+            // that nothing would ever lift.
+            s.PlayerBounties.RemoveWhere(u => s.EliminatedFactions.Contains(u));
+
+            // LoreExtras is keyed by the lore entry's full text and gains an entry for every
+            // entry the Lore tab ever drew (and another each time one is edited). An entry with
+            // default values carries nothing - GetLoreExtra recreates it on demand - so drop
+            // those here, before any UI holds a reference to them.
+            foreach (var key in s.LoreExtras
+                         .Where(kv => kv.Value == null
+                                   || (kv.Value.Category == "General" && string.IsNullOrEmpty(kv.Value.ImageUuid)))
+                         .Select(kv => kv.Key).ToList())
+                s.LoreExtras.Remove(key);
 
             // Migrate v1.1 placeholder territories ("territory_{uuid}_{i}" fake IDs) — strip them
             // and clear the seeded flag so factions get re-seeded with real Place UUIDs

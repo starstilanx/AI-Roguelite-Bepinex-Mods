@@ -22,20 +22,27 @@ namespace AIROG_GenContext.ContextProviders
 
         private Dictionary<string, string> _historyCache = new Dictionary<string, string>();
         private float _lastLoadTime = 0;
+        private string _loadedPath; // the file _historyCache was read from
         private const float CACHE_REFRESH_RATE = 10f; // Refresh every 10 seconds max
+
+        private const string Header = "[WORLD HISTORY]\n";
+        private const string Ellipsis = "...";
 
         public string GetContext(string prompt, int maxTokens)
         {
-            var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
+            var manager = SS.I != null ? SS.I.hackyManager : null;
             if (manager == null) return "";
 
             var universe = manager.GetCurrentUniverse();
             if (universe == null) return "";
 
-            // Refresh cache if needed
-            if (Time.time - _lastLoadTime > CACHE_REFRESH_RATE)
+            // Refresh cache if needed - at once when the save changed. Entries are keyed by
+            // universe uuid, and games started from the same preset share those, so the last
+            // save's history would otherwise be served to this one.
+            string path = HistoryPath();
+            if (path != _loadedPath || Time.time - _lastLoadTime > CACHE_REFRESH_RATE)
             {
-                LoadHistory();
+                LoadHistory(path);
                 _lastLoadTime = Time.time;
             }
 
@@ -50,27 +57,39 @@ namespace AIROG_GenContext.ContextProviders
                 if (maxTokens >= int.MaxValue / 4)
                     maxChars = history.Length; // Effectively no limit
                 else
-                    maxChars = Math.Max(0, maxTokens * 4);
+                    // The header and the ellipsis come out of the budget too; left out, the block
+                    // overran it by their length on every prompt with a long history.
+                    maxChars = Math.Max(0, maxTokens * 4 - Header.Length - Ellipsis.Length);
 
                 if (maxChars <= 0) return "";
 
                 if (history.Length > maxChars)
                 {
-                    return "[WORLD HISTORY]\n" + history.Substring(0, maxChars) + "...";
+                    return Header + history.Substring(0, maxChars) + Ellipsis;
                 }
-                
-                return "[WORLD HISTORY]\n" + history;
+
+                return Header + history;
             }
 
             return "";
         }
 
-        private void LoadHistory()
+        private static string HistoryPath()
         {
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
+            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return null;
+            return Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "universe_history.json");
+        }
 
-            string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "universe_history.json");
-            if (!File.Exists(path)) return;
+        private void LoadHistory(string path)
+        {
+            bool sameFile = path == _loadedPath;
+            _loadedPath = path;
+            if (path == null || !File.Exists(path))
+            {
+                // This save has no history file: what is cached came from another save.
+                _historyCache.Clear();
+                return;
+            }
 
             try
             {
@@ -89,6 +108,7 @@ namespace AIROG_GenContext.ContextProviders
             }
             catch (Exception ex)
             {
+                if (!sameFile) _historyCache.Clear();
                 Debug.LogWarning($"[GenContext] Failed to load history: {ex.Message}");
             }
         }

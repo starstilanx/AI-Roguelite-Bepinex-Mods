@@ -13,7 +13,13 @@ namespace AIROG_NPCExpansion
         public string Name;
         public string Description;
         public string Personality;
+        // The NPC's BACKGROUND (who they are, where they come from). The JSON name predates the
+        // split below and is kept so existing saves and GenContext's stub keep reading it.
         public string Scenario;
+        // What the NPC is doing right now; rewritten by the scenario update every few turns.
+        // Through v4.5.0 that text was written into Scenario and mirrored into the game's own
+        // background field, which destroyed whatever background the NPC had.
+        public string CurrentActivity = "";
         public string FirstMessage;
         public string MessageExamples;
         public string CreatorNotes;
@@ -109,6 +115,23 @@ namespace AIROG_NPCExpansion
         [JsonIgnore]
         public string SessionSaveDir;
 
+        /// <summary>False once the player has moved to a different save than the one this instance was built under.</summary>
+        [JsonIgnore]
+        public bool IsFromCurrentSave
+        {
+            get
+            {
+                string current = SS.I?.saveSubDirAsArg;
+                return string.IsNullOrEmpty(SessionSaveDir) || string.IsNullOrEmpty(current)
+                       || string.Equals(SessionSaveDir, current, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        // Folder name of the save this entry was last written under. Only the global-folder
+        // fallback in Load() reads it: scenario presets ship NPCs with fixed uuids, so without
+        // it a second playthrough of the same preset picked up the first one's NPC files.
+        public string OwnerSave;
+
         // The Abilities property is a compatibility shim for old saves that stored a flat string list.
         // Getter: derives names from DetailedAbilities (use DetailedAbilities directly in hot paths).
         // Setter: migrates legacy string list by converting entries into AbilityData with no description.
@@ -161,7 +184,8 @@ namespace AIROG_NPCExpansion
             if (!string.IsNullOrEmpty(reason))
             {
                 InteractionHistory.Insert(0, reason);
-                if (InteractionHistory.Count > 5) InteractionHistory.RemoveAt(5);
+                // The Bonds tab lists up to 20; a cap of 5 made its "full history" identical to the overview.
+                while (InteractionHistory.Count > 20) InteractionHistory.RemoveAt(InteractionHistory.Count - 1);
             }
 
             // Update status based on affinity — aligned with RelationshipArcSystem stages
@@ -227,6 +251,7 @@ namespace AIROG_NPCExpansion
                 return;
             }
             data.SessionSaveDir = currentSaveDir;
+            data.OwnerSave = SaveKey(currentSaveDir);
 
             LoreCache[uuid] = data;
             _loreDirty = true;
@@ -245,16 +270,25 @@ namespace AIROG_NPCExpansion
 
         public static NPCData Load(string uuid)
         {
+            if (string.IsNullOrEmpty(uuid)) return null;
+
             // 1. Check Cache
             if (LoreCache.TryGetValue(uuid, out var cachedData)) return cachedData;
 
-            // 2. Check Global Folder
+            // 2. Check Global Folder (backup for an entry the save's own bundle lost)
+            string ownerKey = SaveKey(SS.I?.saveSubDirAsArg);
+            if (string.IsNullOrEmpty(ownerKey)) return null;
             string globalPath = Path.Combine(NPCExpansionPlugin.NPCDataPath, uuid + ".json");
             if (File.Exists(globalPath))
             {
                 try
                 {
                     var data = JsonConvert.DeserializeObject<NPCData>(File.ReadAllText(globalPath));
+                    // Files written under another save (or before OwnerSave existed, so unattributable)
+                    // describe a different playthrough's NPC that merely shares this uuid.
+                    if (data == null || !string.Equals(data.OwnerSave, ownerKey, StringComparison.OrdinalIgnoreCase))
+                        return null;
+                    data.MigrateLegacyActivity();
                     LoreCache[uuid] = data;
                     return data;
                 }
@@ -264,6 +298,109 @@ namespace AIROG_NPCExpansion
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// The NPC's entry, created and registered on first use. For characters the game profiled on
+        /// its own (HasProfile is true through the native sheet) that have no entry of ours yet.
+        /// </summary>
+        public static NPCData LoadOrCreate(GameCharacter npc)
+        {
+            var data = Load(npc.uuid);
+            if (data == null)
+            {
+                data = CreateDefault(npc.GetPrettyName());
+                Save(npc.uuid, data);
+            }
+            return data;
+        }
+
+        private static string SaveKey(string saveDir)
+        {
+            if (string.IsNullOrEmpty(saveDir)) return null;
+            try { return Path.GetFileName(saveDir.TrimEnd('\\', '/')); }
+            catch { return saveDir; }
+        }
+
+        // ─── Background vs. current activity ──────────────────────────────────────
+
+        /// <summary>
+        /// True when <paramref name="text"/> is provably a scenario-update result. Every such update
+        /// also seeded "&lt;name&gt;: &lt;text&gt;" (clipped to 80 chars) into this NPC's own KnownFacts,
+        /// so a rumour whose body opens the text can only have come from that update.
+        /// </summary>
+        /// <param name="strict">
+        /// For the native background field, where a wrong match would discard text the player may
+        /// have written: only a long run counts, never a short sentence.
+        /// </param>
+        private bool IsSeededActivityText(string text, bool strict = false)
+        {
+            if (string.IsNullOrWhiteSpace(text) || KnownFacts == null) return false;
+            text = text.Trim();
+            foreach (var fact in KnownFacts)
+            {
+                // "News: ..." facts come from the world simulation, not from a scenario update.
+                if (string.IsNullOrEmpty(fact) || fact.StartsWith("News: ", StringComparison.Ordinal)) continue;
+                int sep = fact.IndexOf(": ", StringComparison.Ordinal);
+                if (sep < 0) continue;
+                string body = fact.Substring(sep + 2);
+                if (body.EndsWith("...")) body = body.Substring(0, body.Length - 3);
+                body = body.Trim();
+                // Rumours about OTHER characters sit in this list too. From those a short shared opening
+                // ("The ...") proves nothing; the whole text, a real run, or our own name on it does.
+                bool aboutSelf = !string.IsNullOrEmpty(Name) && sep == Name.Length && fact.StartsWith(Name, StringComparison.Ordinal);
+                if (body.Length == 0) continue;
+                if (strict ? body.Length < 20 : (!aboutSelf && body.Length < 12 && body.Length != text.Length)) continue;
+                if (text.StartsWith(body, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Saves from before CurrentActivity existed hold the activity text in Scenario. Moves it
+        /// across when it is provably ours; anything else stays in the background for the player.
+        /// </summary>
+        internal bool MigrateLegacyActivity()
+        {
+            if (!string.IsNullOrEmpty(CurrentActivity) || !IsSeededActivityText(Scenario)) return false;
+            CurrentActivity = Scenario.Trim();
+            Scenario = "";
+            return true;
+        }
+
+        /// <summary>
+        /// The other half of that migration: old versions mirrored the activity text into the game's
+        /// native background field. If the native field still holds that text, hand the field back.
+        /// </summary>
+        public static void ReleaseNativeBackground(GameCharacter npc, NPCData data)
+        {
+            try
+            {
+                var native = npc?.importantData;
+                if (native == null || data == null || string.IsNullOrWhiteSpace(native.background)) return;
+                bool isCurrent = !string.IsNullOrWhiteSpace(data.CurrentActivity)
+                                 && string.Equals(native.background.Trim(), data.CurrentActivity.Trim(), StringComparison.Ordinal);
+                if (!isCurrent && !data.IsSeededActivityText(native.background, strict: true)) return;
+                native.background = data.Scenario ?? "";
+
+                // A profile object that held nothing but our text was created by that old mirroring
+                // (the game never makes a background-only profile). Left behind, it keeps the NPC
+                // flagged "important", which hides the native Generate Profile button and stops the
+                // game's own "this character became important" offer for them. Playable characters
+                // are excluded: the game requires theirs to exist.
+                if (string.IsNullOrEmpty(native.background) && string.IsNullOrEmpty(native.personality)
+                    && string.IsNullOrEmpty(native.visualDescription)
+                    && (native.relationships == null || native.relationships.Count == 0)
+                    && !npc.IsPlayable() && !npc.IsMainPlayer())
+                {
+                    npc.importantData = null;
+                    lock (SS.I.uuidToGameEntityMap) native.TearDown();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[NPCExpansion] ReleaseNativeBackground failed for {npc?.GetPrettyName()}: {ex.Message}");
+            }
         }
 
         // ─── Native importantData bridge helpers ──────────────────────────────────
@@ -291,11 +428,12 @@ namespace AIROG_NPCExpansion
         }
 
         /// <summary>
-        /// Returns the best available background/scenario string: native importantData.background
+        /// Returns the best available background string: native importantData.background
         /// first, then our NPCData.Scenario (backward compat).
         /// </summary>
         public static string GetBackground(GameCharacter npc, NPCData data)
         {
+            ReleaseNativeBackground(npc, data);
             if (npc?.importantData != null && !string.IsNullOrEmpty(npc.importantData.background))
                 return npc.importantData.background;
             return data?.Scenario ?? "";
@@ -305,14 +443,33 @@ namespace AIROG_NPCExpansion
         /// Writes personality and background into the game's native ImportantCharacterData,
         /// creating the object if needed so CharacterSheet can display our generated data.
         /// Must be called from the main Unity thread (or with manager in scope).
+        /// <paramref name="exact"/> is for the dossier's Save: the fields then mirror the boxes
+        /// even when the player emptied one (the default only ever fills, never clears).
         /// </summary>
-        public static void SyncToNativeImportantData(GameCharacter npc, string personality, string background, string visualDescription = null)
+        public static void SyncToNativeImportantData(GameCharacter npc, string personality, string background, string visualDescription = null, bool exact = false)
         {
             try
             {
-                if (npc == null || npc.manager == null) return;
+                // Not npc.manager: NPCs that came out of the new-game menu keep pointing at the menu.
+                var mm = SS.I?.Mm();
+                if (npc == null || mm == null) return;
                 if (npc.importantData == null)
-                    npc.importantData = new ImportantCharacterData(npc.manager);
+                {
+                    // Having importantData is what the game means by "important": it hides the native
+                    // Generate Profile button and stops the automatic "became important" profile offer.
+                    // So only a real profile (one with a personality) may create it; a lone background
+                    // stays in our own data, which the dossier and GenContext read just the same.
+                    if (string.IsNullOrEmpty(personality)) return;
+                    npc.importantData = new ImportantCharacterData(mm);
+                }
+                if (exact)
+                {
+                    npc.importantData.personality = personality ?? "";
+                    npc.importantData.background = background ?? "";
+                    // null, not "": the game falls back to the entity's own description on null only.
+                    npc.importantData.visualDescription = string.IsNullOrEmpty(visualDescription) ? null : visualDescription;
+                    return;
+                }
                 if (!string.IsNullOrEmpty(personality))
                     npc.importantData.personality = personality;
                 if (!string.IsNullOrEmpty(background))
@@ -324,6 +481,22 @@ namespace AIROG_NPCExpansion
             {
                 Debug.LogWarning($"[NPCExpansion] SyncToNativeImportantData failed for {npc?.GetPrettyName()}: {ex.Message}");
             }
+        }
+
+        // The save LoreCache was built for. Bundle writes go to that save's folder only, so a
+        // late flush cannot put one save's NPCs into the folder the game has since switched to.
+        private static string _cacheOwner;
+
+        internal static bool CacheBelongsToCurrentSave =>
+            SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg)
+            && string.Equals(_cacheOwner, SS.I.saveSubDirAsArg, StringComparison.Ordinal);
+
+        /// <summary>Empties the cache for a game that is starting (new, loaded or joined).</summary>
+        public static void ResetSession()
+        {
+            LoreCache.Clear();
+            _loreDirty = false;
+            _cacheOwner = SS.I?.saveSubDirAsArg;
         }
 
         public static void SaveSessionLore(string saveDir)
@@ -355,24 +528,41 @@ namespace AIROG_NPCExpansion
         public static void FlushSessionLore()
         {
             if (!_loreDirty) return;
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
+            // No live game (main menu, scene change) or a cache built for a different save:
+            // a background task finishing late must not write this cache anywhere.
+            if (SS.I == null || SS.I.hackyManager == null || !CacheBelongsToCurrentSave) return;
             SaveSessionLore(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
         }
 
         public static void LoadSessionLore(string saveDir)
         {
-            LoreCache.Clear(); // Clear existing cache for new session
+            ResetSession(); // Clear existing cache for new session
             string path = Path.Combine(saveDir, "npcexpansion_lore.json");
             if (!File.Exists(path)) return;
 
             try
             {
                 var loaded = JsonConvert.DeserializeObject<Dictionary<string, NPCData>>(File.ReadAllText(path));
+                if (loaded == null) return;
+                int migrated = 0;
                 foreach (var kvp in loaded)
                 {
+                    if (kvp.Value == null) continue;
+                    if (kvp.Value.MigrateLegacyActivity()) migrated++;
                     LoreCache[kvp.Key] = kvp.Value;
                 }
-                _loreDirty = false; // Cache matches disk
+                _loreDirty = migrated > 0; // Otherwise cache matches disk
+                if (migrated > 0)
+                {
+                    // Keep the bundle exactly as it was before the first rewrite in the new shape.
+                    try
+                    {
+                        string backup = Path.Combine(saveDir, "npcexpansion_lore.before_activity_split.json");
+                        if (!File.Exists(backup)) File.Copy(path, backup);
+                    }
+                    catch (Exception ex) { Debug.LogWarning($"[AIROG_NPCExpansion] Could not back up the lore bundle: {ex.Message}"); }
+                    Debug.Log($"[AIROG_NPCExpansion] Moved {migrated} activity text(s) out of the background field into the current-activity field.");
+                }
                 Debug.Log($"[AIROG_NPCExpansion] Loaded {loaded.Count} lore entries from save folder.");
             }
             catch (Exception ex)

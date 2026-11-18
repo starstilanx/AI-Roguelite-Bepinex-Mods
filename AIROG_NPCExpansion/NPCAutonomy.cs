@@ -13,6 +13,19 @@ namespace AIROG_NPCExpansion
     {
         public static async Task Process(GameCharacter npc, GameplayManager manager)
         {
+            // Always started fire-and-forget: without this an exception just vanishes with the task.
+            try
+            {
+                await ProcessCore(npc, manager);
+            }
+            catch (System.Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"[NPCAutonomy] Autonomy step failed for {npc?.GetPrettyName()}: {ex.Message}");
+            }
+        }
+
+        private static async Task ProcessCore(GameCharacter npc, GameplayManager manager)
+        {
             if (npc == null || manager == null) return;
             var data = NPCData.Load(npc.uuid);
             if (data == null) return;
@@ -43,10 +56,11 @@ namespace AIROG_NPCExpansion
                     _ = NPCReputationSystem.AddReputationFromAction(npc, data, "sold surplus goods to make a profit");
             }
 
-            // Auto-migrate: Use Scenario as Goal if Goal is missing (for existing saves)
-            if (string.IsNullOrEmpty(data.CurrentGoal) && !string.IsNullOrEmpty(data.Scenario))
+            // No goal yet: start from what they are currently doing. (This read Scenario while that
+            // field held the activity; Scenario is the background now and makes no sense as a goal.)
+            if (string.IsNullOrEmpty(data.CurrentGoal) && !string.IsNullOrEmpty(data.CurrentActivity))
             {
-                data.CurrentGoal = data.Scenario;
+                data.CurrentGoal = data.CurrentActivity;
                 NPCData.Save(npc.uuid, data);
             }
 

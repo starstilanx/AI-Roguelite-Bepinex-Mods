@@ -8,7 +8,7 @@ namespace AIROG_SkillWeb
     /// <summary>
     /// Compact in-gameplay panel listing the usable abilities unlocked from Keystone/Confluence
     /// nodes. Clicking one closes the panel and hands off to the game's native target-selection
-    /// flow (PrePrepareToReceive + PrepareToReceive), exactly like the inventory's ability picker —
+    /// flow (PrePrepareToReceive + PrepareToReceive), exactly as the native perk hotbar does —
     /// so the ability can be used on any object, creature, or place, with the native roll bonus,
     /// cooldown, and AI resolution.
     /// </summary>
@@ -22,6 +22,7 @@ namespace AIROG_SkillWeb
         private readonly List<(string uuid, RawImage img)> _iconRefs = new List<(string, RawImage)>();
 
         private bool Showing => _window != null && _window.activeSelf;
+        internal bool IsShowing => Showing;
 
         // ── Entry point ───────────────────────────────────────────────────────────
 
@@ -62,7 +63,11 @@ namespace AIROG_SkillWeb
         {
             if (!Showing) return;
             var kb = UnityEngine.InputSystem.Keyboard.current;
-            if (kb != null && kb.escapeKey.wasPressedThisFrame) Close();
+            if (kb != null && kb.escapeKey.wasPressedThisFrame)
+            {
+                SkillWebPatches.EscConsumedFrame = Time.frameCount;
+                Close();
+            }
         }
 
         // ── Construction ──────────────────────────────────────────────────────────
@@ -107,7 +112,7 @@ namespace AIROG_SkillWeb
             Anchor(title.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(16, -54), new Vector2(-16, -10));
 
             var subtitle = NewText("Subtitle", panel.transform,
-                "Unlocked from Keystones & Confluences — click to use on any target.", 13,
+                "From your Keystones and Confluences. Click to use on any target; they also go on your perk hotbar.", 13,
                 TextAlignmentOptions.Center, new Color(0.8f, 0.75f, 0.6f));
             Anchor(subtitle.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(16, -80), new Vector2(-16, -56));
 
@@ -155,7 +160,7 @@ namespace AIROG_SkillWeb
             foreach (Transform child in _listContent) Destroy(child.gameObject);
 
             var plugin = SkillWebPlugin.Instance;
-            var abilities = plugin?.GetUsableAbilities() ?? new List<KeyValuePair<WebNode, GameAbility>>();
+            var abilities = plugin?.GetUsableAbilities() ?? new List<KeyValuePair<WebNode, PerkNode>>();
 
             if (abilities.Count == 0)
             {
@@ -171,7 +176,7 @@ namespace AIROG_SkillWeb
                 BuildRow(pair.Key, pair.Value);
         }
 
-        void BuildRow(WebNode node, GameAbility ability)
+        void BuildRow(WebNode node, PerkNode ability)
         {
             bool ready = ability.IsAvailableToUse();
 
@@ -226,13 +231,24 @@ namespace AIROG_SkillWeb
 
         // ── Casting ───────────────────────────────────────────────────────────────
 
-        void CastAbility(GameAbility ability)
+        void CastAbility(PerkNode ability)
         {
             if (_manager == null || ability == null) return;
 
             if (Utils.PlayerInteractionsDisabled())
             {
                 SoundManager.I.deniedSoundFxObj.PlayNextSound();
+                return;
+            }
+            // The web's abilities are the main character's perks. The game's own hotbar is per
+            // character, so it never offers them to a companion; this panel has to say no itself,
+            // or a controlled companion could act with the owner's Keystone abilities.
+            var owner = SkillWebPlugin.WebOwner();
+            var actor = _manager.playerCharacter != null ? _manager.playerCharacter.GetCurrentActor() : null;
+            if (owner != null && actor != null && actor != owner)
+            {
+                SoundManager.I.deniedSoundFxObj.PlayNextSound();
+                Toast.I.ShowToast(Utils.Colorize($"Only {owner.GetPrettyName()} can use Skill Web abilities.", "ff3c00"));
                 return;
             }
             if (!ability.IsAvailableToUse())

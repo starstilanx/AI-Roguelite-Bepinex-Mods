@@ -90,7 +90,10 @@ namespace AIROG_SkillWeb
                 try
                 {
                     if (!Chainloader.PluginInfos.ContainsKey("com.airog.npcexpansion")) return;
-                    var questManagerType = Type.GetType("AIROG_NPCExpansion.Quests.QuestManager, AIROG_NPCExpansion");
+                    // QuestManager's file sits in a Quests\ folder but its namespace is plain
+                    // AIROG_NPCExpansion. Looking it up under ".Quests." found nothing, so quest
+                    // completions never paid out. (tools\patch-audit.ps1 now flags a stale name here.)
+                    var questManagerType = Type.GetType("AIROG_NPCExpansion.QuestManager, AIROG_NPCExpansion");
                     _allQuestsField = questManagerType?.GetField("AllQuests", BindingFlags.Public | BindingFlags.Static);
                     _available = _allQuestsField != null;
                 }

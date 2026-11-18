@@ -43,12 +43,14 @@ namespace AIROG_Settlement
         public int CompletedBuildingCount() =>
             Buildings.FindAll(b => b.IsComplete).Count;
 
-        /// <summary>Max residents the settlement can hold: one per completed building, capped by UI space
-        /// (raised by 2 once "civic_planning" is researched).</summary>
+        /// <summary>Max residents the settlement can hold: one per completed building (at most 6),
+        /// plus 2 once "civic_planning" is researched.</summary>
         public int GetPopulationCap()
         {
-            int cap = 6 + (Researched.Contains("civic_planning") ? 2 : 0);
-            return Math.Min(CompletedBuildingCount(), cap);
+            // The bonus is added on top, not folded into the ceiling: there are only six
+            // building types, so min(buildings, 6 + 2) could never exceed 6 and the research
+            // bought nothing.
+            return Math.Min(CompletedBuildingCount(), 6) + (Researched.Contains("civic_planning") ? 2 : 0);
         }
 
         /// <summary>Town-wide happiness baseline from amenities, before any per-resident trait.

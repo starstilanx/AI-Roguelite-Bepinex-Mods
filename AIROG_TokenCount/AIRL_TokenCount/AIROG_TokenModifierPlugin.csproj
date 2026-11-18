@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_TokenModifierPlugin</AssemblyName>
     <Description>A BepInEx plugin to modify token counts in AI Roguelite.</Description>
-    <Version>1.0.5</Version>
+    <Version>1.0.6</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>bin\Debug\net472\</OutputPath>

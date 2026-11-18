@@ -18,7 +18,14 @@ namespace AIROG_Mythic
             [HarmonyPostfix]
             public static void Postfix(GameplayManager __instance, Place newPl)
             {
-                try { OnLocationChange(__instance, newPl); }
+                try
+                {
+                    // LoadGame re-enters the current place before our postfix has loaded this
+                    // save's state; a boundary taken now would be judged against the wrong scene.
+                    if (MythicData.Loading) return;
+                    if (!MythicPlugin.SwitchedOn()) return;
+                    OnLocationChange(__instance, newPl);
+                }
                 catch (Exception ex) { Debug.LogError("[Mythic] Scene handling failed: " + ex); }
             }
         }
@@ -30,6 +37,10 @@ namespace AIROG_Mythic
 
             var st = MythicData.State;
             if (top.uuid == st.ScenePlaceUuid) return; // moving within the same scene
+
+            // No scene on record (new game, or a save from before the mod): this call only
+            // registers where the player already is - it is not an arrival to test.
+            bool hadScene = !string.IsNullOrEmpty(st.ScenePlaceUuid);
 
             // Scene boundary: settle the outgoing scene, open the new one.
             ChaosEngine.OnSceneEnd();
@@ -44,7 +55,10 @@ namespace AIROG_Mythic
             }
 
             if (!(MythicPlugin.CfgEnableSceneTest?.Value ?? false)) return;
+            if (!hadScene) return;
             if ((MythicPlugin.CfgSceneTestOnlyNewPlaces?.Value ?? true) && !firstVisit) return;
+            // The game already drew one of its own random events into this arrival.
+            if (RandomEventEngine.NativeEventThisTurn) return;
 
             RunSceneTest(top);
         }

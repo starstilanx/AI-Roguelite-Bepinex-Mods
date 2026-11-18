@@ -39,17 +39,90 @@ namespace AIROG_WorldExpansion
             var extra = WorldData.GetLoreExtra(entry);
             extra.Category = category;
 
+            PruneRoutineChronicleEntries(universe.lorebook);
+
             Debug.Log($"[WorldLoreExpansion] Recorded Historical Event: {category} - {desc}");
+        }
+
+        // Raids and trade deals are recorded roughly every other minor tick, forever. Uncapped,
+        // a long save ends up with hundreds of them in the native lorebook - bloating the save,
+        // slowing the Lore tab, and (they are keyed by faction names) crowding the player's own
+        // entries out of the game's limited triggered-lore slots. Keep only the newest; major
+        // events and faction falls are rare and stay.
+        private const int MAX_ROUTINE_CHRONICLE_ENTRIES = 30;
+
+        private static bool IsRoutineChronicleEntry(Lorebook.LoreEntry e)
+        {
+            // Exactly the shape RecordHistoricalEvent writes for raid/trade events:
+            // "[Chronicle: Turn N] ..." keyed {actor, target, "war"|"trade"}. Anything the
+            // player has re-keyed no longer matches and is left alone.
+            return e != null && e.val != null && e.val.StartsWith("[Chronicle: Turn ")
+                && e.strKeys != null && e.strKeys.Count == 3
+                && (e.strKeys[2] == "war" || e.strKeys[2] == "trade");
+        }
+
+        private static void PruneRoutineChronicleEntries(Lorebook lorebook)
+        {
+            int excess = lorebook.loreEntries.Count(IsRoutineChronicleEntry) - MAX_ROUTINE_CHRONICLE_ENTRIES;
+            for (int i = 0; i < lorebook.loreEntries.Count && excess > 0; )
+            {
+                var e = lorebook.loreEntries[i];
+                if (!IsRoutineChronicleEntry(e)) { i++; continue; }
+                WorldData.CurrentState.LoreExtras.Remove($"{e.ToUiKeysStr()}_{e.val}");
+                lorebook.loreEntries.RemoveAt(i); // entries are appended, so the first match is the oldest
+                excess--;
+            }
         }
 
         [HarmonyPatch(typeof(LorebookView), "Redraw")]
         [HarmonyPrefix]
         public static bool Prefix_LorebookView_Redraw(LorebookView __instance)
         {
-            // Custom Redraw Logic to support filtering. 
-            // We handle all initialization and cleanup within RedrawWithFiltering to avoid state desync.
-            RedrawWithFiltering(__instance);
-            return false; // Skip original
+            // LorebookView.Redraw runs from JournalModal.Init, i.e. inside GameplayManager.LoadGame:
+            // an exception escaping this prefix would abort loading the save. On any failure fall
+            // back to the native redraw.
+            try
+            {
+                if (!ModSwitch.Enabled)
+                {
+                    RemoveInjectedLoreUi(__instance);
+                    return true;
+                }
+
+                // Custom Redraw Logic to support filtering.
+                // We handle all initialization and cleanup within RedrawWithFiltering to avoid state desync.
+                RedrawWithFiltering(__instance);
+                return false; // Skip original
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[WorldLoreExpansion] Lore tab redraw failed, using the native one: {e}");
+                try { RemoveInjectedLoreUi(__instance); } catch { }
+                return true;
+            }
+        }
+
+        // Strips everything RedrawWithFiltering adds, so the native Redraw (which re-uses the
+        // entry rows it finds) starts from rows it created itself. DestroyImmediate, not Destroy:
+        // the native redraw runs right after this and must not count rows that are about to go.
+        private static void RemoveInjectedLoreUi(LorebookView view)
+        {
+            _tabsHolder = null;
+            if (view == null || view.loreEntriesParent == null) return;
+
+            Transform parent = view.loreEntriesParent.parent;
+            if (parent != null)
+            {
+                for (int i = parent.childCount - 1; i >= 0; i--)
+                    if (parent.GetChild(i).name == "LoreCategoryTabs")
+                        Object.DestroyImmediate(parent.GetChild(i).gameObject);
+            }
+            for (int i = view.loreEntriesParent.childCount - 1; i >= 0; i--)
+            {
+                Transform child = view.loreEntriesParent.GetChild(i);
+                if (child.name == "HeaderSpacer" || child.Find("ToolsContainer") != null)
+                    Object.DestroyImmediate(child.gameObject);
+            }
         }
 
         private static void SetupCategoryTabs(LorebookView view)
@@ -144,6 +217,10 @@ namespace AIROG_WorldExpansion
             var universe = view.manager.GetCurrentUniverse();
             if (universe == null || universe.lorebook == null) return;
 
+            // Same rule the native Redraw applies through UiLoreEntry.Bind: co-op clients
+            // without world-edit permission get read-only rows.
+            bool canEdit = view.manager.WorldEditsAllowed();
+
             foreach (var entry in universe.lorebook.loreEntries)
             {
                 var extra = WorldData.GetLoreExtra(entry);
@@ -155,7 +232,8 @@ namespace AIROG_WorldExpansion
                 ui.loreEntry = entry;
                 ui.keysInput.SetTextWithoutNotify(entry.ToUiKeysStr());
                 ui.valInput.SetTextWithoutNotify(entry.val);
-                
+                ui.SetEditable(canEdit);
+
                 InjectExtraUi(ui);
                 
                 ui.HackyRefreshWordWrapping();
@@ -285,7 +363,13 @@ namespace AIROG_WorldExpansion
                  // Create a dummy entity to leverage AIAsker's standard pipeline
                  // We use the uuid we generated/stored
                  var ge = new ThingGameEntity(null, "LoreEntry", prompt, gm, null, false, true, uuid);
-                 
+
+                 // The Thing constructor wraps itself in a new InGameEntity, and that wrapper
+                 // (unlike the Thing) registers in the global entity map - so every generated
+                 // lore image left a place-less "LoreEntry" entity in the save file for good.
+                 // The Thing keeps its reference to the wrapper; it just must not be registered.
+                 ge.parentInGameEnt?.TearDownSimple();
+
                  // UI/AI code expects imgGenInfo
                  if (ge.imgGenInfo == null) 
                      ge.imgGenInfo = new GameEntity.ImgGenInfo(GameEntity.ImgType.REGULAR);
@@ -436,6 +520,11 @@ namespace AIROG_WorldExpansion
         [HarmonyPrefix]
         public static bool Prefix_OnAiGenLoreEntry(LorebookView __instance)
         {
+            // Co-op clients must take the native path: it forwards the request to the host,
+            // which owns generation (and the lorebook). Generating here would add an entry that
+            // exists only on the client's screen until the next state sync wipes it.
+            if (!ModSwitch.Enabled || MpSession.IsClient) return true;
+
             // 07/11 build: manager.soundManager is no longer wired — use the singleton.
             try { SoundManager.I.smallClickSoundFxObj.PlayNextSound(); } catch { }
             ModalWindow.I.ShowTextPromptModal(LS.I.GetLocStr("key-input-topic-for-lore-entry") ?? "", textInputActive: true, showCancelButton: true, async delegate

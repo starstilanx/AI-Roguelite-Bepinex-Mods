@@ -19,7 +19,7 @@ namespace AIROG_VertexAI
     /// Image generation uses its own <see cref="SS.ImageGenerationMode"/> value 98,
     /// deliberately clear of AIROG_NanoBanana's 99 so both mods can be installed at once.
     /// </summary>
-    [BepInPlugin(GUID, "AIROG Vertex AI", "1.0.1")]
+    [BepInPlugin(GUID, "AIROG Vertex AI", "1.0.2")]
     public class VertexAIPlugin : BaseModPlugin
     {
         public const string GUID = "com.airog.vertexai";

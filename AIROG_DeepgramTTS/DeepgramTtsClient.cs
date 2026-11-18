@@ -18,9 +18,10 @@ namespace AIROG_DeepgramTTS
 
         public async Task<string> GenerateTts(string text, SS.VoiceType voiceType)
         {
+            // Trimmed: a pasted key with a trailing newline is not a valid header value.
+            string apiKey = (DeepgramTtsPlugin.DeepgramApiKey.Value ?? "").Trim();
             try
             {
-                string apiKey = DeepgramTtsPlugin.DeepgramApiKey.Value;
                 if (string.IsNullOrEmpty(apiKey))
                 {
                     Debug.LogError("Deepgram API Key missing! Set it in the options menu.");
@@ -59,7 +60,10 @@ namespace AIROG_DeepgramTTS
             }
             catch (Exception ex)
             {
-                Debug.LogError($"Deepgram TTS Client Exception: {ex.Message}");
+                // A header-format error quotes the offending header value, i.e. the key itself.
+                string msg = ex.Message ?? "";
+                if (apiKey.Length > 5) msg = msg.Replace(apiKey, "[redacted]");
+                Debug.LogError($"Deepgram TTS Client Exception: {msg}");
                 return null;
             }
         }

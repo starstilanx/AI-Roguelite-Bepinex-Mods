@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_ScenePace</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite that stops the GM from racing past the moment: a roll resolves the attempt, not the ambition, and the story ends at the player's next real decision point.</Description>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>bin\Debug\net472\</OutputPath>
@@ -38,6 +38,12 @@
     </Reference>
     <Reference Include="netstandard">
       <HintPath>..\AIRL\libs\netstandard.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- GenContext reference for ModToggles only (soft dependency at runtime). A plain Reference,
+         not a ProjectReference, so "package.ps1 -Only ScenePace" does not drag GenContext in. -->
+    <Reference Include="AIROG_GenContext">
+      <HintPath>..\AIROG_GenContext\bin\Debug\net472\AIROG_GenContext.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

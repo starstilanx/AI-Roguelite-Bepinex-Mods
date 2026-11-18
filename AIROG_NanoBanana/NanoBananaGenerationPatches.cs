@@ -24,7 +24,9 @@ namespace AIROG_NanoBanana
 
         private static async Task GenerateGeminiImageTask(SettingsPojo.EntImgSettings entImgSettings, GameEntity geArg)
         {
-            string prompt = entImgSettings.GetFormatted(await geArg.GetGenerateImagePrompt());
+            // Two-arg GetFormatted, as AIAsker does: the second arg is the scenario's own image
+            // prompt format, which the one-arg overload silently drops.
+            string prompt = entImgSettings.GetFormatted(await geArg.GetGenerateImagePrompt(), geArg.Mm?.GetScenarioState()?.imagePromptFmt);
             GameEntity.ImgGenState state = await NanoBananaImageClient.GenerateGeminiImage(
                 NanoBananaPlugin.Instance.GeminiApiKey, NanoBananaPlugin.Instance.GeminiModel, geArg, geArg.imgGenInfo, prompt);
 
@@ -66,14 +68,15 @@ namespace AIROG_NanoBanana
         {
             // If the mode is NanoBanana (99), our Prefix handled it.
             // If it's Sapphire or AIRL_Free, they handle bg removal natively.
-            // Mode 97 is AIROG_OpenAIImage, which does its own removal (or gets real alpha from
-            // gpt-image-*) — running ours too just spawns a wasted ffmpeg pass per sprite.
+            // Modes 97 (AIROG_OpenAIImage) and 98 (AIROG_VertexAI) do their own removal (or get
+            // real alpha from gpt-image-*) — running ours too just spawns a wasted ffmpeg pass per sprite.
             // For everyone else (Local, Wombo, etc), we need to do it manually if removeBg is requested.
             if (SS.I.imageGenerationMode != (SS.ImageGenerationMode)99 &&
+                SS.I.imageGenerationMode != (SS.ImageGenerationMode)98 &&
                 SS.I.imageGenerationMode != (SS.ImageGenerationMode)97 &&
                 SS.I.imageGenerationMode != SS.ImageGenerationMode.SAPPHIRE &&
                 SS.I.imageGenerationMode != SS.ImageGenerationMode.AIRL_FREE &&
-                removeBg)
+                removeBg && __result != null)
             {
                 var originalTask = __result;
                 __result = Task.Run(async () =>
@@ -172,7 +175,7 @@ namespace AIROG_NanoBanana
 
         private static async Task GenerateGeminiSpriteTask(SettingsPojo.EntImgSettings entImgSettings, GameEntity geArg, bool removeBg)
         {
-            string prompt = entImgSettings.GetFormatted(await geArg.GetGenerateImagePrompt());
+            string prompt = entImgSettings.GetFormatted(await geArg.GetGenerateImagePrompt(), geArg.Mm?.GetScenarioState()?.imagePromptFmt);
             // Gemini doesn't remove backgrounds yet, so we just ask for a white background
             if (removeBg) prompt += ", white background, isolated, high quality sprite";
 

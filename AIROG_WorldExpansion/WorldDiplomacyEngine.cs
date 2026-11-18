@@ -288,6 +288,7 @@ namespace AIROG_WorldExpansion
                     foreach (var cand in topPlaces)
                     {
                         if (cand == null || owned.Contains(cand.uuid)) continue;
+                        if (cand.isPrivateDwelling) continue; // see SeedNewFactions
                         float d = (cand.worldCoords - ownPl.worldCoords).sqrMagnitude;
                         if (d < bestDist) { bestDist = d; best = cand; }
                     }
@@ -362,6 +363,24 @@ namespace AIROG_WorldExpansion
                 TransferNativePlaceOwnership(territory, victor);
             }
             loserData.ClaimedPlaceUuids.Clear();
+
+            // The game gives a place its native faction when the player first walks in, long
+            // after seeding - such places are the loser's on the map without ever being in its
+            // claim list. Sweep those up too, or they stay behind as a dead faction's territory
+            // (map tint, legend row, "territory of ..." in the prompt).
+            try
+            {
+                foreach (var pl in manager.GetCurrentVoronoiWorld()?.GetAllTopLvlPlaces() ?? new List<Place>())
+                {
+                    if (pl?.faction == null || pl.faction.uuid != loser.uuid) continue;
+                    pl.faction = victor;
+                    if (!victorData.ClaimedPlaceUuids.Contains(pl.uuid)) victorData.ClaimedPlaceUuids.Add(pl.uuid);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[WorldExpansion] Could not reassign the fallen faction's remaining places: {e.Message}");
+            }
 
             // Population devastated by conquest
             loserData.Population = Math.Max(10, loserData.Population / 5);

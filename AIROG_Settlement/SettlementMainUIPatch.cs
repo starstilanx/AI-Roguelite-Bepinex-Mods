@@ -12,8 +12,22 @@ namespace AIROG_Settlement
     {
         public static void Postfix(MainLayouts __instance)
         {
-            SettlementPlugin.Log.LogInfo("MainLayouts.InitCommonAnchs Postfix: Injecting Settlement UI");
-            CreateSettlementUI(__instance);
+            // InitCommonAnchs is called from GameplayManager.StartGame: an exception escaping
+            // here would abort starting or loading the game.
+            try
+            {
+                if (SettlementPlugin.Instance == null) return;
+                SettlementPlugin.Log.LogInfo("MainLayouts.InitCommonAnchs Postfix: Injecting Settlement UI");
+                CreateSettlementUI(__instance);
+                // The HUD is rebuilt with every scene load, so the per-save switch has to be
+                // applied to the fresh button here (SS.I.saveSubDirAsArg already names the save
+                // being loaded at this point).
+                SettlementPlugin.Instance.ApplyModSwitch();
+            }
+            catch (System.Exception e)
+            {
+                SettlementPlugin.Log?.LogError($"Settlement UI injection failed: {e}");
+            }
         }
 
         private static void CreateSettlementUI(MainLayouts layout)

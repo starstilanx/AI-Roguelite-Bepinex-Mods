@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace AIROG_DeepgramTTS
 {
-    [BepInPlugin("com.airoguelite.deepgramtts", "Deepgram TTS", "1.0.0")]
+    [BepInPlugin("com.airoguelite.deepgramtts", "Deepgram TTS", "1.0.1")]
     public class DeepgramTtsPlugin : BaseUnityPlugin
     {
         public static DeepgramTtsPlugin Instance { get; private set; }

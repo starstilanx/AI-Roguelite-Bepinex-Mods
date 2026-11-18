@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using HarmonyLib;
 using TMPro;
@@ -65,6 +66,15 @@ namespace AIROG_VertexAI
             plugin.TryPatch(typeof(MainMenu), "OnCustomerKeyTxtInputChanged",
                 prefix: new HarmonyMethod(m, nameof(OnCustomerKeyTxtInputChanged_Prefix)));
 
+            plugin.TryPatch(typeof(CustomerKeySlot), "OnTxtInputChanged",
+                prefix: new HarmonyMethod(m, nameof(KeySlotTxtChanged_Prefix)));
+
+            plugin.TryPatch(typeof(CustomerKeySlot), "OnEndEdit",
+                prefix: new HarmonyMethod(m, nameof(KeySlotEndEdit_Prefix)));
+
+            plugin.TryPatch(typeof(MainMenu), "OnImageGenTextFieldChanged",
+                prefix: new HarmonyMethod(m, nameof(OnImageGenTextFieldChanged_Prefix)));
+
             plugin.TryPatch(typeof(AIAsker), "getGeneratedImage",
                 prefix: new HarmonyMethod(m, nameof(GetGeneratedImage_Prefix)));
 
@@ -103,8 +113,11 @@ namespace AIROG_VertexAI
             string imgUuid = useNewImgFileList ? Guid.NewGuid().ToString() : null;
             string pathNoExt = imgUuid == null ? null : Path.Combine(SS.I.saveSubDirAsArg, imgUuid);
 
+            // Not Gcm.CurrentToken: that belongs to the player's current text generation, and
+            // the Stop button would cancel every queued image with it, leaving each entity
+            // stuck IN_PROGRESS (which also blocks "regenerate image").
             GameEntity.ImgGenState state = await VertexImageClient.GenerateImage(
-                geArg, geArg.imgGenInfo, ImageAspectRatio(geArg), prompt, Gcm.CurrentToken, pathNoExt);
+                geArg, geArg.imgGenInfo, ImageAspectRatio(geArg), prompt, CancellationToken.None, pathNoExt);
 
             if (state == GameEntity.ImgGenState.FINISHED && removeBg)
                 await VertexImageClient.RemoveFlatBackground(geArg, geArg.imgGenInfo, pathNoExt);
@@ -119,7 +132,7 @@ namespace AIROG_VertexAI
             if (removeBg) prompt = AppendFlatBackgroundHint(prompt);
 
             GameEntity.ImgGenState state = await VertexImageClient.GenerateImage(
-                geArg, geArg.spGenInfo, SpriteAspectRatio(geArg), prompt, Gcm.CurrentToken);
+                geArg, geArg.spGenInfo, SpriteAspectRatio(geArg), prompt, CancellationToken.None);
 
             if (state == GameEntity.ImgGenState.FINISHED && removeBg)
                 await VertexImageClient.RemoveFlatBackground(geArg, geArg.spGenInfo);
@@ -203,9 +216,10 @@ namespace AIROG_VertexAI
         // Options menu
         // ------------------------------------------------------------------
 
-        public static void Options_Prefix()
+        public static void Options_Prefix(MainMenu __instance)
         {
             _optionsInProgress = true;
+            CaptureOriginals(__instance);
             if (PlayerPrefs.GetInt(VertexAIPlugin.PREF_IMG_ACTIVE, 0) == 1)
             {
                 // Options() re-reads the pref to position the dropdown; make sure it still says 98.
@@ -390,22 +404,55 @@ namespace AIROG_VertexAI
         {
             if (!IsVertexSelected(__instance)) return true;
 
-            // The original mirrors this box into the subscription key fields. Our box holds
-            // a Google API key, so only let the two subscription boxes mirror each other.
-            GameObject selected = EventSystem.current?.currentSelectedGameObject;
-            TMP_InputField imgKeyField = __instance.customerKeySlotForImgGen?.inputField;
-            if (imgKeyField != null && selected != null && selected == imgKeyField.gameObject)
+            // A subscription key typed into one of the other boxes (edits to our own box are
+            // stopped in KeySlotTxtChanged_Prefix and never get here). The original mirrors it
+            // into every box, which would overwrite the Google key; mirror it into every box
+            // but ours instead.
+            if (__instance.customerKeySlots != null)
             {
-                VertexTextPatches.MirrorKeyToTextRow(s);
-                return false;
+                foreach (CustomerKeySlot slot in __instance.customerKeySlots)
+                {
+                    if (slot != null && slot != __instance.customerKeySlotForImgGen && slot.inputField != null)
+                        slot.inputField.SetTextWithoutNotify(s);
+                }
             }
-
-            if (__instance.customerKeyTxtInput != null && __instance.customerKeyTxtInput.gameObject == selected)
-                __instance.customerKeyTxtInputForAudioGen?.SetTextWithoutNotify(s);
-            if (__instance.customerKeyTxtInputForAudioGen != null && __instance.customerKeyTxtInputForAudioGen.gameObject == selected)
-                __instance.customerKeyTxtInput?.SetTextWithoutNotify(s);
-
             return false;
+        }
+
+        // The image-gen key box is a CustomerKeySlot whose inspector-wired callbacks treat its
+        // text as the AI Roguelite subscription key. While it holds the Google key both must
+        // be stopped.
+
+        public static bool KeySlotTxtChanged_Prefix(CustomerKeySlot __instance, string s)
+        {
+            if (!OwnsKeySlot(__instance)) return true;
+            // Would copy the Google key into the text/video/audio/TTS subscription key boxes.
+            VertexTextPatches.MirrorKeyToTextRow(s);
+            return false;
+        }
+
+        public static bool KeySlotEndEdit_Prefix(CustomerKeySlot __instance)
+        {
+            // Would set SS.I.customerKey to the Google key and re-check the subscription with
+            // it, i.e. send the key to the game's own servers as a customer key.
+            return !OwnsKeySlot(__instance);
+        }
+
+        /// <summary>
+        /// The original re-selects the settings preset matching the prompt boxes, falling back
+        /// to the last entry ("Custom"). Our preset dropdown lists models, so editing any
+        /// prompt box silently switched the model to the last one in the list.
+        /// </summary>
+        public static bool OnImageGenTextFieldChanged_Prefix(MainMenu __instance)
+        {
+            return !IsVertexSelected(__instance);
+        }
+
+        private static bool OwnsKeySlot(CustomerKeySlot slot)
+        {
+            if (slot == null) return false;
+            MainMenu menu = slot.menu != null ? slot.menu : SS.I?.hackyMenu;
+            return menu != null && slot == menu.customerKeySlotForImgGen && IsVertexSelected(menu);
         }
 
         // ------------------------------------------------------------------
@@ -514,13 +561,19 @@ namespace AIROG_VertexAI
                 RelabelKeyRow(keySlot, "Vertex AI API Key");
                 if (keySlot.inputField != null)
                 {
-                    if (_originalKeyPlaceholder == null && keySlot.inputField.placeholder is TMP_Text ph)
-                        _originalKeyPlaceholder = ph.text;
                     VertexMenuUi.SetPlaceholder(keySlot.inputField, "Paste your Vertex AI express-mode API key");
-                    keySlot.inputField.SetTextWithoutNotify(PlayerPrefs.GetString(VertexAIPlugin.PREF_API_KEY, ""));
+                    // The text row may hold a key typed this session and not saved yet; loading
+                    // the saved pref here made SaveCurrentPrefs write the old (or empty) key
+                    // back over it.
+                    keySlot.inputField.SetTextWithoutNotify(
+                        VertexTextPatches.CurrentKeyText() ?? PlayerPrefs.GetString(VertexAIPlugin.PREF_API_KEY, ""));
                 }
                 _tookOverKeyRow = true;
             }
+
+            // Options() leaves the Sapphire-only style row showing (it runs its own handler on
+            // dropdown row 0 before our row is selected).
+            VertexMenuUi.SetActive(menu.airlImgGenStyleTrans, false);
 
             // imgGenTweakHolder carries the prompt-format box, which still shapes our prompt.
             VertexMenuUi.SetActive(menu.imgGenTweakHolder, true);
@@ -531,12 +584,65 @@ namespace AIROG_VertexAI
             }
         }
 
-        // Captured the first time we take over the shared key row, so switching back to a
-        // subscription backend restores exactly what the prefab had.
+        // Captured once per MainMenu from the Options prefix, i.e. before any backend has
+        // relabelled the shared key row. Capturing at takeover time picked up another custom
+        // backend's label when switching straight from Gemini/OpenAI to Vertex.
         private static string _originalKeyLabel;
         private static string _originalKeyPlaceholder;
         private static bool _hidSubStatusRow;
         private static bool _tookOverKeyRow;
+        private static MainMenu _capturedFor;
+
+        private static void CaptureOriginals(MainMenu menu)
+        {
+            try
+            {
+                if (menu == null || _capturedFor == menu) return;
+                _capturedFor = menu;
+                _hidSubStatusRow = false;
+                _tookOverKeyRow = false;
+
+                CustomerKeySlot slot = menu.customerKeySlotForImgGen;
+                if (slot == null) return;
+                _originalKeyLabel = KeyRowLabel(slot)?.text;
+                _originalKeyPlaceholder = (slot.inputField?.placeholder as TMP_Text)?.text;
+            }
+            catch (Exception ex)
+            {
+                VertexAIPlugin.Log.LogError($"[VertexAI] could not record the stock key row texts: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Puts a stock text back: the captured copy first, then, where the label is driven by
+        /// a LocalizeStringEvent, a re-localise on top (the captured copy may predate
+        /// localisation or a language change).
+        /// </summary>
+        private static void RestoreText(TMP_Text txt, string captured)
+        {
+            if (txt == null) return;
+            if (captured != null) txt.text = captured;
+            MonoBehaviour localizer = txt.GetComponents<MonoBehaviour>()
+                .FirstOrDefault(c => c != null && c.GetType().Name == "LocalizeStringEvent");
+            localizer?.GetType().GetMethod("RefreshString", Type.EmptyTypes)?.Invoke(localizer, null);
+        }
+
+        /// <summary>True when the selected row is a custom mode owned by another mod (OpenAI 97, Gemini 99).</summary>
+        private static bool OtherCustomBackendSelected(MainMenu menu)
+        {
+            try
+            {
+                // Resolved through the game's (patched) mapper, so another mod's row answers for itself.
+                var mapper = AccessTools.Method(typeof(MainMenu), "GetImageGenerationModeByDropdownInd");
+                if (mapper == null) return false;
+                var mode = (SS.ImageGenerationMode)mapper.Invoke(menu, new object[] { menu.imageGenerationDropdown.value });
+                return !Enum.IsDefined(typeof(SS.ImageGenerationMode), mode);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
 
         private static void HideSubscriptionStatus(CustomerKeySlot slot)
         {
@@ -561,7 +667,6 @@ namespace AIROG_VertexAI
         {
             TMP_Text labelText = KeyRowLabel(slot);
             if (labelText == null) return;
-            if (_originalKeyLabel == null) _originalKeyLabel = labelText.text;
             labelText.text = label;
         }
 
@@ -584,18 +689,18 @@ namespace AIROG_VertexAI
             if (slot == null) return;
             _tookOverKeyRow = false;
 
-            if (_originalKeyLabel != null)
+            // Another custom backend owns the row now and relabels and refills it in its own
+            // postfix, which may run before this one. Undoing ours on top of that put the
+            // subscription key into its key box, which its SaveCurrentPrefs then saved as its
+            // API key.
+            if (OtherCustomBackendSelected(menu))
             {
-                TMP_Text labelText = KeyRowLabel(slot);
-                if (labelText != null) labelText.text = _originalKeyLabel;
-                _originalKeyLabel = null;
+                _hidSubStatusRow = false;
+                return;
             }
 
-            if (_originalKeyPlaceholder != null)
-            {
-                VertexMenuUi.SetPlaceholder(slot.inputField, _originalKeyPlaceholder);
-                _originalKeyPlaceholder = null;
-            }
+            RestoreText(KeyRowLabel(slot), _originalKeyLabel);
+            RestoreText(slot.inputField?.placeholder as TMP_Text, _originalKeyPlaceholder);
 
             if (_hidSubStatusRow && slot.subStatusTxt != null)
             {

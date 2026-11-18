@@ -27,6 +27,16 @@ namespace AIROG_ALife
             _failed = false;
         }
 
+        /// <summary>
+        /// The bridge also stands down when WorldExpansion is switched off for this save: its
+        /// wars are frozen then, and fighting them here would keep seizing its territory,
+        /// draining its treasuries and ending its wars inside a mod the player turned off.
+        /// </summary>
+        private static bool Unavailable()
+        {
+            return _failed || !ALifePlugin.WorldSwitchedOn();
+        }
+
         public class WarInfo
         {
             public string ActorUuid, ActorName, TargetUuid, TargetName;
@@ -34,7 +44,7 @@ namespace AIROG_ALife
 
         public static List<WarInfo> GetActiveWars()
         {
-            if (_failed) return new List<WarInfo>();
+            if (Unavailable()) return new List<WarInfo>();
             try { return GetActiveWarsInner(); }
             catch (Exception ex) { Fail(ex); return new List<WarInfo>(); }
         }
@@ -69,7 +79,7 @@ namespace AIROG_ALife
 
         public static List<string> GetClaimedPlaces(string factionUuid)
         {
-            if (_failed || string.IsNullOrEmpty(factionUuid)) return new List<string>();
+            if (Unavailable() || string.IsNullOrEmpty(factionUuid)) return new List<string>();
             try { return GetClaimedPlacesInner(factionUuid); }
             catch (Exception ex) { Fail(ex); return new List<string>(); }
         }
@@ -85,7 +95,7 @@ namespace AIROG_ALife
 
         public static bool PlayerHasBountyFrom(string factionUuid)
         {
-            if (_failed || string.IsNullOrEmpty(factionUuid)) return false;
+            if (Unavailable() || string.IsNullOrEmpty(factionUuid)) return false;
             try { return PlayerHasBountyFromInner(factionUuid); }
             catch (Exception ex) { Fail(ex); return false; }
         }
@@ -100,7 +110,7 @@ namespace AIROG_ALife
         /// <summary>Push a big A-Life happening into WorldExpansion's event log + player alert queue.</summary>
         public static void PushWorldEvent(string desc, bool alertPlayer)
         {
-            if (_failed) return;
+            if (Unavailable()) return;
             try { PushWorldEventInner(desc, alertPlayer); }
             catch (Exception ex) { Fail(ex); }
         }
@@ -118,7 +128,7 @@ namespace AIROG_ALife
         /// <summary>WorldExpansion's canonical relationship key for a faction pair (order-independent).</summary>
         public static string GetWarKey(string facA, string facB)
         {
-            if (_failed || string.IsNullOrEmpty(facA) || string.IsNullOrEmpty(facB)) return null;
+            if (Unavailable() || string.IsNullOrEmpty(facA) || string.IsNullOrEmpty(facB)) return null;
             try { return GetWarKeyInner(facA, facB); }
             catch (Exception ex) { Fail(ex); return null; }
         }
@@ -136,7 +146,7 @@ namespace AIROG_ALife
         /// </summary>
         public static string SeizePlace(string winnerFacUuid, string loserFacUuid, string nearPlaceUuid)
         {
-            if (_failed) return null;
+            if (Unavailable()) return null;
             try { return SeizePlaceInner(winnerFacUuid, loserFacUuid, nearPlaceUuid); }
             catch (Exception ex) { Fail(ex); return null; }
         }
@@ -184,7 +194,7 @@ namespace AIROG_ALife
         /// <summary>End a war outright — the field decided it.</summary>
         public static void EndWarDecisively(string facA, string facB, string reason)
         {
-            if (_failed) return;
+            if (Unavailable()) return;
             try { EndWarInner(facA, facB, reason); }
             catch (Exception ex) { Fail(ex); }
         }
@@ -199,7 +209,7 @@ namespace AIROG_ALife
         /// <summary>Battle losses cost the faction treasury (feeds WorldExpansion's own exhaustion-peace check).</summary>
         public static void DrainResources(string factionUuid, int amount)
         {
-            if (_failed || string.IsNullOrEmpty(factionUuid)) return;
+            if (Unavailable() || string.IsNullOrEmpty(factionUuid)) return;
             try { DrainResourcesInner(factionUuid, amount); }
             catch (Exception ex) { Fail(ex); }
         }
@@ -215,7 +225,7 @@ namespace AIROG_ALife
         /// <summary>A landed raid can kill members of the defender's court (WorldExpansion's own odds).</summary>
         public static void RollRaidCourtCasualty(string defenderFacUuid, string attackerName)
         {
-            if (_failed || string.IsNullOrEmpty(defenderFacUuid)) return;
+            if (Unavailable() || string.IsNullOrEmpty(defenderFacUuid)) return;
             try { RollRaidCourtCasualtyInner(defenderFacUuid, attackerName); }
             catch (Exception ex) { Fail(ex); }
         }
@@ -238,7 +248,7 @@ namespace AIROG_ALife
         /// <summary>A living, unbound lieutenant of this faction willing to lead a warband, or null.</summary>
         public static FieldFigure GetFieldLieutenant(string factionUuid)
         {
-            if (_failed || string.IsNullOrEmpty(factionUuid)) return null;
+            if (Unavailable() || string.IsNullOrEmpty(factionUuid)) return null;
             try { return GetFieldLieutenantInner(factionUuid); }
             catch (Exception ex) { Fail(ex); return null; }
         }
@@ -260,7 +270,7 @@ namespace AIROG_ALife
         /// <summary>A court lieutenant leading a warband has fallen in the field. Idempotent.</summary>
         public static void MarkFieldFigureDead(string factionUuid, string figureName, string cause)
         {
-            if (_failed || string.IsNullOrEmpty(factionUuid) || string.IsNullOrEmpty(figureName)) return;
+            if (Unavailable() || string.IsNullOrEmpty(factionUuid) || string.IsNullOrEmpty(figureName)) return;
             try { MarkFieldFigureDeadInner(factionUuid, figureName, cause); }
             catch (Exception ex) { Fail(ex); }
         }

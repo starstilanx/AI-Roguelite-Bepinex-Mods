@@ -106,6 +106,10 @@ namespace AIROG_VertexAI
                 if (_keyField != null)
                     _keyField.SetTextWithoutNotify(PlayerPrefs.GetString(VertexAIPlugin.PREF_API_KEY, ""));
 
+                // Options() applied the "hide keys" setting before our row existed, so a row
+                // built on this open would show the key in clear text until the next one.
+                UpdateKeysVisibility_Postfix(__instance);
+
                 if (_wasActiveOnOptionsOpen)
                 {
                     int ind = IndexOfVertexOption(__instance);
@@ -269,6 +273,12 @@ namespace AIROG_VertexAI
         internal static void MirrorKeyToTextRow(string key)
         {
             _keyField?.SetTextWithoutNotify(key);
+        }
+
+        /// <summary>The key as it currently stands in the text row (may be newer than the saved pref), or null if the row was never built.</summary>
+        internal static string CurrentKeyText()
+        {
+            return _keyField != null ? _keyField.text : null;
         }
 
         private static VertexTextModel SelectedModel()

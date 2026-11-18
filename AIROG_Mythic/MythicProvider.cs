@@ -43,11 +43,16 @@ namespace AIROG_Mythic
             if (MythicPlugin.CfgInjectRegisterDirective?.Value ?? true)
                 sb.AppendLine(ChaosEngine.RegisterDirective());
 
-            // 2. Pending director events (oldest first, unexpired, capped)
-            var live = st.PendingEvents
-                .Where(e => st.CurrentTurn <= e.ExpiresTurn)
-                .Take(MAX_EVENTS_INJECTED)
-                .ToList();
+            // 2. Pending director events (oldest first, unexpired, capped). Held back on a turn
+            //    where the game put its own random event into the prompt: two systems each telling
+            //    the AI to spring something unplanned in one narration. They stay queued for the
+            //    following turn(s).
+            var live = RandomEventEngine.NativeEventThisTurn
+                ? new System.Collections.Generic.List<MythicEvent>()
+                : st.PendingEvents
+                    .Where(e => st.CurrentTurn <= e.ExpiresTurn)
+                    .Take(MAX_EVENTS_INJECTED)
+                    .ToList();
             foreach (var ev in live)
             {
                 sb.AppendLine($"[DIRECTOR EVENT — {ev.Focus}] {ev.Directive}");

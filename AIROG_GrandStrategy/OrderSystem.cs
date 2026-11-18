@@ -28,7 +28,7 @@ namespace AIROG_GrandStrategy
         public static readonly List<OrderDef> Defs = new List<OrderDef>
         {
             new OrderDef { Type = "ANNEX",     Cp = 1, Gold = 25, Usage = "ANNEX — claim nearest unowned region" },
-            new OrderDef { Type = "DEVELOP",   Cp = 1, Gold = 30, Usage = "DEVELOP <FARM|MINE|MARKET|GARRISON|WATCHTOWER> — improve capital" },
+            new OrderDef { Type = "DEVELOP",   Cp = 1, Gold = 30, Usage = "DEVELOP <FARM|MINE|MARKET|GARRISON|WATCHTOWER|SHRINE|BARRACKS> — improve capital" },
             new OrderDef { Type = "LEVY",      Cp = 1, Gold = 0,  Usage = "LEVY — 100 population → 10 army strength (+unrest)" },
             new OrderDef { Type = "TRADE",     Cp = 1, Gold = 0,  Usage = "TRADE — treasury windfall scaled by market" },
             new OrderDef { Type = "ENVOY",     Cp = 1, Gold = 20, Usage = "ENVOY <faction> — improve diplomatic tier" },
@@ -691,6 +691,11 @@ namespace AIROG_GrandStrategy
                 var playerFaction = (manager.GetCurrentFactions() ?? new List<Faction>())
                     .FirstOrDefault(f => f != null && f.uuid == s.FactionUuid);
                 if (playerFaction != null) place.faction = playerFaction;
+                // The usual case: the game has no native faction for the player, so there is
+                // nothing to flip the place TO. Leaving the previous owner on a conquered or
+                // usurped place kept the map tint, World News and the prompt's "territory of ..."
+                // line all crediting the faction that just lost it.
+                else if (place.faction != null) place.faction = null;
             }
             catch (Exception e)
             {

@@ -38,8 +38,10 @@ namespace AIROG_GrandStrategy
 
             s.PendingPetition = Generate(s, turn);
             if (s.PendingPetition == null) return;
+            // This text goes into the AI prompt as a world alert, so no console-command hints in
+            // it (the narrator would read them out); the DOM panel shows the Accept/Reject buttons.
             WorldData.QueuePlayerEvent(
-                $"A {L.PetitionNoun} is brought before you, {L.RulerTitle} of {s.DominionName}: {s.PendingPetition.Text} (GS_PETITION ACCEPT or GS_PETITION REJECT)",
+                $"A {L.PetitionNoun} is brought before you, {L.RulerTitle} of {s.DominionName}: {s.PendingPetition.Text}",
                 "DOMINION_PETITION");
             WorldEventsUI.MarkDirty();
         }

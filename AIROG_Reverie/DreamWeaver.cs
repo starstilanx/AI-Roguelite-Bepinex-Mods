@@ -71,7 +71,8 @@ namespace AIROG_Reverie
             string playerName = null, placeName = null;
             try
             {
-                playerName = SS.I?.hackyManager?.playerCharacter?.name;
+                // (playerCharacter.name would be the scene object's name: PlayerCharacter is a MonoBehaviour)
+                playerName = SS.I?.hackyManager?.playerCharacter?.GetPlayerNameWFallback();
                 placeName = SS.I?.hackyManager?.currentPlace?.GetPrettyName();
             }
             catch { }

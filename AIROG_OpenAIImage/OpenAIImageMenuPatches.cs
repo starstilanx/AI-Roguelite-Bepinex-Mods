@@ -19,6 +19,7 @@ namespace AIROG_OpenAIImage
         public static void Prefix(MainMenu __instance)
         {
             OpenAIImagePlugin._optionsOpenInProgress = true;
+            Patch_OnImageGenerationDropdownChanged.CaptureOriginals(__instance);
 
             bool isOpenAI = PlayerPrefs.GetInt(OpenAIImagePlugin.PREF_KEY_ACTIVE, 0) == 1
                          || SS.I.imageGenerationMode == OpenAIImagePlugin.OPENAI_IMG_MODE;
@@ -151,11 +152,58 @@ namespace AIROG_OpenAIImage
     {
         private static string _originalKeyLabel = null;
         private static string _originalPlaceholder = null;
-        private static bool _hidWomboStyle = false;
-        private static bool _hidNaiModel = false;
-        private static bool _hidStableHordeKey = false;
         private static bool _hidSubStatusRow = false;
-        private static bool _hidAirlImgGenStyle = false;
+        private static bool _tookOverKeyRow = false;
+        private static MainMenu _capturedFor = null;
+
+        /// <summary>
+        /// Records the shared key row's stock label and placeholder once per MainMenu, from the
+        /// Options prefix, i.e. before any backend has relabelled it. Capturing lazily at
+        /// takeover time picked up another custom backend's label when switching straight from
+        /// Gemini/Vertex to this one, and later "restored" that onto the subscription key box.
+        /// </summary>
+        internal static void CaptureOriginals(MainMenu menu)
+        {
+            try
+            {
+                if (menu == null || _capturedFor == menu) return;
+                _capturedFor = menu;
+                _hidSubStatusRow = false;
+                _tookOverKeyRow = false;
+
+                var slot = menu.customerKeySlotForImgGen;
+                if (slot == null) return;
+                _originalKeyLabel = FindKeyLabel(slot)?.text;
+                _originalPlaceholder = (slot.inputField?.placeholder as TMP_Text)?.text;
+            }
+            catch (System.Exception ex)
+            {
+                OpenAIImagePlugin.Log.LogError($"[OpenAIImage] CaptureOriginals failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>The key row's caption: not the input field's own child texts, not the sub-status line.</summary>
+        private static TMP_Text FindKeyLabel(CustomerKeySlot slot)
+        {
+            Transform inputFieldTf = slot.inputField != null ? slot.inputField.transform : null;
+            return slot.transform
+                .GetComponentsInChildren<TMP_Text>(true)
+                .FirstOrDefault(t => (inputFieldTf == null || !t.transform.IsChildOf(inputFieldTf)) && t != slot.subStatusTxt);
+        }
+
+        /// <summary>
+        /// Puts a stock text back: the captured copy first, then, where the label is driven by
+        /// a LocalizeStringEvent, a re-localise on top (the captured copy may predate
+        /// localisation or a language change).
+        /// </summary>
+        private static void RestoreText(TMP_Text txt, string captured)
+        {
+            if (txt == null) return;
+            if (captured != null) txt.text = captured;
+            MonoBehaviour localizer = txt.GetComponents<MonoBehaviour>()
+                .FirstOrDefault(c => c != null && c.GetType().Name == "LocalizeStringEvent");
+            localizer?.GetType().GetMethod("RefreshString", System.Type.EmptyTypes)?.Invoke(localizer, null);
+        }
 
         public static void ApplyUiState(MainMenu __instance)
         {
@@ -204,28 +252,31 @@ namespace AIROG_OpenAIImage
                     }
 
                     // Hide the AIRL/Obsidian-only style dropdown (turned on by the SAPPHIRE path).
-                    if (__instance.airlImgGenStyleTrans != null && __instance.airlImgGenStyleTrans.gameObject.activeSelf && !_hidAirlImgGenStyle)
-                    {
+                    // Unconditional: Options() re-shows it on every open, so a "hidden once" flag
+                    // left it visible from the second open on.
+                    if (__instance.airlImgGenStyleTrans != null)
                         __instance.airlImgGenStyleTrans.gameObject.SetActive(false);
-                        _hidAirlImgGenStyle = true;
-                    }
 
                     var keyInputField = __instance.customerKeySlotForImgGen?.inputField;
                     if (keyInputField != null)
                     {
                         if (keyInputField.placeholder is TMP_Text placeholder)
                         {
-                            if (_originalPlaceholder == null) _originalPlaceholder = placeholder.text;
                             placeholder.text = "Enter your API key";
                         }
                         keyInputField.SetTextWithoutNotify(PlayerPrefs.GetString(OpenAIImagePlugin.PREF_KEY_API_KEY, ""));
                     }
 
-                    SetKeyLabel(__instance, "API Key", captureOriginal: true);
+                    if (__instance.customerKeySlotForImgGen != null)
+                    {
+                        TMP_Text label = FindKeyLabel(__instance.customerKeySlotForImgGen);
+                        if (label != null) label.text = "API Key";
+                        _tookOverKeyRow = true;
+                    }
 
-                    if (__instance.womboStyleHolder != null && __instance.womboStyleHolder.gameObject.activeSelf) { __instance.womboStyleHolder.gameObject.SetActive(false); _hidWomboStyle = true; }
-                    if (__instance.naiModelTransform != null && __instance.naiModelTransform.gameObject.activeSelf) { __instance.naiModelTransform.gameObject.SetActive(false); _hidNaiModel = true; }
-                    if (__instance.stableHordeKeyTransform != null && __instance.stableHordeKeyTransform.gameObject.activeSelf) { __instance.stableHordeKeyTransform.gameObject.SetActive(false); _hidStableHordeKey = true; }
+                    if (__instance.womboStyleHolder != null) __instance.womboStyleHolder.gameObject.SetActive(false);
+                    if (__instance.naiModelTransform != null) __instance.naiModelTransform.gameObject.SetActive(false);
+                    if (__instance.stableHordeKeyTransform != null) __instance.stableHordeKeyTransform.gameObject.SetActive(false);
 
                     if (__instance.imgGenTweakHolder != null) __instance.imgGenTweakHolder.gameObject.SetActive(true);
                     if (__instance.exportImportImgGenSettingsTrans != null) __instance.exportImportImgGenSettingsTrans.gameObject.SetActive(true);
@@ -245,81 +296,64 @@ namespace AIROG_OpenAIImage
                 }
                 else
                 {
-                    if (_hidSubStatusRow && __instance.customerKeySlotForImgGen?.subStatusTxt != null)
-                    {
-                        var subStatus = __instance.customerKeySlotForImgGen.subStatusTxt;
-                        Transform rowParent = subStatus.transform.parent;
-                        bool inSubRow = rowParent != null && rowParent != __instance.customerKeySlotForImgGen.transform;
-                        (inSubRow ? rowParent.gameObject : subStatus.gameObject).SetActive(true);
-                        _hidSubStatusRow = false;
-
-                        if (!inSubRow)
-                        {
-                            foreach (Transform child in __instance.customerKeySlotForImgGen.transform)
-                            {
-                                var t = child.GetComponent<TMP_Text>();
-                                if (t != null && t != subStatus && t.text.ToLower().Contains("subscription"))
-                                {
-                                    t.gameObject.SetActive(true);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (_hidAirlImgGenStyle && __instance.airlImgGenStyleTrans != null)
-                    {
-                        __instance.airlImgGenStyleTrans.gameObject.SetActive(true);
-                        _hidAirlImgGenStyle = false;
-                    }
-
-                    if (_originalPlaceholder != null && __instance.customerKeySlotForImgGen?.inputField?.placeholder is TMP_Text ph)
-                    {
-                        ph.text = _originalPlaceholder;
-                        _originalPlaceholder = null;
-                    }
-
-                    if (_originalKeyLabel != null)
-                    {
-                        SetKeyLabel(__instance, _originalKeyLabel, captureOriginal: false);
-                        _originalKeyLabel = null;
-                    }
-
-                    if (_hidWomboStyle && __instance.womboStyleHolder != null) { __instance.womboStyleHolder.gameObject.SetActive(true); _hidWomboStyle = false; }
-                    if (_hidNaiModel && __instance.naiModelTransform != null) { __instance.naiModelTransform.gameObject.SetActive(true); _hidNaiModel = false; }
-                    if (_hidStableHordeKey && __instance.stableHordeKeyTransform != null) { __instance.stableHordeKeyTransform.gameObject.SetActive(true); _hidStableHordeKey = false; }
-
-                    // Put the real customer key back if the user switched to SAPPHIRE.
+                    // Resolved through the game's (patched) mapper, so another mod's row answers for itself.
                     var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd",
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (method != null)
+                    SS.ImageGenerationMode selectedMode = method != null
+                        ? (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind })
+                        : SS.ImageGenerationMode.DISABLED;
+
+                    if (_tookOverKeyRow)
                     {
-                        var selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
-                        if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeySlotForImgGen?.inputField != null)
-                            __instance.customerKeySlotForImgGen.inputField.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
+                        _tookOverKeyRow = false;
+
+                        // A custom mode from another mod (Vertex 98, Gemini 99) owns the shared key
+                        // row now and relabels and refills it in its own postfix, which may run
+                        // before or after this one; undoing ours would put the stock label over
+                        // its key box.
+                        bool otherCustomBackend = !System.Enum.IsDefined(typeof(SS.ImageGenerationMode), selectedMode);
+                        var slot = __instance.customerKeySlotForImgGen;
+                        if (!otherCustomBackend && slot != null)
+                        {
+                            if (_hidSubStatusRow && slot.subStatusTxt != null)
+                            {
+                                var subStatus = slot.subStatusTxt;
+                                Transform rowParent = subStatus.transform.parent;
+                                bool inSubRow = rowParent != null && rowParent != slot.transform;
+                                (inSubRow ? rowParent.gameObject : subStatus.gameObject).SetActive(true);
+
+                                if (!inSubRow)
+                                {
+                                    foreach (Transform child in slot.transform)
+                                    {
+                                        var t = child.GetComponent<TMP_Text>();
+                                        if (t != null && t != subStatus && t.text.ToLower().Contains("subscription"))
+                                        {
+                                            t.gameObject.SetActive(true);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            RestoreText(slot.inputField?.placeholder as TMP_Text, _originalPlaceholder);
+                            RestoreText(FindKeyLabel(slot), _originalKeyLabel);
+                        }
+                        _hidSubStatusRow = false;
                     }
+
+                    // Row visibility is not restored here: the game's own handler has already set
+                    // every row for the new mode before this postfix runs.
+
+                    // Put the real customer key back if the user switched to SAPPHIRE.
+                    if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeySlotForImgGen?.inputField != null)
+                        __instance.customerKeySlotForImgGen.inputField.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
                 }
             }
             catch (System.Exception ex)
             {
                 OpenAIImagePlugin.Log.LogError($"[OpenAIImage] ApplyUiState failed: {ex.Message}");
             }
-        }
-
-        /// <summary>Retitles the key row, skipping the input field's own child texts and the sub-status line.</summary>
-        private static void SetKeyLabel(MainMenu __instance, string text, bool captureOriginal)
-        {
-            var slot = __instance.customerKeySlotForImgGen;
-            if (slot == null) return;
-
-            Transform inputFieldTf = slot.inputField != null ? slot.inputField.transform : null;
-            TMP_Text label = slot.transform
-                .GetComponentsInChildren<TMP_Text>(true)
-                .FirstOrDefault(t => (inputFieldTf == null || !t.transform.IsChildOf(inputFieldTf)) && t != slot.subStatusTxt);
-
-            if (label == null) return;
-            if (captureOriginal && _originalKeyLabel == null) _originalKeyLabel = label.text;
-            label.text = text;
         }
 
         public static void Postfix(MainMenu __instance)
@@ -434,24 +468,79 @@ namespace AIROG_OpenAIImage
         [HarmonyPrefix]
         public static bool Prefix(string s, MainMenu __instance)
         {
-            int ind = __instance.imageGenerationDropdown.value;
-            bool isOpenAI = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
-                            __instance.imageGenerationDropdown.options[ind].text == OpenAIImagePlugin.DROPDOWN_LABEL;
-            if (!isOpenAI) return true;
+            if (!OpenAISelection.IsSelected(__instance)) return true;
 
-            // Decouple the image-gen key box from the Sapphire text/audio boxes, which the
-            // original keeps in sync with it.
-            GameObject selected = EventSystem.current?.currentSelectedGameObject;
-            var imgKeyField = __instance.customerKeySlotForImgGen?.inputField;
-            if (imgKeyField != null && selected != null && selected == imgKeyField.gameObject)
-                return false;
-
-            if (__instance.customerKeyTxtInput != null && __instance.customerKeyTxtInput.gameObject == selected)
-                __instance.customerKeyTxtInputForAudioGen?.SetTextWithoutNotify(s);
-            if (__instance.customerKeyTxtInputForAudioGen != null && __instance.customerKeyTxtInputForAudioGen.gameObject == selected)
-                __instance.customerKeyTxtInput?.SetTextWithoutNotify(s);
-
+            // A subscription key typed into one of the other boxes (edits to our own box are
+            // stopped in Patch_CustomerKeySlot_OnTxtInputChanged and never get here). The
+            // original mirrors it into every box, which would overwrite our API key; mirror it
+            // into every box but ours instead.
+            if (__instance.customerKeySlots != null)
+            {
+                foreach (CustomerKeySlot slot in __instance.customerKeySlots)
+                {
+                    if (slot != null && slot != __instance.customerKeySlotForImgGen && slot.inputField != null)
+                        slot.inputField.SetTextWithoutNotify(s);
+                }
+            }
             return false;
+        }
+    }
+
+    internal static class OpenAISelection
+    {
+        public static bool IsSelected(MainMenu menu)
+        {
+            if (menu == null || menu.imageGenerationDropdown == null) return false;
+            int ind = menu.imageGenerationDropdown.value;
+            return ind >= 0 && ind < menu.imageGenerationDropdown.options.Count &&
+                   menu.imageGenerationDropdown.options[ind].text == OpenAIImagePlugin.DROPDOWN_LABEL;
+        }
+
+        /// <summary>True for the image-gen key box while it is holding our API key.</summary>
+        public static bool OwnsSlot(CustomerKeySlot slot)
+        {
+            if (slot == null) return false;
+            MainMenu menu = slot.menu != null ? slot.menu : SS.I?.hackyMenu;
+            return menu != null && slot == menu.customerKeySlotForImgGen && IsSelected(menu);
+        }
+    }
+
+    // The image-gen key box is a CustomerKeySlot whose inspector-wired callbacks treat its text
+    // as the AI Roguelite subscription key. While it holds our API key both must be stopped.
+
+    [HarmonyPatch(typeof(CustomerKeySlot), "OnTxtInputChanged")]
+    public static class Patch_CustomerKeySlot_OnTxtInputChanged
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(CustomerKeySlot __instance)
+        {
+            // Would copy our API key into the text/video/audio/TTS subscription key boxes.
+            return !OpenAISelection.OwnsSlot(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(CustomerKeySlot), "OnEndEdit")]
+    public static class Patch_CustomerKeySlot_OnEndEdit
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(CustomerKeySlot __instance)
+        {
+            // Would set SS.I.customerKey to our API key and re-check the subscription with it,
+            // i.e. send the key to the game's own servers as a customer key.
+            return !OpenAISelection.OwnsSlot(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(MainMenu), "OnImageGenTextFieldChanged")]
+    public static class Patch_OnImageGenTextFieldChanged
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(MainMenu __instance)
+        {
+            // The original re-selects the settings preset matching the prompt boxes, falling
+            // back to the last entry ("Custom"). Our preset dropdown lists models, so editing
+            // any prompt box silently switched the model to the last one in the list.
+            return !OpenAISelection.IsSelected(__instance);
         }
     }
 }

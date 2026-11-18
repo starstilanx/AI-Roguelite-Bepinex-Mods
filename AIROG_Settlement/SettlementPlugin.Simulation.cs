@@ -17,6 +17,11 @@ namespace AIROG_Settlement
             {
                 var self = Instance;
                 if (self == null) return;
+                // The game also raises this with numTurns == 0 for every enemy attack, encounter
+                // round, plot hook and task result. No time passes then - without this check
+                // resident happiness drifted once per enemy action in a fight.
+                if (numTurns <= 0) return;
+                if (!ModSwitch.Enabled) return;
                 var s = self.CurrentSettlement;
                 if (s == null || string.IsNullOrEmpty(s.LocationUuid)) return;
 
@@ -26,6 +31,11 @@ namespace AIROG_Settlement
                 self.UpdateTradePrices(numTurns);
                 self.TryTriggerEvent(numTurns);
                 self.ScheduleUiUpdate();
+
+                // GenContext's SettlementProvider reads the file, not this object. Autosave is
+                // optional, so without a write here the AI would see resources and residents as
+                // of the last manual save.
+                self.SaveSettlementData(quiet: true);
             }
             catch (Exception ex)
             {

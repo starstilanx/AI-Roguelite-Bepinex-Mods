@@ -24,7 +24,12 @@ namespace AIROG_GrandStrategy
         [HarmonyPostfix]
         public static void Postfix_RunMinorTick(GameplayManager manager)
         {
-            try { StrategicTick(manager); }
+            try
+            {
+                if (!ModSwitch.Enabled) return;
+                GrandStrategyData.EnsureStateForCurrentSave();
+                StrategicTick(manager);
+            }
             catch (Exception e) { Debug.LogError($"[GrandStrategy] Strategic tick failed: {e}"); }
         }
 
@@ -276,6 +281,12 @@ namespace AIROG_GrandStrategy
                 }
                 if (h.Improvements.Contains("GARRISON"))
                     h.Unrest = Math.Max(0, h.Unrest - 1);
+                // SHRINE and BARRACKS have been buildable since v0.4 but their per-tick effects
+                // (-2 unrest, +1 army) were never applied anywhere.
+                if (h.Improvements.Contains("SHRINE"))
+                    h.Unrest = Math.Max(0, h.Unrest - 2);
+                if (h.Improvements.Contains("BARRACKS"))
+                    s.ArmyStrength += 1;
                 if (hasTemple)                 h.Unrest = Math.Max(0, h.Unrest - 3);
                 if (hasCitadel && h.IsCapital) h.Unrest = Math.Max(0, h.Unrest - 2);
 

@@ -22,7 +22,16 @@ namespace AIROG_SkillWeb
     /// </summary>
     public static class NodeIconGen
     {
-        static string IconDir => Path.Combine(Path.GetDirectoryName(SkillWebPlugin.GetSavePath()), "icons");
+        // Layout on disk:  <save>\icons\<web seed>\<node id>.png|.webp
+        // Each web gets its own folder because node ids ("n12", "gate:sector_<tree>") repeat from
+        // one web to the next. With a single shared folder, a request still running for the OLD
+        // web when the web was regenerated would write its picture to the very path the new web's
+        // node of the same id reads, and its completion handler would delete or mark-failed the
+        // new node's own request. Webs made before this layout keep reading icons\ directly.
+        static string SaveIconRoot => Path.Combine(Path.GetDirectoryName(SkillWebPlugin.GetSavePath()), "icons");
+        static string WebIconDir(long seed) => Path.Combine(SaveIconRoot, seed.ToString("x16"));
+        static SkillWebData LiveData => SkillWebPlugin.Instance != null ? SkillWebPlugin.Instance.Data : null;
+        static string Key(long seed, string nodeId) => seed.ToString("x16") + "|" + nodeId;
 
         // A single generation holds the backend's image semaphore for up to a minute (ComfyUI/A1111),
         // but SkillWebUI.Refresh() — which re-triggers EnsureIconAsync for every visible node — fires
@@ -49,36 +58,91 @@ namespace AIROG_SkillWeb
             _failedUntil.Clear();
         }
 
+        /// <summary>
+        /// Deletes every cached node icon for the current save. Icons are stored by node id, and a
+        /// regenerated web reuses the same ids for different nodes.
+        /// </summary>
+        public static void DeleteAllIcons()
+        {
+            try
+            {
+                string dir = SaveIconRoot;
+                if (!Directory.Exists(dir)) return;
+                foreach (var file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                {
+                    string ext = Path.GetExtension(file).ToLowerInvariant();
+                    if (ext != ".png" && ext != ".webp") continue;
+                    try { File.Delete(file); } catch { /* locked by an in-flight write; it is orphaned either way */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[SkillWeb] Could not clear node icons: " + ex.Message);
+            }
+        }
+
         /// <summary>Node ids can contain ':' (Anchors are "anchor:&lt;perkUuid&gt;"), which is illegal in a Windows filename.</summary>
         static string SafeFileName(string nodeId) => nodeId.Replace(':', '_');
 
-        public static string GetIconPath(WebNode node) => Path.Combine(IconDir, SafeFileName(node.id) + ".png");
+        /// <summary>
+        /// The icon file for this node, in whichever format it was saved, or null if there is none.
+        ///
+        /// BOTH formats matter. Every native image client finishes through WebpUtils.FinalizeImage,
+        /// which (with the game's WEBP_ENABLED on) writes &lt;path&gt;.webp and deletes any
+        /// &lt;path&gt;.png; only the NanoBanana route writes a .png. Looking for the .png alone meant
+        /// every icon a native backend made looked missing forever: never shown, and requested
+        /// again by each later refresh.
+        /// </summary>
+        public static string FindIconFile(WebNode node)
+        {
+            var data = LiveData;
+            if (node == null || data == null) return null;
+            string name = SafeFileName(node.id);
 
-        public static bool HasIcon(WebNode node) => File.Exists(GetIconPath(node));
+            string found = Probe(WebIconDir(data.layoutSeed), name);
+            // Pre-layout webs: their icons were written straight into icons\.
+            if (found == null && !data.iconsPerWeb) found = Probe(SaveIconRoot, name);
+            return found;
+        }
+
+        static string Probe(string dir, string name)
+        {
+            string png = Path.Combine(dir, name + ".png");
+            if (File.Exists(png)) return png;
+            string webp = Path.Combine(dir, name + ".webp");
+            return File.Exists(webp) ? webp : null;
+        }
+
+        public static bool HasIcon(WebNode node) => FindIconFile(node) != null;
 
         /// <summary>Fire-and-forget: generates (if missing and eligible) an icon for this node.</summary>
         public static void EnsureIconAsync(WebNode node)
         {
-            if (node == null || node.type == WebNodeType.Basic || HasIcon(node)) return;
+            if (node == null || node.type == WebNodeType.Basic || node.type == WebNodeType.Travel || node.IsOrigin || HasIcon(node)) return;
+            var data = LiveData;
+            if (data == null) return;
 
             // Already generating this node, or it failed recently — don't pile another request onto
             // the backend queue. Refresh() calls this for every visible node many times per second.
-            if (_inFlight.ContainsKey(node.id)) return;
-            if (_failedUntil.TryGetValue(node.id, out float until) && Time.realtimeSinceStartup < until) return;
+            string key = Key(data.layoutSeed, node.id);
+            if (_inFlight.ContainsKey(key)) return;
+            if (_failedUntil.TryGetValue(key, out float until) && Time.realtimeSinceStartup < until) return;
 
-            _inFlight[node.id] = 0;
-            _ = GenerateAsync(node);
+            _inFlight[key] = 0;
+            // Folder and key are fixed NOW, for the web this node belongs to; by the time the
+            // request finishes the live web may be a different one.
+            _ = GenerateAsync(node, key, data.layoutSeed, WebIconDir(data.layoutSeed));
         }
 
-        static async Task GenerateAsync(WebNode node)
+        static async Task GenerateAsync(WebNode node, string key, long seed, string iconDir)
         {
             bool succeeded = false;
             bool skippedDisabled = false;
             try
             {
-                Directory.CreateDirectory(IconDir);
+                Directory.CreateDirectory(iconDir);
                 string prompt = BuildPrompt(node);
-                string pathNoExt = Path.Combine(IconDir, SafeFileName(node.id));
+                string pathNoExt = Path.Combine(iconDir, SafeFileName(node.id));
 
                 bool ok = await TryNanoBanana(prompt, pathNoExt);
                 if (!ok)
@@ -94,6 +158,15 @@ namespace AIROG_SkillWeb
                     ok = await TryNativeBackend(prompt, pathNoExt);
                 }
 
+                // A backend can report success without leaving a file where we look for it. Treat
+                // that as a failure (5-minute back-off) instead of a success that would be retried
+                // on the very next refresh, forever.
+                if (ok && !File.Exists(pathNoExt + ".png") && !File.Exists(pathNoExt + ".webp"))
+                {
+                    Debug.LogWarning($"[SkillWeb] Icon backend reported success for '{node.name}' but wrote no image file.");
+                    ok = false;
+                }
+
                 if (!ok)
                 {
                     Debug.LogWarning($"[SkillWeb] Icon generation failed for node '{node.name}'.");
@@ -101,8 +174,23 @@ namespace AIROG_SkillWeb
                 }
 
                 succeeded = true;
-                if (SkillWebUI.Instance != null && SkillWebUI.Instance.gameObject.activeSelf)
-                    SkillWebUI.Instance.Refresh();
+
+                // The web may have been regenerated (or another save loaded) while this was
+                // generating. This picture belongs to a node that no longer exists: delete it (it
+                // sits in the old web's own folder, so nothing of the live web is touched).
+                // "Same web" is judged by seed and folder, not object identity: the same web
+                // re-read from disk is still the web this icon was made for.
+                var data = LiveData;
+                bool sameWeb = data != null && data.layoutSeed == seed
+                               && string.Equals(WebIconDir(data.layoutSeed), iconDir, StringComparison.OrdinalIgnoreCase)
+                               && data.GetNode(node.id) != null;
+                if (!sameWeb)
+                {
+                    try { File.Delete(pathNoExt + ".png"); } catch { }
+                    try { File.Delete(pathNoExt + ".webp"); } catch { }
+                    return;
+                }
+                SkillWebUI.Instance?.OnIconReady(node.id);
             }
             catch (Exception ex)
             {
@@ -115,9 +203,9 @@ namespace AIROG_SkillWeb
                 // Task as an unobserved exception and silently skip setting the cooldown below.
                 try
                 {
-                    _inFlight.TryRemove(node.id, out _);
-                    if (succeeded || skippedDisabled) _failedUntil.TryRemove(node.id, out _);
-                    else _failedUntil[node.id] = Time.realtimeSinceStartup + FailCooldownSeconds;
+                    _inFlight.TryRemove(key, out _);
+                    if (succeeded || skippedDisabled) _failedUntil.TryRemove(key, out _);
+                    else _failedUntil[key] = Time.realtimeSinceStartup + FailCooldownSeconds;
                 }
                 catch (Exception ex)
                 {
@@ -133,6 +221,7 @@ namespace AIROG_SkillWeb
                 WebNodeType.Keystone => "a powerful mythic rune-sigil",
                 WebNodeType.Anchor => "a glowing anchor-star emblem",
                 WebNodeType.Confluence => "a fused dual-toned emblem",
+                WebNodeType.Mastery => "an ornate circular mastery seal",
                 _ => "a small passive-skill emblem",
             };
             return $"A single centered icon: {kind} representing '{node.name}' ({node.description}). " +

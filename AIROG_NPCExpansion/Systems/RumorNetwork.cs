@@ -48,10 +48,33 @@ namespace AIROG_NPCExpansion
                     targetData.KnownFacts.Add(fact);
                     while (targetData.KnownFacts.Count > MAX_FACTS)
                         targetData.KnownFacts.RemoveAt(0);
+                    GrowBond(npc, data, targetNpc, targetData);
                     NPCData.Save(targetNpc.uuid, targetData);
                     Debug.Log($"[RumorNetwork] '{fact}' spread from {npc.GetPrettyName()} to {targetNpc.GetPrettyName()}");
                 }
             }
+        }
+
+        private const int BOND_PER_RUMOUR = 2;
+
+        /// <summary>
+        /// Two NPCs who just traded a rumour think a little better of each other. This is the only
+        /// thing that writes NPCData.NpcAffinities: the dossier's "How they feel about others", the
+        /// social ripple and the mourning on a friend's death all read that table, and until this
+        /// existed nothing ever filled it. The caller saves <paramref name="bData"/>.
+        /// </summary>
+        internal static void GrowBond(GameCharacter a, NPCData aData, GameCharacter b, NPCData bData)
+        {
+            if (a == null || b == null || aData == null || bData == null) return;
+            if (string.IsNullOrEmpty(a.uuid) || string.IsNullOrEmpty(b.uuid) || a.uuid == b.uuid) return;
+            // Opposite sides of a fight do not warm to each other over gossip.
+            if (a.IsEnemyType() != b.IsEnemyType()) return;
+
+            if (aData.NpcAffinities == null) aData.NpcAffinities = new Dictionary<string, int>();
+            if (bData.NpcAffinities == null) bData.NpcAffinities = new Dictionary<string, int>();
+            aData.ChangeAffinity(b.uuid, BOND_PER_RUMOUR);
+            bData.ChangeAffinity(a.uuid, BOND_PER_RUMOUR);
+            NPCData.Save(a.uuid, aData);
         }
 
         /// <summary>Seed a fact into an NPC's known facts. Truncated to MAX_FACT_CHARS.</summary>

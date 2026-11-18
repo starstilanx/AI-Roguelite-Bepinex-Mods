@@ -148,7 +148,7 @@ namespace AIROG_NPCExpansion
             float score = 1.0f;
             var roles = GetRoleKeywords(npc, data);
             string itemName = item.GetPrettyName().ToLowerInvariant();
-            string itemDesc = (item.description ?? "").ToLowerInvariant();
+            string itemDesc = (item.GetPotentiallyNullDescription() ?? "").ToLowerInvariant();
 
             bool isMagicUser = roles.Contains("mage") || roles.Contains("wizard") || roles.Contains("sorcerer") || roles.Contains("warlock") || roles.Contains("priest") || roles.Contains("cleric") || roles.Contains("enchanter") || roles.Contains("scholar");
             bool isWarrior = roles.Contains("warrior") || roles.Contains("fighter") || roles.Contains("knight") || roles.Contains("soldier") || roles.Contains("barbarian") || roles.Contains("guard") || roles.Contains("paladin");
@@ -208,7 +208,8 @@ namespace AIROG_NPCExpansion
             // 3. Name/Description Fallback
             if (keywords.Count == 0)
             {
-                string combo = (npc.GetPrettyName() + " " + npc.description).ToLowerInvariant();
+                // The component's own description field is not kept up to date; this accessor is.
+                string combo = (npc.GetPrettyName() + " " + npc.GetPotentiallyNullDescription()).ToLowerInvariant();
                 var parts = combo.Split(new[] { ' ', ',', '.' }, StringSplitOptions.RemoveEmptyEntries);
                 foreach (var p in parts) keywords.Add(p);
             }

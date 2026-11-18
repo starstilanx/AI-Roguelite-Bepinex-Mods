@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_DirectedUpdates</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite that lets the GM pass a per-entity instruction from update_entities to the follow-up state-update step.</Description>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>..\AIROG_GenContext\bin\Debug\net472\</OutputPath>
@@ -26,6 +26,14 @@
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\AIRL\libs\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>..\AIRL\libs\UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.InputSystem">
+      <HintPath>..\AIRL\libs\Unity.InputSystem.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="Newtonsoft.Json">

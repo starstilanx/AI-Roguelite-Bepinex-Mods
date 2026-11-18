@@ -22,8 +22,9 @@ namespace AIROG_NPCExpansion
                 if (!NPCData.HasProfile(npc, data)) return;
                 if (_rng.NextDouble() > BARK_CHANCE) return;
 
-                // Don't bark if this NPC is currently selected for conversation
-                if (manager.npcActionsHandler?.currentNpc?.uuid == npc.uuid) return;
+                // Don't bark if this NPC is currently selected for conversation. The selection lives
+                // in the bottom-bar dropdown; npcActionsHandler.currentNpc is never set by the game any more.
+                if (manager.npcConvoSelectedUuid == npc.uuid) return;
 
                 string context = BuildContext(npc, data);
                 string prompt = $"{context}\n\n" +
@@ -37,6 +38,8 @@ namespace AIROG_NPCExpansion
                     AIAsker.ChatGptPostprocessingType.NONE);
 
                 if (string.IsNullOrEmpty(bark)) return;
+                // Left this save, or the mod was switched off, while the AI was writing the line.
+                if (!data.IsFromCurrentSave || !ModSwitch.Enabled) return;
 
                 // Normalise before the length check: strip quotes/whitespace and collapse
                 // any multi-line output into the first line.
@@ -62,7 +65,9 @@ namespace AIROG_NPCExpansion
             sb.AppendLine($"Personality: {NPCData.GetPersonality(npc, data)}");
             string background = NPCData.GetBackground(npc, data);
             if (!string.IsNullOrEmpty(background))
-                sb.AppendLine($"Current Situation: {background}");
+                sb.AppendLine($"Background: {background}");
+            if (!string.IsNullOrEmpty(data.CurrentActivity))
+                sb.AppendLine($"Current Situation: {data.CurrentActivity}");
             if (!string.IsNullOrEmpty(data.CurrentGoal))
                 sb.AppendLine($"Goal: {data.CurrentGoal}");
             sb.AppendLine($"Relationship with player: {data.RelationshipStatus} (Affinity {data.Affinity}/100)");

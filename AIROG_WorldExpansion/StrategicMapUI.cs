@@ -44,6 +44,15 @@ namespace AIROG_WorldExpansion
         {
             try
             {
+                // The same MapModal also serves the main menu's world editor and the in-game
+                // "new world" preview, where there is no simulated world to show.
+                if (!ModSwitch.Enabled || !__instance.InRegularGameMap())
+                {
+                    LensRequested = false;
+                    SetButtonVisible(__instance, false);
+                    ClearOverlay(__instance);
+                    return;
+                }
                 if (LensRequested) { _lensOn = true; LensRequested = false; }
                 EnsureLensButton(__instance);
                 if (_lensOn) BuildOverlay(__instance, vw);
@@ -52,6 +61,23 @@ namespace AIROG_WorldExpansion
             catch (Exception e)
             {
                 Debug.LogError($"[WorldExpansion] Political lens failed: {e}");
+            }
+        }
+
+        /// Re-syncs the lens button/overlay with the per-save mod switch while the map is open
+        /// (the next ShowWorldView does the same for a closed map).
+        public static void ApplyModSwitch(MapModal modal)
+        {
+            if (modal == null || !modal.IsShowing() || modal.mode != MapModal.MapMode.WORLD) return;
+            if (ModSwitch.Enabled && modal.InRegularGameMap())
+            {
+                EnsureLensButton(modal);
+                if (_lensOn) BuildOverlay(modal, modal.LastDisplayedVw());
+            }
+            else
+            {
+                SetButtonVisible(modal, false);
+                ClearOverlay(modal);
             }
         }
 
@@ -160,7 +186,8 @@ namespace AIROG_WorldExpansion
             Transform btn = modal.jumpToCurrentLocationButton?.transform.parent.Find(BUTTON_NAME);
             if (btn != null) UpdateButtonLabel(btn.gameObject);
 
-            if (_lensOn) BuildOverlay(modal, modal.manager?.currentPlace?.GetVw());
+            // The world on screen, which is not always the one the player stands in ("view worlds")
+            if (_lensOn) BuildOverlay(modal, modal.LastDisplayedVw() ?? modal.Manager()?.currentPlace?.GetVw());
             else ClearOverlay(modal);
         }
 
@@ -183,7 +210,7 @@ namespace AIROG_WorldExpansion
         {
             ClearOverlay(modal);
             if (vw == null || modal.mapLocationsParent == null) return;
-            GameplayManager manager = modal.manager;
+            GameplayManager manager = modal.Manager();
             if (manager == null) return;
 
             List<Place> places = vw.regions
@@ -359,8 +386,12 @@ namespace AIROG_WorldExpansion
             foreach (var kvp in WorldData.CurrentState.Factions)
             {
                 if (WorldData.CurrentState.EliminatedFactions.Contains(kvp.Key)) continue;
+                // ...except for the player's dominion (GrandStrategy): the game has no native
+                // faction for the player, so a native owner on one of its holdings is either the
+                // faction it was taken from or the game's own first-visit guess.
+                bool playerDominion = kvp.Value.Tag == "Player Dominion";
                 foreach (var uuid in kvp.Value.ClaimedPlaceUuids)
-                    if (!owner.ContainsKey(uuid)) owner[uuid] = kvp.Key;
+                    if (playerDominion || !owner.ContainsKey(uuid)) owner[uuid] = kvp.Key;
             }
             return owner;
         }

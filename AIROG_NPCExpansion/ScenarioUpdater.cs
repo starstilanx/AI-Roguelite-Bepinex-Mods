@@ -58,16 +58,22 @@ namespace AIROG_NPCExpansion
             }
         }
 
-        public static void LoadState(string saveDir)
+        /// <summary>Back to turn 0 with nothing scheduled: a new game, or the start of a load.</summary>
+        public static void ResetSession()
         {
-            // Fresh session: clear per-NPC scheduling and interval counters so stale
-            // UUIDs from a previously loaded save don't linger.
             _npcNextUpdateTurn.Clear();
             _autonomyCounter = 0;
             _barkCounter     = 0;
             _rumorCounter    = 0;
             _memoryCounter   = 0;
             _globalTurn      = 0;
+        }
+
+        public static void LoadState(string saveDir)
+        {
+            // Fresh session: clear per-NPC scheduling and interval counters so stale
+            // UUIDs from a previously loaded save don't linger.
+            ResetSession();
 
             try
             {
@@ -86,6 +92,23 @@ namespace AIROG_NPCExpansion
         // ─── Main Hook ─────────────────────────────────────────────────────────────
         public static void OnTurnHappened(int numTurns, long secs)
         {
+            // Switched off for this save: nothing advances, so switching back on resumes where it stopped.
+            if (!ModSwitch.Enabled) return;
+
+            // This is a subscriber of the game's own turn event. An exception here would abort the
+            // event for every subscriber after us and surface inside the game's turn handling.
+            try
+            {
+                Tick(numTurns);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[AIROG_NPCExpansion] Turn tick failed: {ex}");
+            }
+        }
+
+        private static void Tick(int numTurns)
+        {
             _globalTurn      += numTurns;
             _autonomyCounter += numTurns;
             _barkCounter     += numTurns;
@@ -100,9 +123,32 @@ namespace AIROG_NPCExpansion
             var manager = SS.I?.hackyManager;
             if (manager == null || manager.currentPlace == null) return;
 
+            // The list is the party plus everyone in the place, so it includes the player's own
+            // character while they control a companion, and other players' characters in co-op.
             var nearbyNpcs = manager.GetCharsForNpcConvoSelectorDropdown()
-                ?.Where(c => c != null && c.corpseState == GameCharacter.CorpseState.NONE)
+                ?.Where(c => c != null && c.corpseState == GameCharacter.CorpseState.NONE
+                             && !string.IsNullOrEmpty(c.uuid) && !c.IsMainPlayer() && !c.IsMpOwnedPc())
                 .ToList();
+
+            if (nearbyNpcs != null)
+            {
+                foreach (var npc in nearbyNpcs)
+                {
+                    var data = NPCData.Load(npc.uuid);
+                    if (data == null) continue;
+                    // Old saves: hand the native background field back if it still holds our activity text.
+                    NPCData.ReleaseNativeBackground(npc, data);
+                    // Everyone in this list is alive. A death flag on one of them is stale (revived,
+                    // or the lore bundle is from further ahead than the save that was just loaded).
+                    if (data.IsDeceased)
+                    {
+                        data.IsDeceased = false;
+                        data.DeathInfo = "";
+                        data.Epitaph = "";
+                        NPCData.Save(npc.uuid, data);
+                    }
+                }
+            }
 
             // ── Autonomy (every 3 turns) ──────────────────────────────────────────
             if (_autonomyCounter >= AUTONOMY_TURNS_PER_UPDATE)
@@ -198,8 +244,14 @@ namespace AIROG_NPCExpansion
             try
             {
                 Debug.Log($"[AIROG_NPCExpansion] ScenarioUpdater starting background update for {npcs.Count} NPCs.");
+                string saveAtStart = SS.I?.saveSubDirAsArg;
                 foreach (var npc in npcs)
                 {
+                    // Each NPC is one AI call, so this loop can outlive the game it started in. Past
+                    // that point these NPCs belong to another save and must not get entries in this one.
+                    if (!ModSwitch.Enabled || !string.Equals(saveAtStart, SS.I?.saveSubDirAsArg, StringComparison.Ordinal))
+                        break;
+
                     var data = NPCData.Load(npc.uuid);
                     if (data == null)
                     {

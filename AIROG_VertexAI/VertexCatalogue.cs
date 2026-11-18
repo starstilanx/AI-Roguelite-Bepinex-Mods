@@ -49,7 +49,10 @@ namespace AIROG_VertexAI
         /// </summary>
         public string safetyThreshold = "OFF";
 
-        /// <summary>Max simultaneous Vertex requests. 1 mirrors the game's own OpenAI-API path.</summary>
+        /// <summary>
+        /// Max simultaneous Vertex requests of each kind (text and image queue separately).
+        /// 1 mirrors the game's own OpenAI-API path.
+        /// </summary>
         public int maxConcurrentRequests = 1;
 
         /// <summary>Extra keys merged into generationConfig on every text request.</summary>

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using HarmonyLib;
 using UnityEngine;
@@ -14,55 +15,102 @@ namespace AIROG_Chronicle
         {
             [HarmonyPostfix]
             public static void Postfix(ref Task<string> __result, AIAsker.ChatGptPromptType chatGptPromptType)
-            {
-                // Skip internal calls (chapter title/recap generation)
-                if (ChronicleManager.IsInternalCall) return;
+                => Intercept(ref __result, chatGptPromptType);
+        }
 
-                if (chatGptPromptType == AIAsker.ChatGptPromptType.STORY_COMPLETER
-                 || chatGptPromptType == AIAsker.ChatGptPromptType.UNIFIED)
-                {
-                    __result = ExtractAndStrip(__result);
-                }
-            }
+        // GameplayManager.GenerateStory / GenerateUnifiedResponse send the story request through
+        // this method instead whenever there is an image to attach (a place with a panorama), so
+        // without this patch those turns are never seen and their hidden block reaches the screen.
+        [HarmonyPatch(typeof(AIAsker), nameof(AIAsker.GenerateTxtFromTxtAndImg))]
+        public static class Patch_GenerateTxtFromTxtAndImg
+        {
+            [HarmonyPostfix]
+            public static void Postfix(ref Task<string> __result, AIAsker.ChatGptPromptType chatGptPromptType)
+                => Intercept(ref __result, chatGptPromptType);
+        }
 
-            private static async Task<string> ExtractAndStrip(Task<string> original)
+        private static void Intercept(ref Task<string> result, AIAsker.ChatGptPromptType chatGptPromptType)
+        {
+            // Skip internal calls (chapter title/recap generation)
+            if (ChronicleManager.IsInternalCall || result == null) return;
+
+            if (chatGptPromptType == AIAsker.ChatGptPromptType.STORY_COMPLETER
+             || chatGptPromptType == AIAsker.ChatGptPromptType.UNIFIED)
             {
-                string text = await original;
-                try
-                {
-                    const string OPEN  = "<CHRONICLE_BEAT>";
-                    const string CLOSE = "</CHRONICLE_BEAT>";
-                    int start = text.IndexOf(OPEN,  StringComparison.OrdinalIgnoreCase);
-                    int end   = text.IndexOf(CLOSE, StringComparison.OrdinalIgnoreCase);
-                    if (start >= 0 && end > start)
-                    {
-                        // Full well-formed block: extract, process, strip.
-                        string block = text.Substring(start + OPEN.Length, end - start - OPEN.Length).Trim();
-                        // In UNIFIED mode newlines inside JSON strings are encoded as \n literal
-                        block = block.Replace("\\n", "\n").Replace("\\r", "");
-                        ChronicleManager.ProcessBeatBlock(block);
-                        string after = text.Substring(end + CLOSE.Length).TrimStart('\n', '\r', ' ');
-                        text = text.Substring(0, start) + after;
-                    }
-                    else if (start >= 0)
-                    {
-                        // Partial/unclosed block — response got cut off before </CHRONICLE_BEAT>
-                        // (token limit, truncation, etc). Strip from the tag to end-of-line rather
-                        // than let the raw tag leak onto the player's screen.
-                        Debug.LogWarning("[Chronicle] Found <CHRONICLE_BEAT> without closing tag — stripping.");
-                        int lineEnd = text.IndexOf('\n', start);
-                        text = text.Substring(0, start) +
-                               (lineEnd > start ? text.Substring(lineEnd + 1) : "");
-                        text = text.TrimStart('\n', '\r', ' ');
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogError($"[Chronicle] Beat extraction error: {ex.Message}");
-                }
-                return text;
+                // The state is captured now, when the request starts: the reply can arrive after
+                // the player has moved to another save.
+                result = ExtractAndStrip(result, chatGptPromptType == AIAsker.ChatGptPromptType.UNIFIED,
+                    ChronicleManager.State);
             }
         }
+
+        private static async Task<string> ExtractAndStrip(Task<string> original, bool unified, ChronicleState stateAtRequest)
+        {
+            string text = await original;
+            if (text == null) return null;
+            try
+            {
+                var blocks = new List<string>();
+                string stripped = ChronicleText.StripBeatBlocks(text, unified, blocks, out string partial);
+
+                // Switched off for this save, or a reply for a save that is no longer loaded: the
+                // block is still removed so it can never show on screen, but nothing is recorded.
+                if (ModSwitch.Enabled && ReferenceEquals(ChronicleManager.State, stateAtRequest))
+                {
+                    bool recorded = false;
+                    foreach (string block in blocks)
+                        recorded |= ChronicleManager.ProcessBeatBlock(block);
+
+                    if (partial != null)
+                    {
+                        // Response got cut off before </CHRONICLE_BEAT> (token limit). The beat is
+                        // still good if the cut came after the summary line.
+                        bool salvaged = ChronicleManager.ProcessBeatBlock(partial, requireCompleteSummary: true);
+                        recorded |= salvaged;
+                        Debug.LogWarning("[Chronicle] Found <CHRONICLE_BEAT> without closing tag — stripped" +
+                                         (salvaged ? ", beat recovered from the partial block." : "."));
+                    }
+
+                    ChronicleManager.OnStoryTurn(ChronicleText.WithoutModBlocks(StoryTextOf(stripped, unified)), recorded);
+                }
+                text = stripped;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Chronicle] Beat extraction error: {ex.Message}");
+            }
+            return text;
+        }
+
+        /// <summary>The narration inside a response: the text itself, or the "story" field of a unified JSON reply.</summary>
+        private static string StoryTextOf(string text, bool unified)
+        {
+            if (!unified) return text;
+            try
+            {
+                int open = text.IndexOf('{'), close = text.LastIndexOf('}');
+                if (open >= 0 && close > open)
+                {
+                    var json = Newtonsoft.Json.Linq.JObject.Parse(text.Substring(open, close - open + 1));
+                    return json["story"]?.Type == Newtonsoft.Json.Linq.JTokenType.String ? (string)json["story"] : null;
+                }
+            }
+            catch
+            {
+                // The game repairs some malformed JSON this plain parse rejects; read the field directly.
+            }
+            try
+            {
+                var m = StoryFieldRx.Match(text);
+                if (m.Success) return Newtonsoft.Json.JsonConvert.DeserializeObject<string>("\"" + m.Groups[1].Value + "\"");
+            }
+            catch { }
+            return null;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex StoryFieldRx =
+            new System.Text.RegularExpressions.Regex("\"story\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
 
         // ---- Save / load lifecycle ----
 
@@ -104,16 +152,24 @@ namespace AIROG_Chronicle
             [HarmonyPostfix]
             public static void Postfix(PlayerCharacter __instance)
             {
-                int newLevel = __instance.GetPcGameCharacter()?.level ?? 0;
-                if (newLevel > _prevLevel)
+                try
                 {
-                    ChronicleManager.RecordBeat(new ChronicleBeat
+                    int newLevel = __instance.GetPcGameCharacter()?.level ?? 0;
+                    if (newLevel > _prevLevel)
                     {
-                        Turn      = ChronicleManager.State?.GlobalTurn ?? 0,
-                        Type      = BeatType.LevelUp,
-                        Summary   = $"Reached level {newLevel}.",
-                        IsMilestone = true
-                    });
+                        ChronicleManager.RecordBeat(new ChronicleBeat
+                        {
+                            Turn      = ChronicleManager.State?.GlobalTurn ?? 0,
+                            Type      = BeatType.LevelUp,
+                            Summary   = $"Reached level {newLevel}.",
+                            IsMilestone = true
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Never let a chronicle entry break the XP grant it is observing.
+                    Debug.LogError($"[Chronicle] Level-up beat error: {ex.Message}");
                 }
             }
         }

@@ -12,7 +12,7 @@ namespace AIROG_GrandStrategy
             if (string.IsNullOrEmpty(arg) && RequiresTarget(type))
                 _lastResult = "No target faction available.";
             else
-                _lastResult = OrderSystem.Issue(modal.manager, type, arg, placeUuid);
+                _lastResult = OrderSystem.Issue(modal.Manager(), type, arg, placeUuid);
 
             // Map-click picks are single-use regardless of outcome — a failed order just
             // means the player re-picks (or lets ANNEX/CAMPAIGN fall back to automatic).

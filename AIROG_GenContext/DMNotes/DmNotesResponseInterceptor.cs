@@ -11,58 +11,73 @@ namespace AIROG_GenContext.DMNotes
         {
             [HarmonyPostfix]
             public static void Postfix(ref Task<string> __result, AIAsker.ChatGptPromptType chatGptPromptType)
-            {
-                if ((chatGptPromptType == AIAsker.ChatGptPromptType.STORY_COMPLETER
-                     || chatGptPromptType == AIAsker.ChatGptPromptType.UNIFIED)
-                    && ContextManager.GetGlobalSetting("DMNotes"))
-                {
-                    __result = ExtractAndStrip(__result);
-                }
-            }
+                => Intercept(ref __result, chatGptPromptType);
+        }
 
-            private static async Task<string> ExtractAndStrip(Task<string> original)
+        // A story turn taken in a place that has a panorama sends the panorama image along, and the
+        // game then generates through this method instead of GenerateTxtNoTryStrStyle. Without this
+        // patch those turns kept their <DM_NOTES> block (shown to the player) and were never read.
+        [HarmonyPatch(typeof(AIAsker), nameof(AIAsker.GenerateTxtFromTxtAndImg))]
+        public static class Patch_GenerateTxtFromTxtAndImg
+        {
+            [HarmonyPostfix]
+            public static void Postfix(ref Task<string> __result, AIAsker.ChatGptPromptType chatGptPromptType)
+                => Intercept(ref __result, chatGptPromptType);
+        }
+
+        private static void Intercept(ref Task<string> result, AIAsker.ChatGptPromptType chatGptPromptType)
+        {
+            if (result == null) return;
+            if (chatGptPromptType != AIAsker.ChatGptPromptType.STORY_COMPLETER
+                && chatGptPromptType != AIAsker.ChatGptPromptType.UNIFIED) return;
+            if (!DmNotesManager.IsActive) return;
+
+            result = ExtractAndStrip(result, chatGptPromptType == AIAsker.ChatGptPromptType.UNIFIED,
+                DmNotesManager.CurrentState);
+        }
+
+        private static async Task<string> ExtractAndStrip(Task<string> original, bool jsonResponse, DmNotesState askedFor)
+        {
+            string text = await original;
+            if (string.IsNullOrEmpty(text)) return text;
+            try
             {
-                string text = await original;
-                try
+                string notes;
+                string stripped = DmNotesText.Strip(text, jsonResponse, out notes);
+                if (notes != null)
                 {
-                    int start = text.IndexOf("<DM_NOTES>", StringComparison.OrdinalIgnoreCase);
-                    int end   = text.IndexOf("</DM_NOTES>", StringComparison.OrdinalIgnoreCase);
-                    if (start >= 0 && end > start)
-                    {
-                        // Full well-formed block: extract, process, strip.
-                        string block = text.Substring(start + 10, end - start - 10).Trim();
-                        // In UNIFIED mode the response is raw JSON; newlines inside string values
-                        // are encoded as the two-char sequence \n rather than real newlines.
-                        // Unescape so ParseBlock can split on real newline characters.
-                        block = block.Replace("\\n", "\n").Replace("\\r", "");
-                        DmNotesManager.ProcessNotes(block);
-                        string after = text.Substring(end + 11).TrimStart('\n', '\r', ' ');
-                        text = text.Substring(0, start) + after;
-                    }
-                    else if (start >= 0)
-                    {
-                        // Partial/unclosed block — AI returned bare <DM_NOTES> with no closing tag.
-                        // Strip from the tag to end-of-line (or end-of-string) to prevent the
-                        // JSON parser from choking on the raw XML-like tag.
-                        UnityEngine.Debug.LogWarning("[GenContext] DmNotes: found <DM_NOTES> without closing tag — stripping.");
-                        int lineEnd = text.IndexOf('\n', start);
-                        text = text.Substring(0, start) +
-                               (lineEnd > start ? text.Substring(lineEnd + 1) : "");
-                        text = text.TrimStart('\n', '\r', ' ');
-                    }
+                    text = stripped;
+                    // A reply that arrives after the player has moved to another save (the state
+                    // object is replaced on load and on new game) is still cleaned up, but its
+                    // notes belong to the save that asked for it.
+                    if (notes.Trim().Length > 0 && ReferenceEquals(askedFor, DmNotesManager.CurrentState))
+                        DmNotesManager.ProcessNotes(notes);
                 }
-                catch (Exception ex)
-                {
-                    UnityEngine.Debug.LogError($"[GenContext] DmNotes extraction error: {ex.Message}");
-                }
-                return text;
             }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[GenContext] DmNotes extraction error: {ex.Message}");
+            }
+            return text;
         }
 
         [HarmonyPatch(typeof(SaveIO), "ReadSaveFile")]
         public static class Patch_ReadSaveFile
         {
-            public static void Postfix(string saveSubDir) => DmNotesManager.LoadState(saveSubDir);
+            public static void Postfix(string saveSubDir)
+            {
+                try
+                {
+                    // The main menu also reads save files it is only listing (to rebuild a missing
+                    // summary); only the save being loaded is ours to follow.
+                    if (SS.I != null && saveSubDir == SS.I.saveSubDirAsArg)
+                        DmNotesManager.LoadState(saveSubDir);
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError($"[GenContext] DmNotes load hook error: {ex.Message}");
+                }
+            }
         }
 
         [HarmonyPatch(typeof(GameplayManager), nameof(GameplayManager.doNewGame))]
@@ -74,7 +89,16 @@ namespace AIROG_GenContext.DMNotes
         [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]
         public static class Patch_WriteSaveFile
         {
-            public static void Postfix() => DmNotesManager.SaveState();
+            public static void Postfix()
+            {
+                DmNotesManager.SaveState();
+                // A new game has no save folder until its first save; write any mod switches
+                // the player flipped before then.
+                ModToggles.Flush();
+                // Normally raised when the load finishes (Patch_AfterLoadOrNewGame). This is the
+                // fallback should that hook ever stop binding: a save only happens after a load.
+                ModToggles.RaiseReloadedIfPending();
+            }
         }
     }
 }

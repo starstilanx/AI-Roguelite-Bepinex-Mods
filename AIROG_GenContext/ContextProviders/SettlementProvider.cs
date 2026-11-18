@@ -50,7 +50,7 @@ namespace AIROG_GenContext.ContextProviders
 
         public string GetContext(string prompt, int maxTokens)
         {
-            var manager = UnityEngine.Object.FindObjectOfType<GameplayManager>();
+            var manager = SS.I?.hackyManager;
             if (manager == null || manager.currentPlace == null) return "";
 
             RefreshCacheIfNeeded();
@@ -110,20 +110,27 @@ namespace AIROG_GenContext.ContextProviders
             return context;
         }
 
+        private string _cachePath; // file _cache was read from
+
         private void RefreshCacheIfNeeded()
         {
-            if (Time.time - _lastLoadTime > CACHE_REFRESH_RATE)
-            {
-                LoadData();
-                _lastLoadTime = Time.time;
-            }
+            // The cache is per save file: after loading another save (or starting a new game,
+            // whose folder has no file yet) the previous save's settlement must not be served.
+            string path = null;
+            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                path = Path.Combine(SS.I.saveTopLvlDir ?? "", SS.I.saveSubDirAsArg, "settlement_data.json");
+
+            if (path == _cachePath && Time.time - _lastLoadTime <= CACHE_REFRESH_RATE) return;
+
+            if (path != _cachePath) _cache = null;
+            _cachePath = path;
+            _lastLoadTime = Time.time;
+            LoadData(path);
         }
 
-        private void LoadData()
+        private void LoadData(string path)
         {
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
-            string path = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg, "settlement_data.json");
-            if (!File.Exists(path)) return;
+            if (path == null || !File.Exists(path)) { _cache = null; return; }
 
             try
             {

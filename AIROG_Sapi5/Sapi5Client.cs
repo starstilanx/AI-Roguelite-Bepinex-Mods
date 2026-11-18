@@ -36,44 +36,7 @@ namespace AIROG_Sapi5
                     string uuid = Guid.NewGuid().ToString();
                     string wavPath = Path.Combine(SS.I.tmpDir, uuid + ".wav");
 
-                    using (SpeechSynthesizer synth = new SpeechSynthesizer())
-                    {
-                        bool voiceFound = false;
-                        foreach (var v in synth.GetInstalledVoices())
-                        {
-                            if (v.VoiceInfo.Name.Equals(voiceName, StringComparison.OrdinalIgnoreCase))
-                            {
-                                synth.SelectVoice(v.VoiceInfo.Name);
-                                voiceFound = true;
-                                Debug.Log($"[SAPI5] Voice matched exactly: {v.VoiceInfo.Name}");
-                                break;
-                            }
-                        }
-
-                        if (!voiceFound && !string.IsNullOrEmpty(voiceName))
-                        {
-                            foreach (var v in synth.GetInstalledVoices())
-                            {
-                                if (v.VoiceInfo.Name.IndexOf(voiceName, StringComparison.OrdinalIgnoreCase) >= 0)
-                                {
-                                    synth.SelectVoice(v.VoiceInfo.Name);
-                                    voiceFound = true;
-                                    Debug.Log($"[SAPI5] Voice matched partially: {v.VoiceInfo.Name}");
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!voiceFound)
-                        {
-                            Debug.LogWarning($"[SAPI5] Voice '{voiceName}' not found, using default voice");
-                        }
-
-                        synth.SetOutputToWaveFile(wavPath);
-                        synth.Rate = Sapi5Plugin.Rate.Value;
-                        synth.Volume = Sapi5Plugin.Volume.Value;
-                        synth.Speak(text);
-                    }
+                    Synthesize(text, voiceName, wavPath);
 
                     Debug.Log($"[SAPI5] Generated TTS file: {wavPath}");
                     tcs.SetResult(uuid);
@@ -90,6 +53,53 @@ namespace AIROG_Sapi5
             thread.Start();
 
             return tcs.Task;
+        }
+
+        // Everything that touches System.Speech lives here, behind a call made from inside the
+        // try above. Unity's Mono does not ship System.Speech.dll; when it cannot be loaded the
+        // failure surfaces where this method is first called. Inlined into the thread lambda it
+        // surfaced before the lambda's own try, killing the thread with the task never completed.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void Synthesize(string text, string voiceName, string wavPath)
+        {
+            using (SpeechSynthesizer synth = new SpeechSynthesizer())
+            {
+                bool voiceFound = false;
+                foreach (var v in synth.GetInstalledVoices())
+                {
+                    if (v.VoiceInfo.Name.Equals(voiceName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        synth.SelectVoice(v.VoiceInfo.Name);
+                        voiceFound = true;
+                        Debug.Log($"[SAPI5] Voice matched exactly: {v.VoiceInfo.Name}");
+                        break;
+                    }
+                }
+
+                if (!voiceFound && !string.IsNullOrEmpty(voiceName))
+                {
+                    foreach (var v in synth.GetInstalledVoices())
+                    {
+                        if (v.VoiceInfo.Name.IndexOf(voiceName, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            synth.SelectVoice(v.VoiceInfo.Name);
+                            voiceFound = true;
+                            Debug.Log($"[SAPI5] Voice matched partially: {v.VoiceInfo.Name}");
+                            break;
+                        }
+                    }
+                }
+
+                if (!voiceFound)
+                {
+                    Debug.LogWarning($"[SAPI5] Voice '{voiceName}' not found, using default voice");
+                }
+
+                synth.SetOutputToWaveFile(wavPath);
+                synth.Rate = Sapi5Plugin.Rate.Value;
+                synth.Volume = Sapi5Plugin.Volume.Value;
+                synth.Speak(text);
+            }
         }
 
         public async Task<string> ConcatenateAudioFiles(List<string> uuids)

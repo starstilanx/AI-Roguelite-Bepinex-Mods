@@ -19,7 +19,7 @@ namespace AIROG_Settlement
     // SettlementHarmonyPatches.cs / SettlementMainUIPatch.cs / SettlementMapButtonsPatch.cs
     // (the previously-bundled standalone Harmony patch classes). SettlementResearch.cs holds
     // the (non-partial) research catalog, mirroring BuildingCatalog in SettlementData.cs.
-    [BepInPlugin("com.airog.settlement", "Settlement Mod", "1.2.0")]
+    [BepInPlugin("com.airog.settlement", "Settlement Mod", "1.2.1")]
     public partial class SettlementPlugin : BaseUnityPlugin
     {
         public static SettlementPlugin Instance;
@@ -56,6 +56,10 @@ namespace AIROG_Settlement
 
         private bool _needsUiUpdate = false;
 
+        // Set from the mod-switch callbacks, which run inside whichever call raised them; the
+        // UI is re-synced from Update() instead, on the main thread and outside that call.
+        private volatile bool _switchUiDirty;
+
         private void Awake()
         {
             try
@@ -69,6 +73,8 @@ namespace AIROG_Settlement
                 var harmony = new Harmony("com.airog.settlement");
                 harmony.PatchAll();
 
+                ModSwitch.Hook(() => _switchUiDirty = true);
+
                 Log.LogInfo("Settlement Mod loaded successfully!");
             }
             catch (Exception ex)
@@ -80,21 +86,59 @@ namespace AIROG_Settlement
 
         private void Update()
         {
-            if (_needsUiUpdate)
+            try
             {
-                _needsUiUpdate = false;
-                UpdateOverviewUI();
-            }
+                if (_switchUiDirty)
+                {
+                    _switchUiDirty = false;
+                    ApplyModSwitch();
+                }
 
-            // A queued event only surfaces once the player is actually standing at the
-            // settlement — not the moment it rolls, wherever the player happens to be in the
-            // story. Polling here catches both "event rolled while already there" (shows next
-            // frame) and "player travels to a settlement with an event already waiting".
-            if (PendingEvent != null && EventPopupObj != null && !EventPopupObj.activeSelf && IsPlayerAtSettlement())
-                ShowEventPopup(PendingEvent);
+                if (_needsUiUpdate)
+                {
+                    _needsUiUpdate = false;
+                    UpdateOverviewUI();
+                }
+
+                // A queued event only surfaces once the player is actually standing at the
+                // settlement — not the moment it rolls, wherever the player happens to be in the
+                // story — and is free to answer it (see CanShowEventPopupNow). Polling here
+                // catches both "event rolled while already there" and "player travels to a
+                // settlement with an event already waiting".
+                if (PendingEvent != null && EventPopupObj != null && !EventPopupObj.activeSelf && CanShowEventPopupNow())
+                    ShowEventPopup(PendingEvent);
+            }
+            catch (Exception ex)
+            {
+                // Per-frame: log once per distinct failure rather than every frame
+                if (_lastUpdateError != ex.Message)
+                {
+                    _lastUpdateError = ex.Message;
+                    Log.LogWarning($"Settlement update failed: {ex.Message}");
+                }
+            }
         }
 
+        private string _lastUpdateError;
+
         public void ScheduleUiUpdate() { _needsUiUpdate = true; }
+
+        /// <summary>
+        /// Syncs the HUD button, the settlement panel and the event popup with the per-save mod
+        /// switch. UI only - it also runs while a save is still loading (HUD injection), before
+        /// that save's settlement has been read.
+        /// </summary>
+        public void ApplyModSwitch()
+        {
+            bool enabled = ModSwitch.Enabled;
+            if (SettlementButtonObj != null && SettlementButtonObj.activeSelf != enabled)
+                SettlementButtonObj.SetActive(enabled);
+            if (enabled) return;
+
+            IsSettlementOpen = false;
+            if (SettlementModalObj != null) SettlementModalObj.SetActive(false);
+            HideEventPopup();
+        }
 
         private void LoadAssets()
         {

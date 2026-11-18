@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 namespace AIROG_GenContext.DMNotes
@@ -17,21 +19,72 @@ namespace AIROG_GenContext.DMNotes
         private static TextMeshProUGUI _pacingLabel;
         private static TextMeshProUGUI _engagementLabel;
 
-        // Scrollable list containers
+        // List containers (rebuilt on refresh)
         private static Transform _plotListContent;
         private static Transform _prefListContent;
+        private static Transform _plannedListContent;
+        private static Transform _introducedListContent;
+
+        // Player steering. The input fields are built once and survive refreshes, so a refresh
+        // triggered by the AI's notes arriving cannot eat what the player is typing.
+        private static TMP_InputField _directionInput;
+        private static TextMeshProUGUI _plannedHeader;
+        private static GameObject _introducedHeader;
+        private static TMP_InputField _threadInput;
+        private static TMP_InputField _notBeforeInput;
+        private static TMP_InputField _byInput;
+        private static TextMeshProUGUI _formHint;
+        private static TextMeshProUGUI _submitLabel;
+        private static GameObject _cancelEditBtn;
+        private static string _editingId; // null = the form adds a new thread
+
+        private static readonly Color HintColor = new Color(0.6f, 0.6f, 0.65f);
+        private const string FormHintDefault = "Windows are optional, in turns from when the thread is added.";
 
         [HarmonyPatch(typeof(MainLayouts), "InitCommonAnchs")]
         public static class Patch_MainLayouts
         {
             [HarmonyPostfix]
-            public static void Postfix(MainLayouts __instance) => Create(__instance);
+            public static void Postfix(MainLayouts __instance)
+            {
+                // InitCommonAnchs runs inside the game's startup; a failure here must not stop it.
+                try
+                {
+                    DmNotesManager.DetachIfSaveChanged();
+                    // The game clears TurnHappenedEvent when it exits to the main menu, so the
+                    // subscription has to be renewed for every game scene.
+                    GameplayManager.TurnHappenedEvent -= DmNotesManager.OnTurnHappened;
+                    GameplayManager.TurnHappenedEvent += DmNotesManager.OnTurnHappened;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[GenContext] DM Notes scene setup failed: {ex}");
+                }
+
+                try
+                {
+                    Create(__instance);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[GenContext] DM Notes panel could not be built: {ex}");
+                    // Create hides the panel as its last step; one that failed half-way would
+                    // be left showing over the game with no way to close it.
+                    if (_panelObj != null) UnityEngine.Object.Destroy(_panelObj);
+                    _panelObj = null;
+                }
+            }
         }
 
         public static void Create(MainLayouts layout)
         {
             if (layout == null || layout.mainHolder == null) return;
             if (layout.mainHolder.Find("DmNotesPanel") != null) return;
+
+            // A new scene's panel starts closed. Left over as "open" from the previous scene, this
+            // flag made the first click on the DM button do nothing.
+            _isOpen = false;
+            _editingId = null;
 
             // ---- Root panel ----
             _panelObj = new GameObject("DmNotesPanel", typeof(RectTransform), typeof(Image));
@@ -49,7 +102,7 @@ namespace AIROG_GenContext.DMNotes
             // ---- Header ----
             GameObject header = MakeRect("Header", _panelObj.transform);
             var headerRect = header.GetComponent<RectTransform>();
-            headerRect.anchorMin = new Vector2(0f, 0.93f);
+            headerRect.anchorMin = new Vector2(0f, 0.95f);
             headerRect.anchorMax = new Vector2(1f, 1f);
             headerRect.offsetMin = headerRect.offsetMax = Vector2.zero;
             header.AddComponent<Image>().color = new Color(0.08f, 0.08f, 0.18f, 1f);
@@ -73,61 +126,60 @@ namespace AIROG_GenContext.DMNotes
                 new Color(0.9f, 0.3f, 0.3f), TextAlignmentOptions.Center);
             StretchFull(xTxt.GetComponent<RectTransform>());
 
-            // ---- Analysis section (top 30%) ----
-            GameObject analysisSection = MakeRect("AnalysisSection", _panelObj.transform);
-            var aRect = analysisSection.GetComponent<RectTransform>();
-            aRect.anchorMin = new Vector2(0f, 0.63f);
-            aRect.anchorMax = new Vector2(1f, 0.93f);
-            aRect.offsetMin = aRect.offsetMax = Vector2.zero;
+            // ---- Body: one scrolling column, so no section can overflow into the next ----
+            Transform body = MakeScrollList("Body", _panelObj.transform,
+                new Vector2(0f, 0f), new Vector2(1f, 0.95f));
 
-            var aHeader = MakeText("AHeader", analysisSection.transform, "▸ Analysis", 13,
-                FontStyles.Bold, new Color(0.7f, 0.9f, 0.7f), TextAlignmentOptions.Left);
-            var ahRect = aHeader.GetComponent<RectTransform>();
-            ahRect.anchorMin = new Vector2(0.03f, 0.82f);
-            ahRect.anchorMax = new Vector2(1f, 1f);
-            ahRect.offsetMin = ahRect.offsetMax = Vector2.zero;
+            // ---- Direction ----
+            MakeLine("DHeader", body, "▸ Direction", 13, FontStyles.Bold, new Color(1f, 0.8f, 0.8f));
+            MakeLine("DHint", body, "Where should the story head? The director steers there over several turns without saying so. Empty = no steering.",
+                10, FontStyles.Italic, HintColor);
+            _directionInput = MakeInput("DirectionInput", body, "e.g. Draw me toward the capital and its court intrigue",
+                52f, DmNotesManager.MaxDirectionChars, multiline: true);
+            _directionInput.onValueChanged.AddListener(text => DmNotesManager.SetDirection(text, save: false));
+            _directionInput.onEndEdit.AddListener(text => DmNotesManager.SetDirection(text, save: true));
 
-            _stateLabel = MakeText("StateLabel", analysisSection.transform, "Engagement: —", 12,
-                FontStyles.Normal, Color.white, TextAlignmentOptions.TopLeft).GetComponent<TextMeshProUGUI>();
-            SetAnchors(_stateLabel.GetComponent<RectTransform>(), 0.03f, 0.57f, 1f, 0.82f);
-            _stateLabel.enableWordWrapping = true;
+            // ---- Planned threads ----
+            _plannedHeader = MakeLine("TPHeader", body, "▸ Planned Threads", 13, FontStyles.Bold, new Color(0.8f, 1f, 0.85f));
+            MakeLine("TPHint", body, "Ideas for later. The AI brings each one in when the moment fits, then it moves to Introduced.",
+                10, FontStyles.Italic, HintColor);
+            _plannedListContent = MakeVBox("PlannedList", body, 3f).transform;
 
-            _pacingLabel = MakeText("PacingLabel", analysisSection.transform, "Pacing: —", 12,
-                FontStyles.Normal, Color.white, TextAlignmentOptions.TopLeft).GetComponent<TextMeshProUGUI>();
-            SetAnchors(_pacingLabel.GetComponent<RectTransform>(), 0.03f, 0.32f, 1f, 0.57f);
+            GameObject form = MakeVBox("ThreadForm", body, 2f);
+            _threadInput = MakeInput("ThreadInput", form.transform, "A plot thread to introduce later...",
+                30f, DmNotesManager.MaxThreadChars, multiline: true);
+            _threadInput.onSubmit.AddListener(_ => SubmitThread());
 
-            _engagementLabel = MakeText("EngageLabel", analysisSection.transform, "", 11,
-                FontStyles.Normal, new Color(0.75f, 0.75f, 0.75f), TextAlignmentOptions.TopLeft).GetComponent<TextMeshProUGUI>();
-            SetAnchors(_engagementLabel.GetComponent<RectTransform>(), 0.03f, 0f, 1f, 0.32f);
-            _engagementLabel.enableWordWrapping = true;
+            GameObject windowRow = MakeHRow("WindowRow", form.transform);
+            MakeLabel("L1", windowRow.transform, "Not before");
+            _notBeforeInput = MakeTurnsInput("NotBeforeInput", windowRow.transform);
+            MakeLabel("L2", windowRow.transform, "by");
+            _byInput = MakeTurnsInput("ByInput", windowRow.transform);
+            MakeLabel("L3", windowRow.transform, "turns");
 
-            // ---- Plot Threads section (middle 33%) ----
-            GameObject plotSection = MakeRect("PlotSection", _panelObj.transform);
-            var pRect = plotSection.GetComponent<RectTransform>();
-            pRect.anchorMin = new Vector2(0f, 0.31f);
-            pRect.anchorMax = new Vector2(1f, 0.63f);
-            pRect.offsetMin = pRect.offsetMax = Vector2.zero;
+            GameObject submitRow = MakeHRow("SubmitRow", form.transform);
+            _formHint = MakeFlexText("FormHint", submitRow.transform, FormHintDefault, 10, FontStyles.Italic, HintColor);
+            _cancelEditBtn = MakeButton("CancelEdit", submitRow.transform, "Cancel", new Color(0.3f, 0.3f, 0.35f, 0.9f), 40f, ClearForm).gameObject;
+            _cancelEditBtn.SetActive(false);
+            Button submitBtn = MakeButton("Submit", submitRow.transform, "Add", new Color(0.15f, 0.4f, 0.2f, 0.9f), 34f, SubmitThread);
+            _submitLabel = submitBtn.GetComponentInChildren<TextMeshProUGUI>();
 
-            var pHeader = MakeText("PHeader", plotSection.transform, "▸ Plot Threads", 13,
-                FontStyles.Bold, new Color(0.7f, 0.85f, 1f), TextAlignmentOptions.Left);
-            SetAnchors(pHeader.GetComponent<RectTransform>(), 0.03f, 0.88f, 1f, 1f);
+            _introducedHeader = MakeLine("TIHeader", body, "Introduced", 11, FontStyles.Bold, new Color(0.65f, 0.75f, 0.68f)).gameObject;
+            _introducedListContent = MakeVBox("IntroducedList", body, 2f).transform;
 
-            _plotListContent = MakeScrollList("PlotScroll", plotSection.transform,
-                new Vector2(0f, 0f), new Vector2(1f, 0.88f));
+            // ---- Analysis ----
+            MakeLine("AHeader", body, "▸ Analysis", 13, FontStyles.Bold, new Color(0.7f, 0.9f, 0.7f));
+            _stateLabel = MakeLine("StateLabel", body, "Engagement: —", 12, FontStyles.Normal, Color.white);
+            _pacingLabel = MakeLine("PacingLabel", body, "Pacing: —", 12, FontStyles.Normal, Color.white);
+            _engagementLabel = MakeLine("EngageLabel", body, "", 11, FontStyles.Normal, new Color(0.75f, 0.75f, 0.75f));
 
-            // ---- Preferences section (bottom 31%) ----
-            GameObject prefSection = MakeRect("PrefSection", _panelObj.transform);
-            var prRect = prefSection.GetComponent<RectTransform>();
-            prRect.anchorMin = new Vector2(0f, 0f);
-            prRect.anchorMax = new Vector2(1f, 0.31f);
-            prRect.offsetMin = prRect.offsetMax = Vector2.zero;
+            // ---- Plot threads the AI is tracking ----
+            MakeLine("PHeader", body, "▸ Plot Threads", 13, FontStyles.Bold, new Color(0.7f, 0.85f, 1f));
+            _plotListContent = MakeVBox("PlotList", body, 2f).transform;
 
-            var prHeader = MakeText("PrHeader", prefSection.transform, "▸ Player Profile", 13,
-                FontStyles.Bold, new Color(1f, 0.85f, 0.6f), TextAlignmentOptions.Left);
-            SetAnchors(prHeader.GetComponent<RectTransform>(), 0.03f, 0.88f, 1f, 1f);
-
-            _prefListContent = MakeScrollList("PrefScroll", prefSection.transform,
-                new Vector2(0f, 0f), new Vector2(1f, 0.88f));
+            // ---- Preferences ----
+            MakeLine("PrHeader", body, "▸ Player Profile", 13, FontStyles.Bold, new Color(1f, 0.85f, 0.6f));
+            _prefListContent = MakeVBox("PrefList", body, 2f).transform;
 
             // ---- Behaviour component for Update loop ----
             _panelObj.AddComponent<DmNotesPanelBehaviour>();
@@ -150,8 +202,8 @@ namespace AIROG_GenContext.DMNotes
             var vlg = content.GetComponent<VerticalLayoutGroup>();
             vlg.childControlHeight = true;
             vlg.childForceExpandHeight = false;
-            vlg.spacing = 2f;
-            vlg.padding = new RectOffset(4, 4, 2, 2);
+            vlg.spacing = 3f;
+            vlg.padding = new RectOffset(5, 5, 3, 6);
             var csf = content.GetComponent<ContentSizeFitter>();
             csf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             var cRect = content.GetComponent<RectTransform>();
@@ -174,9 +226,32 @@ namespace AIROG_GenContext.DMNotes
         public static void Toggle()
         {
             if (_panelObj == null) return;
-            _isOpen = !_isOpen;
-            _panelObj.SetActive(_isOpen);
-            if (_isOpen) RefreshUI();
+            if (!_isOpen && !DmNotesManager.IsActive) return;
+            SetOpen(!_isOpen);
+        }
+
+        /// <summary>Closes the panel if it is open (DM Notes was switched off).</summary>
+        public static void Close()
+        {
+            if (_panelObj != null && _isOpen) SetOpen(false);
+        }
+
+        private static void SetOpen(bool open)
+        {
+            _isOpen = open;
+            if (!open) ReleaseFocus();
+            _panelObj.SetActive(open);
+            if (open) RefreshUI();
+        }
+
+        // The game treats "an input field is the selected object" as "the player is typing" and
+        // ignores its hotkeys. A field hidden while still selected would leave them ignored.
+        private static void ReleaseFocus()
+        {
+            EventSystem es = EventSystem.current;
+            GameObject selected = es != null ? es.currentSelectedGameObject : null;
+            if (selected != null && selected.transform.IsChildOf(_panelObj.transform))
+                es.SetSelectedGameObject(null);
         }
 
         public static void RefreshUI()
@@ -184,13 +259,47 @@ namespace AIROG_GenContext.DMNotes
             if (_panelObj == null) return;
 
             var state = DmNotesManager.CurrentState;
+            int turn = state.TurnCounter;
 
+            if (_directionInput != null && !_directionInput.isFocused && _directionInput.text != state.Direction)
+                _directionInput.SetTextWithoutNotify(state.Direction);
+
+            // ---- Planned threads ----
+            if (_plannedHeader != null)
+                _plannedHeader.text = $"▸ Planned Threads  <size=10><color=#9a9aa5>turn {turn}</color></size>";
+
+            if (_editingId != null && !state.PlannedThreads.Exists(t => t.Id == _editingId))
+                SetEditing(null); // retired or deleted while being edited; what was typed stays in the form
+
+            if (_plannedListContent != null)
+            {
+                ClearChildren(_plannedListContent);
+                if (state.PlannedThreads.Count == 0)
+                    MakeText("Empty", _plannedListContent, "(none planned)", 11, FontStyles.Italic,
+                        new Color(0.5f, 0.5f, 0.5f), TextAlignmentOptions.Left);
+                List<DmPlannedThread> offered = DmThreadLogic.SelectForPrompt(state, DmNotesManager.MaxThreadsPerPrompt);
+                foreach (var thread in state.PlannedThreads)
+                    AddPlannedRow(thread, turn, offered.Contains(thread));
+            }
+
+            if (_introducedHeader != null) _introducedHeader.SetActive(state.IntroducedThreads.Count > 0);
+            if (_introducedListContent != null)
+            {
+                ClearChildren(_introducedListContent);
+                for (int i = state.IntroducedThreads.Count - 1; i >= 0; i--)
+                    AddIntroducedRow(state.IntroducedThreads[i]);
+            }
+
+            // ---- What the AI wrote ----
             if (_stateLabel != null)
                 _stateLabel.text = $"Engagement: <b>{state.PlayerState}</b>";
             if (_pacingLabel != null)
                 _pacingLabel.text = $"Pacing: <b>{state.PacingDecision}</b>";
             if (_engagementLabel != null)
+            {
                 _engagementLabel.text = state.EngagementAnalysis;
+                _engagementLabel.gameObject.SetActive(!string.IsNullOrEmpty(state.EngagementAnalysis));
+            }
 
             RefreshList(_plotListContent, state.PlotThreads, isPlot: true);
             RefreshList(_prefListContent, state.PreferenceNotes, isPlot: false);
@@ -200,8 +309,7 @@ namespace AIROG_GenContext.DMNotes
         {
             if (content == null) return;
 
-            for (int i = content.childCount - 1; i >= 0; i--)
-                UnityEngine.Object.Destroy(content.GetChild(i).gameObject);
+            ClearChildren(content);
 
             if (items.Count == 0)
             {
@@ -213,35 +321,155 @@ namespace AIROG_GenContext.DMNotes
             for (int i = 0; i < items.Count; i++)
             {
                 int idx = i;
-                GameObject row = MakeRect($"Row_{i}", content, typeof(LayoutElement));
-                row.GetComponent<LayoutElement>().minHeight = 18f;
-
-                var rowTxt = MakeText("T", row.transform, items[i], 11, FontStyles.Normal,
-                    Color.white, TextAlignmentOptions.TopLeft);
-                rowTxt.GetComponent<TextMeshProUGUI>().enableWordWrapping = true;
-                var rTxtRect = rowTxt.GetComponent<RectTransform>();
-                rTxtRect.anchorMin = Vector2.zero;
-                rTxtRect.anchorMax = new Vector2(0.82f, 1f);
-                rTxtRect.offsetMin = rTxtRect.offsetMax = Vector2.zero;
-
-                // Delete button
-                GameObject delBtn = MakeRect("Del", row.transform, typeof(Image), typeof(Button));
-                delBtn.GetComponent<Image>().color = new Color(0.5f, 0.1f, 0.1f, 0.7f);
-                var delRect = delBtn.GetComponent<RectTransform>();
-                delRect.anchorMin = new Vector2(0.84f, 0.1f);
-                delRect.anchorMax = new Vector2(1f, 0.9f);
-                delRect.offsetMin = delRect.offsetMax = Vector2.zero;
-                var delTxt = MakeText("X", delBtn.transform, "×", 11, FontStyles.Bold,
-                    Color.white, TextAlignmentOptions.Center);
-                StretchFull(delTxt.GetComponent<RectTransform>());
-
-                delBtn.GetComponent<Button>().onClick.AddListener(() =>
+                // The row takes its height from the wrapped text. It used to be a fixed 18 units
+                // with the text overflowing, so any entry longer than one line ran over the next.
+                GameObject row = MakeHRow($"Row_{i}", content);
+                MakeFlexText("T", row.transform, items[i], 11, FontStyles.Normal, Color.white);
+                MakeButton("Del", row.transform, "×", new Color(0.5f, 0.1f, 0.1f, 0.7f), 16f, () =>
                 {
                     if (isPlot) DmNotesManager.RemovePlotThread(idx);
                     else DmNotesManager.RemovePreference(idx);
                     RefreshUI();
                 });
             }
+        }
+
+        // ---- Planned threads ----
+
+        private static void AddPlannedRow(DmPlannedThread thread, int turn, bool offered)
+        {
+            string id = thread.Id;
+            GameObject row = MakeCard($"Thread_{id}", _plannedListContent);
+
+            var text = MakeLine("Text", row.transform, thread.Text, 11, FontStyles.Normal, Color.white);
+            text.richText = false; // player text, shown as typed
+
+            bool urgent = DmThreadLogic.IsUrgent(thread, turn) && DmThreadLogic.WaitTurns(thread, turn) == 0;
+            GameObject bar = MakeHRow("Bar", row.transform);
+            MakeFlexText("Status", bar.transform, DescribeWindow(thread, turn, offered), 10, FontStyles.Italic,
+                urgent ? new Color(1f, 0.6f, 0.4f) : HintColor);
+            MakeButton("Done", bar.transform, "Done", new Color(0.15f, 0.4f, 0.2f, 0.9f), 32f, () =>
+            {
+                DmNotesManager.RetireThread(id);
+                RefreshUI();
+            });
+            MakeButton("Edit", bar.transform, "Edit", new Color(0.2f, 0.3f, 0.5f, 0.9f), 28f, () => BeginEdit(id));
+            MakeButton("Del", bar.transform, "×", new Color(0.5f, 0.1f, 0.1f, 0.7f), 16f, () =>
+            {
+                DmNotesManager.DeleteThread(id);
+                RefreshUI();
+            });
+        }
+
+        private static void AddIntroducedRow(DmPlannedThread thread)
+        {
+            string id = thread.Id;
+            GameObject row = MakeCard($"Introduced_{id}", _introducedListContent);
+
+            var text = MakeLine("Text", row.transform, thread.Text, 10, FontStyles.Normal, new Color(0.7f, 0.7f, 0.72f));
+            text.richText = false;
+
+            GameObject bar = MakeHRow("Bar", row.transform);
+            string how = thread.RetiredByPlayer ? "marked done" : "introduced";
+            MakeFlexText("Status", bar.transform, $"{id} · {how} on turn {thread.IntroducedTurn}", 10, FontStyles.Italic, HintColor);
+            // For when the AI reported a thread it had not really brought in yet.
+            MakeButton("Undo", bar.transform, "Undo", new Color(0.3f, 0.3f, 0.35f, 0.9f), 32f, () =>
+            {
+                DmNotesManager.RestoreThread(id);
+                RefreshUI();
+            });
+            MakeButton("Del", bar.transform, "×", new Color(0.5f, 0.1f, 0.1f, 0.7f), 16f, () =>
+            {
+                DmNotesManager.DeleteThread(id);
+                RefreshUI();
+            });
+        }
+
+        private static string DescribeWindow(DmPlannedThread thread, int turn, bool offered)
+        {
+            int wait = DmThreadLogic.WaitTurns(thread, turn);
+            if (wait > 0) return $"{thread.Id} · held back {wait} more turn{(wait == 1 ? "" : "s")}";
+
+            string when;
+            if (!DmThreadLogic.HasDeadline(thread)) when = "any time now";
+            else
+            {
+                int left = DmThreadLogic.TurnsLeft(thread, turn);
+                when = left <= 0 ? "OVERDUE" : left == 1 ? "due this turn" : $"due within {left} turns";
+            }
+            // Only the first few are shown to the AI each turn (MaxPlannedThreadsPerPrompt).
+            return offered ? $"{thread.Id} · {when}" : $"{thread.Id} · {when}, queued";
+        }
+
+        private static void BeginEdit(string id)
+        {
+            DmPlannedThread thread = DmNotesManager.CurrentState.PlannedThreads.Find(t => t.Id == id);
+            if (thread == null || _threadInput == null) return;
+
+            _threadInput.SetTextWithoutNotify(thread.Text);
+            _notBeforeInput.SetTextWithoutNotify(thread.NotBeforeTurns > 0 ? thread.NotBeforeTurns.ToString() : "");
+            _byInput.SetTextWithoutNotify(thread.ByTurns > 0 ? thread.ByTurns.ToString() : "");
+            SetEditing(id);
+            SetFormHint($"Editing {id}. Its windows still count from when it was added.");
+        }
+
+        private static void SetEditing(string id)
+        {
+            _editingId = id;
+            if (_submitLabel != null) _submitLabel.text = id != null ? "Save" : "Add";
+            if (_cancelEditBtn != null) _cancelEditBtn.SetActive(id != null);
+            if (id == null) SetFormHint(FormHintDefault);
+        }
+
+        private static void ClearForm()
+        {
+            if (_threadInput != null) _threadInput.SetTextWithoutNotify("");
+            if (_notBeforeInput != null) _notBeforeInput.SetTextWithoutNotify("");
+            if (_byInput != null) _byInput.SetTextWithoutNotify("");
+            SetEditing(null);
+        }
+
+        private static void SubmitThread()
+        {
+            if (_threadInput == null) return;
+
+            string text = _threadInput.text;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                SetFormHint("Type the thread first.");
+                return;
+            }
+
+            int notBefore = ReadTurns(_notBeforeInput);
+            int by = ReadTurns(_byInput);
+            if (_editingId != null)
+            {
+                if (!DmNotesManager.UpdateThread(_editingId, text, notBefore, by))
+                {
+                    SetEditing(null);
+                    SetFormHint("That thread is no longer pending. Add adds it as a new one.");
+                    return;
+                }
+            }
+            else if (DmNotesManager.AddThread(text, notBefore, by) == null)
+            {
+                SetFormHint($"The list is full ({DmNotesManager.MaxPendingThreads}). Remove one first.");
+                return;
+            }
+
+            ClearForm();
+            RefreshUI();
+        }
+
+        private static int ReadTurns(TMP_InputField input)
+        {
+            int turns;
+            return input != null && int.TryParse(input.text, out turns) && turns > 0 ? turns : 0;
+        }
+
+        private static void SetFormHint(string text)
+        {
+            if (_formHint != null) _formHint.text = text;
         }
 
         // ---- Helpers ----
@@ -268,6 +496,163 @@ namespace AIROG_GenContext.DMNotes
             tmp.overflowMode = TextOverflowModes.Overflow;
             tmp.enableWordWrapping = false;
             return obj;
+        }
+
+        /// <summary>A wrapping line of text for a vertical list: full width, as tall as its text.</summary>
+        private static TextMeshProUGUI MakeLine(string name, Transform parent, string text,
+            int fontSize, FontStyles style, Color color)
+        {
+            var tmp = MakeText(name, parent, text, fontSize, style, color, TextAlignmentOptions.TopLeft)
+                .GetComponent<TextMeshProUGUI>();
+            tmp.enableWordWrapping = true;
+            return tmp;
+        }
+
+        /// <summary>Wrapping text for a horizontal row: takes whatever width the fixed-size children leave.</summary>
+        private static TextMeshProUGUI MakeFlexText(string name, Transform parent, string text,
+            int fontSize, FontStyles style, Color color)
+        {
+            var tmp = MakeLine(name, parent, text, fontSize, style, color);
+            var le = tmp.gameObject.AddComponent<LayoutElement>();
+            // Width comes from the row, not from how long the text would be on one line.
+            le.minWidth = 0f;
+            le.preferredWidth = 0f;
+            le.flexibleWidth = 1f;
+            return tmp;
+        }
+
+        /// <summary>A short caption sitting beside an 18-unit-high input in a horizontal row.</summary>
+        private static void MakeLabel(string name, Transform parent, string text)
+        {
+            GameObject obj = MakeText(name, parent, text, 10, FontStyles.Normal, HintColor, TextAlignmentOptions.MidlineLeft);
+            var le = obj.AddComponent<LayoutElement>();
+            le.minHeight = le.preferredHeight = 18f;
+        }
+
+        private static GameObject MakeVBox(string name, Transform parent, float spacing)
+        {
+            GameObject box = MakeRect(name, parent, typeof(VerticalLayoutGroup));
+            var vlg = box.GetComponent<VerticalLayoutGroup>();
+            vlg.childControlWidth = true;
+            vlg.childControlHeight = true;
+            vlg.childForceExpandWidth = true;
+            vlg.childForceExpandHeight = false;
+            vlg.spacing = spacing;
+            return box;
+        }
+
+        private static GameObject MakeHRow(string name, Transform parent)
+        {
+            GameObject row = MakeRect(name, parent, typeof(HorizontalLayoutGroup));
+            var hlg = row.GetComponent<HorizontalLayoutGroup>();
+            hlg.childControlWidth = true;
+            hlg.childControlHeight = true;
+            hlg.childForceExpandWidth = false;
+            hlg.childForceExpandHeight = false;
+            hlg.spacing = 3f;
+            return row;
+        }
+
+        /// <summary>A vertical box with a faint background: one thread.</summary>
+        private static GameObject MakeCard(string name, Transform parent)
+        {
+            GameObject card = MakeVBox(name, parent, 1f);
+            card.GetComponent<VerticalLayoutGroup>().padding = new RectOffset(3, 3, 2, 2);
+            card.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.05f);
+            return card;
+        }
+
+        private static Button MakeButton(string name, Transform parent, string label, Color color,
+            float width, UnityAction onClick)
+        {
+            GameObject obj = MakeRect(name, parent, typeof(Image), typeof(Button), typeof(LayoutElement));
+            var img = obj.GetComponent<Image>();
+            img.color = color;
+            var le = obj.GetComponent<LayoutElement>();
+            le.minWidth = le.preferredWidth = width;
+            le.minHeight = le.preferredHeight = 16f;
+
+            var txt = MakeText("L", obj.transform, label, 10, FontStyles.Bold, Color.white, TextAlignmentOptions.Center);
+            txt.GetComponent<TextMeshProUGUI>().raycastTarget = false;
+            StretchFull(txt.GetComponent<RectTransform>());
+
+            var btn = obj.GetComponent<Button>();
+            btn.targetGraphic = img;
+            btn.onClick.AddListener(onClick);
+            return btn;
+        }
+
+        /// <summary>
+        /// A text box. It is a real TMP_InputField on the object that gets selected, which is what
+        /// the game checks (Utils.IsInputFieldFocused) before acting on its own hotkeys - so typing
+        /// here does not open the inventory or the map behind the panel.
+        /// </summary>
+        private static TMP_InputField MakeInput(string name, Transform parent, string placeholder,
+            float height, int charLimit, bool multiline)
+        {
+            GameObject obj = MakeRect(name, parent, typeof(Image), typeof(LayoutElement));
+            var img = obj.GetComponent<Image>();
+            img.color = new Color(0f, 0f, 0f, 0.5f);
+            var le = obj.GetComponent<LayoutElement>();
+            le.minHeight = le.preferredHeight = height;
+
+            GameObject area = MakeRect("TextArea", obj.transform, typeof(RectMask2D));
+            var areaRect = area.GetComponent<RectTransform>();
+            StretchFull(areaRect);
+            areaRect.offsetMin = new Vector2(4f, 2f);
+            areaRect.offsetMax = new Vector2(-4f, -2f);
+
+            TextAlignmentOptions align = multiline ? TextAlignmentOptions.TopLeft : TextAlignmentOptions.MidlineLeft;
+            var ph = MakeText("Placeholder", area.transform, placeholder, 11, FontStyles.Italic,
+                new Color(0.5f, 0.5f, 0.55f), align).GetComponent<TextMeshProUGUI>();
+            ph.enableWordWrapping = multiline;
+            StretchFull(ph.rectTransform);
+            var txt = MakeText("Text", area.transform, "", 11, FontStyles.Normal, Color.white, align)
+                .GetComponent<TextMeshProUGUI>();
+            txt.enableWordWrapping = multiline;
+            txt.richText = false;
+            StretchFull(txt.rectTransform);
+
+            // Inactive while it is wired up, so TMP_InputField.OnEnable finds its parts in place.
+            obj.SetActive(false);
+            var input = obj.AddComponent<TMP_InputField>();
+            input.targetGraphic = img;
+            input.textViewport = areaRect;
+            input.textComponent = txt;
+            input.placeholder = ph;
+            input.fontAsset = txt.font;
+            input.pointSize = 11;
+            input.richText = false;
+            input.characterLimit = charLimit;
+            // Enter finishes the edit instead of adding a line; the text still wraps.
+            input.lineType = multiline ? TMP_InputField.LineType.MultiLineSubmit : TMP_InputField.LineType.SingleLine;
+            input.restoreOriginalTextOnEscape = false;
+            var nav = input.navigation;
+            nav.mode = Navigation.Mode.None;
+            input.navigation = nav;
+            obj.SetActive(true);
+            return input;
+        }
+
+        private static TMP_InputField MakeTurnsInput(string name, Transform parent)
+        {
+            TMP_InputField input = MakeInput(name, parent, "-", 18f, 4, multiline: false);
+            input.contentType = TMP_InputField.ContentType.IntegerNumber;
+            var le = input.GetComponent<LayoutElement>();
+            le.minWidth = le.preferredWidth = 36f;
+            return input;
+        }
+
+        private static void ClearChildren(Transform content)
+        {
+            for (int i = content.childCount - 1; i >= 0; i--)
+            {
+                GameObject child = content.GetChild(i).gameObject;
+                // Destroy only takes effect at the end of the frame; hidden, the old rows are
+                // already out of the layout that the new rows are about to join.
+                child.SetActive(false);
+                UnityEngine.Object.Destroy(child);
+            }
         }
 
         private static void StretchFull(RectTransform r)

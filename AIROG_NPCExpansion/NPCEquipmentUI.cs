@@ -28,6 +28,11 @@ namespace AIROG_NPCExpansion
             // Optional: Pre-warm if needed
         }
 
+        public static void Hide()
+        {
+            if (Instance != null && Instance._window != null) Instance._window.SetActive(false);
+        }
+
         public static void OpenFor(GameCharacter npc, GameplayManager manager)
         {
             if (Instance == null)
@@ -369,6 +374,8 @@ namespace AIROG_NPCExpansion
                 if (slot.favStar != null) ((Component)slot.favStar).gameObject.SetActive(false);
                 if (slot.circleImg != null) ((Component)slot.circleImg).gameObject.SetActive(false);
                 if (slot.eqIconImg != null) ((Component)slot.eqIconImg).gameObject.SetActive(false);
+                // Stack counter (new with item stacks): otherwise an emptied slot keeps showing the old count.
+                if (slot.quantityText != null) slot.quantityText.gameObject.SetActive(false);
                 if (slot.itemTitleBkg != null) ((Graphic)slot.itemTitleBkg).color = new Color(0, 0, 0, 0);
                 
                 // Show placeholder (if any)
@@ -464,16 +471,18 @@ namespace AIROG_NPCExpansion
         {
             if (_defenseText == null) return;
             
+            // Shows what Prefix_HandleEnemyInjury actually applies: armour pieces only (not weapons),
+            // rated against this NPC's own level, capped at 80%. It used to rate every equipped item,
+            // weapons included, against PlayerCharacter.playerLevel, a legacy field stuck at 1.
             double totalProt = 0;
-            int baselineLvl = _manager.playerCharacter.playerLevel;
-            
-            foreach (var uuid in data.EquippedUuids.Values)
+            foreach (var kvp in data.EquippedUuids)
             {
-                var item = _currentNpc.items.Find(i => i.uuid == uuid);
-                if (item != null) totalProt += Utils.GetDmgProtForItem(item, baselineLvl);
+                if (kvp.Key == "WEAPON1" || kvp.Key == "WEAPON2") continue;
+                var item = _currentNpc.items.Find(i => i != null && i.uuid == kvp.Value);
+                if (item != null && item.IsArmorType()) totalProt += Utils.GetDmgProtForItem(item, _currentNpc.level);
             }
-            
-            _defenseText.text = (totalProt * 100).ToString("F1") + "%";
+
+            _defenseText.text = (Math.Min(0.8, totalProt) * 100).ToString("F1") + "%";
         }
 
         private void UpdateEquipmentSlotDisplay(NPCData data)

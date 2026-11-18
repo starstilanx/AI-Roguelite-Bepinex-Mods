@@ -19,19 +19,26 @@ namespace AIROG_SkillWeb
 
             var data = plugin.Data;
 
-            // 1. Collect unlocked traits (capped at 12)
+            // 1. Collect allocated traits and chosen Mastery effects (capped at 12)
             var traits = new List<string>();
             foreach (var node in data.nodes)
             {
-                if (node.unlocked && node.ring > 0 && node.type != WebNodeType.Anchor)
+                if (!node.unlocked || node.ring <= 0 || node.type == WebNodeType.Anchor) continue;
+
+                if (node.type == WebNodeType.Mastery)
                 {
-                    foreach (var trait in node.traits)
+                    if (node.masteryOptions != null && node.masteryChoice >= 0 && node.masteryChoice < node.masteryOptions.Count)
                     {
-                        if (!string.IsNullOrEmpty(trait) && !traits.Contains(trait))
-                        {
-                            traits.Add(trait);
-                        }
+                        string opt = node.masteryOptions[node.masteryChoice];
+                        if (!string.IsNullOrEmpty(opt) && !traits.Contains(opt)) traits.Add(opt);
                     }
+                    continue;
+                }
+
+                foreach (var trait in node.traits)
+                {
+                    if (!string.IsNullOrEmpty(trait) && !traits.Contains(trait))
+                        traits.Add(trait);
                 }
             }
             var recentTraits = traits.Take(12).ToList();
@@ -61,7 +68,8 @@ namespace AIROG_SkillWeb
 
             if (recentTraits.Count > 0)
             {
-                sb.AppendLine($"Web traits: {string.Join(", ", recentTraits)}");
+                sb.AppendLine("[Web Traits]");
+                foreach (var t in recentTraits) sb.AppendLine("- " + t);
                 hasContent = true;
             }
 

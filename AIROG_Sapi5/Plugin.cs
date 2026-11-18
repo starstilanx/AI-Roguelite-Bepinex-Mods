@@ -6,7 +6,7 @@ using System;
 
 namespace AIROG_Sapi5
 {
-    [BepInPlugin("com.airoguelite.sapi5", "SAPI5 TTS", "1.0.0")]
+    [BepInPlugin("com.airoguelite.sapi5", "SAPI5 TTS", "1.0.1")]
     public class Sapi5Plugin : BaseUnityPlugin
     {
         public static Sapi5Plugin Instance { get; private set; }
@@ -54,18 +54,7 @@ namespace AIROG_Sapi5
                 {
                     try
                     {
-                        using (var synth = new System.Speech.Synthesis.SpeechSynthesizer())
-                        {
-                            var voices = synth.GetInstalledVoices();
-                            if (voices.Count == 0)
-                            {
-                                Logger.LogWarning("[SAPI5] No SAPI5 voices found on this system.");
-                            }
-                            foreach (var voice in voices)
-                            {
-                                Logger.LogInfo($"[SAPI5] Available Voice: {voice.VoiceInfo.Name}");
-                            }
-                        }
+                        ListInstalledVoices();
                     }
                     catch (Exception e)
                     {
@@ -81,6 +70,26 @@ namespace AIROG_Sapi5
             catch (Exception ex)
             {
                 Logger.LogError($"[SAPI5] FATAL ERROR in Awake(): {ex}");
+            }
+        }
+
+        // Kept out of the thread lambda: if System.Speech.dll is not loadable (Unity's Mono does
+        // not ship it) the failure is raised where this method is called, i.e. inside the
+        // lambda's try, instead of before it.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private void ListInstalledVoices()
+        {
+            using (var synth = new System.Speech.Synthesis.SpeechSynthesizer())
+            {
+                var voices = synth.GetInstalledVoices();
+                if (voices.Count == 0)
+                {
+                    Logger.LogWarning("[SAPI5] No SAPI5 voices found on this system.");
+                }
+                foreach (var voice in voices)
+                {
+                    Logger.LogInfo($"[SAPI5] Available Voice: {voice.VoiceInfo.Name}");
+                }
             }
         }
     }

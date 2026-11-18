@@ -1,5 +1,62 @@
 # AIROG_DirectedUpdates — Patch Notes
 
+## v1.2.0 (11/18/2026)
+
+Two features requested by Furoggu, plus a review against the 11/18 game build (Perks v2).
+Built and audited; not yet play-tested.
+
+**Instruct an update yourself.** Right-click any character, object, item, location or
+your own portrait and pick "Instruct update..." (directly under "Edit details"). Type
+what should change: add or remove a status effect, correct a description, change what
+something is. The mod runs the same follow-up the game runs for a GM `update_entities`
+entry, with the latest story turn as context, so it costs no story turn. The result
+arrives as a normal "Details updated" icon; if the AI call fails the icon stays
+clickable as the retry and keeps the instruction.
+- Hook: postfix on `MmHelper.GetCommonEditMenuRows` (the game's own entity context menu).
+- Refuses, with a toast saying why, while a target is being picked for an item or
+  ability, while player input is disabled, or while that entity is already updating.
+- Host or single-player only: the game has no command to forward it from a co-op client.
+- Works in both the UNIFIED and the specialized pipeline.
+- New prompt file `player_injection_template.txt` (`{entity}`, `{instruction}`).
+- Config `[PlayerInstruction]`: `Enabled` (default true), `QuickModifier`
+  (None/Ctrl/Alt/Shift, default None; hold it while right-clicking to skip the menu).
+
+**GM-directed destinations when characters leave** (UNIFIED only). The GM may add an
+optional `"destination"` to an `npcs_leave` entry: a brief name or description of where
+the player would next meet that character. It is shown on the "left" icon and passed to
+both location-picking prompts, right after the game's own "infer where X may have moved
+to" paragraph.
+- Characters who leave together with the same destination text end up in the same
+  place. The game starts every departure's location pick at once, so two picks for a
+  place that does not exist yet would each create their own copy; a pick whose
+  destination, story text and origin match one still running now waits for it and
+  reuses its location (falls back to its own pick if that one fails or takes over two
+  minutes).
+- Hooks: prefix + postfix on `AIAsker.FindOrMakeNewLocV2`, prefix on
+  `AIAsker.GetReplacedPromptForNewLocV2`.
+- New prompt files `destination_doc_addendum.txt` and
+  `destination_injection_template.txt` (`{entity}`, `{destination}`).
+- Config `[Destinations]`: `Enabled` (default true), `ShareSameDestination` (default true).
+- The specialized pipeline's departure check returns names only, so it cannot carry a
+  destination.
+
+**Fixes**
+- The instruction now travels on the icon itself instead of in a side file keyed by
+  entity. That fixes four things at once: an instruction being applied to a later,
+  unrelated update when the first icon was never clicked; an instruction lost when the
+  AI call failed; instructions surviving undo; and (new in the 11/18 build) the
+  instruction missing its entity after a type change swapped the entity's component.
+- Two entries for the same entity in one reply are both applied ("add burn; rename to
+  Dame Kara") instead of only the first.
+- Editing `doc_addendum.txt` while the game runs replaces the old text instead of
+  adding a second copy, and `Enabled = false` now really removes it.
+- README.txt in the config folder is rewritten when its text changes, so existing
+  installs get the new sections.
+
+*Upgrade note:* icons already waiting to be clicked when you update lose their
+instruction once. `PersistPendingInstructions` and `InstructionExpiryMinutes` now only
+cover the short gap between the GM's reply and the icon appearing.
+
 ## v1.1.0 (08/15/2026)
 
 Both changes come from Furoggu's feedback on v1.0.0.

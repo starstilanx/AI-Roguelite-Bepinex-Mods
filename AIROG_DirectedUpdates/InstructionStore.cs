@@ -5,13 +5,17 @@ using AIROG_Core;
 namespace AIROG_DirectedUpdates
 {
     /// <summary>
-    /// Holds GM-issued update instructions between the unified (first-pass) response and
-    /// the per-entity state-update call, keyed by entity uuid. Optionally persisted to the
-    /// active save directory so instructions survive a save/quit while a "confirm details
-    /// updated" icon is still pending.
+    /// Hand-off between the unified (first-pass) response parser and the icon the game raises
+    /// for that entry, keyed by kind + entity uuid. An entry only lives from ProcessApiAction
+    /// until GameLogViewObj.AddAiDecisionIcon a few moments later in the same turn; from then
+    /// on the text rides on the icon itself (see DirectedUpdatesPlugin.Stash). Optionally
+    /// persisted to the active save directory.
     /// </summary>
     internal static class InstructionStore
     {
+        public const string KIND_INSTRUCTION = "instruction";
+        public const string KIND_DESTINATION = "destination";
+
         private const string FILE_NAME = "directed_updates_pending.json";
 
         public class Pending
@@ -23,6 +27,9 @@ namespace AIROG_DirectedUpdates
 
         private static Dictionary<string, Pending> map = new Dictionary<string, Pending>();
         private static string loadedDir;
+
+        // Instructions keep the bare uuid so a file written by an older version still reads.
+        private static string Key(string kind, string uuid) => kind == KIND_INSTRUCTION ? uuid : kind + ":" + uuid;
 
         private static void EnsureLoaded()
         {
@@ -56,40 +63,40 @@ namespace AIROG_DirectedUpdates
             ModSaveFile.SaveJson(FILE_NAME, map);
         }
 
-        public static void Put(string uuid, string entityName, string instruction)
+        public static void Put(string kind, string uuid, string entityName, string text)
         {
-            if (string.IsNullOrEmpty(uuid) || string.IsNullOrEmpty(instruction)) return;
+            if (string.IsNullOrEmpty(uuid) || string.IsNullOrEmpty(text)) return;
             EnsureLoaded();
             PurgeExpired();
-            map[uuid] = new Pending { name = entityName, instruction = instruction, createdUtc = DateTime.UtcNow };
+            map[Key(kind, uuid)] = new Pending { name = entityName, instruction = text, createdUtc = DateTime.UtcNow };
             Persist();
-        }
-
-        /// <summary>Removes and returns the pending instruction for an entity, if any.</summary>
-        public static bool TryTake(string uuid, out string instruction)
-        {
-            instruction = null;
-            if (!TryPeek(uuid, out instruction, out string _)) return false;
-            map.Remove(uuid);
-            Persist();
-            return true;
         }
 
         /// <summary>
-        /// Reads the pending instruction for an entity without consuming it. Used by the
-        /// tooltip hook, which runs while the instruction still has to survive for the
-        /// (possibly player-confirmed) state-update call.
+        /// Drops whatever is pending for an entity. Called when a newer GM reply lists the
+        /// entity without the field, so an entry that never got an icon (the game cancels the
+        /// update when the entity also died, for example) cannot attach itself to this one.
         /// </summary>
-        public static bool TryPeek(string uuid, out string instruction, out string entityName)
+        public static void Remove(string kind, string uuid)
         {
-            instruction = null;
-            entityName = null;
+            if (string.IsNullOrEmpty(uuid)) return;
+            EnsureLoaded();
+            if (map.Remove(Key(kind, uuid))) Persist();
+        }
+
+        /// <summary>Removes and returns the pending text for an entity, if any.</summary>
+        public static bool TryTake(string kind, string uuid, out string text)
+        {
+            text = null;
             if (string.IsNullOrEmpty(uuid)) return false;
             EnsureLoaded();
             PurgeExpired();
-            if (!map.TryGetValue(uuid, out Pending p) || p == null || string.IsNullOrEmpty(p.instruction)) return false;
-            instruction = p.instruction;
-            entityName = p.name;
+            string key = Key(kind, uuid);
+            if (!map.TryGetValue(key, out Pending p)) return false;
+            map.Remove(key);
+            Persist();
+            if (p == null || string.IsNullOrEmpty(p.instruction)) return false;
+            text = p.instruction;
             return true;
         }
     }

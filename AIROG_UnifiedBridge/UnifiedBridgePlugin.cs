@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace AIROG_UnifiedBridge
 {
-    [BepInPlugin("com.airog.unifiedbridge", "AIROG UnifiedBridge", "1.0.0")]
+    [BepInPlugin("com.airog.unifiedbridge", "AIROG UnifiedBridge", "1.0.1")]
     public class UnifiedBridgePlugin : BaseUnityPlugin
     {
         private static readonly Harmony _harmony = new Harmony("com.airog.unifiedbridge");
@@ -148,13 +148,15 @@ namespace AIROG_UnifiedBridge
             // Resolve those references, strip plain-text-only instructions, then rewrap
             // the remaining narrative guidance inside the Unified common-part tokens.
 
-            JArray arr = JArray.Parse(specialized);
-            string content = (string)arr[0]?["content"];
-            if (string.IsNullOrEmpty(content)) return null;
-
             // Expand AUTO_SUBSTR_ references one level at a time (recursive, depth-limited).
             // AUTO_JSON_SUBSTR_ references are left intact as template vars for the game.
-            content = ResolveAutoSubstr(content, dict);
+            // This has to happen on the raw text, before parsing, the way the game does it: an
+            // AUTO_SUBSTR_ file is a fragment of JSON string text (its line breaks are written
+            // as \n). Spliced in after parsing, every one of those reached the AI as a literal
+            // backslash-n.
+            JArray arr = JArray.Parse(ResolveAutoSubstr(specialized, dict));
+            string content = (string)arr[0]?["content"];
+            if (string.IsNullOrEmpty(content)) return null;
 
             // Remove sentences that tell the AI to produce plain story text only —
             // those directly conflict with Unified mode's required JSON output.

@@ -12,6 +12,7 @@ namespace AIROG_Settlement
     {
         public void ToggleSettlementView()
         {
+            if (!IsSettlementOpen && !ModSwitch.Enabled) return; // switched off for this save: never open
             IsSettlementOpen = !IsSettlementOpen;
             if (SettlementModalObj != null)
             {
@@ -56,6 +57,26 @@ namespace AIROG_Settlement
         /// <summary>True when the player's current location is this settlement — the gate
         /// for actually surfacing a pending event popup (see TryTriggerEvent).</summary>
         public bool IsPlayerAtSettlement() => IsSettlement(SS.I?.hackyManager?.currentPlace);
+
+        /// <summary>
+        /// Whether a pending event may pop up right now. Being at the settlement is not enough:
+        /// the roll happens in the middle of the game resolving a turn, and the popup's backdrop
+        /// blocks everything behind it, so it also waits until the player is free to answer -
+        /// no fight or encounter, no turn being generated, no other window or menu open, and not
+        /// in the middle of typing. (The game's own random events are prompt suggestions with no
+        /// window of their own, so there is nothing of theirs to collide with here.)
+        /// </summary>
+        public bool CanShowEventPopupNow()
+        {
+            if (!ModSwitch.Enabled) return false;
+            var mgr = SS.I?.hackyManager;
+            if (mgr == null || mgr.scenarioState == null || !IsSettlement(mgr.currentPlace)) return false;
+            if (mgr.CurrentEncounter() != null || mgr.enemyActionsHandler?.currentEnemy != null) return false;
+            if (mgr.IsProcessingTurn() || Utils.PlayerInteractionsDisabled()) return false;
+            if (mgr.AnyModalOrMenuShowing()) return false;
+            if (Utils.IsInputFieldFocused()) return false;
+            return true;
+        }
 
         public void EstablishSettlement(Place p)
         {
@@ -139,7 +160,11 @@ namespace AIROG_Settlement
                 {
                     if (CurrentSettlement.ImageUuid == _loadedImageUuid && _loadedImageTex != null)
                     {
-                        shown = true; // Already displaying this image
+                        // Already loaded - but the RawImage is rebuilt with every scene load,
+                        // so it may never have been handed this texture.
+                        SettlementImageDisplay.texture = _loadedImageTex;
+                        SettlementImageDisplay.color = Color.white;
+                        shown = true;
                     }
                     else
                     {
@@ -190,19 +215,28 @@ namespace AIROG_Settlement
 
         public async System.Threading.Tasks.Task GenerateSettlementImage(Place p)
         {
+            SettlementImageEntity entity = null;
             try
             {
                 Log.LogInfo("Starting settlement image generation...");
 
+                var settlement = CurrentSettlement;
                 string prompt = $"A cozy and prospering settlement called {CurrentSettlement.Name}, located in {p.GetPrettyName()}. {p.GetPotentiallyNullDescription()}";
                 string uuid = Guid.NewGuid().ToString();
 
-                SettlementImageEntity entity = new SettlementImageEntity(prompt, uuid, p.manager as GameplayManager);
+                entity = new SettlementImageEntity(prompt, uuid, p.manager as GameplayManager);
 
                 // NOTE: GetEntImgSettings returns a reference to the shared settings object.
                 // Do NOT mutate .x/.y — it would permanently corrupt game image settings.
                 var settings = SS.I.settingsPojo.GetEntImgSettings(SettingsPojo.EntImgType.PLACE);
-                await AIAsker.getGeneratedImage(settings, entity, true);
+                // Default (per-entity) file naming on purpose: the image lands at
+                // {save}/{entity uuid}.png, which is the file UpdateOverviewUI loads. The
+                // "new image file list" mode saves under a random id recorded only on this
+                // throwaway entity, so the picture could never be found again.
+                await AIAsker.getGeneratedImage(settings, entity);
+
+                // The player may have left this save (or founded a new settlement) meanwhile
+                if (!ReferenceEquals(settlement, CurrentSettlement)) return;
 
                 CurrentSettlement.ImageUuid = uuid;
                 SaveSettlementData();
@@ -211,6 +245,11 @@ namespace AIROG_Settlement
             catch (Exception e)
             {
                 Log.LogError($"Error generating settlement image: {e}");
+            }
+            finally
+            {
+                // Every GameEntity subscribes itself to the turn event when constructed
+                if (entity != null) GameplayManager.TurnHappenedEvent -= entity.TurnHappened;
             }
         }
 
@@ -298,7 +337,11 @@ namespace AIROG_Settlement
         public class SettlementImageEntity : GameEntity
         {
             public string CustomPrompt;
-            public SettlementImageEntity(string prompt, string uuid, GameplayManager manager) : base("Settlement", manager)
+            // skipAddingToUuidMap: this is a prompt carrier for the image pipeline, not a game
+            // object. Registered, it is written into my_save.txt as an entity of no known class,
+            // and the next load of that save greets the player with the game's "save file
+            // contains unrecognized entities ... may become corrupted" warning.
+            public SettlementImageEntity(string prompt, string uuid, GameplayManager manager) : base("Settlement", manager, skipAddingToUuidMap: true)
             {
                 this.uuid = uuid;
                 this.CustomPrompt = prompt;

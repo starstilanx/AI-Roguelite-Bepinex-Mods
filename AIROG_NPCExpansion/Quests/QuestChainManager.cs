@@ -59,6 +59,8 @@ namespace AIROG_NPCExpansion
                     AIAsker.ChatGptPostprocessingType.NONE);
 
                 if (string.IsNullOrEmpty(result)) return;
+                // Same guard as QuestManager.GenerateQuest: never add to another save's quest list.
+                if (manager != SS.I?.hackyManager || !data.IsFromCurrentSave) return;
 
                 var quest = new QuestData
                 {

@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace AIROG_NanoBanana
 {
-    [BepInPlugin("com.airog.nanobanana", "NanoBanana", "1.0.0")]
+    [BepInPlugin("com.airog.nanobanana", "NanoBanana", "1.0.1")]
     public class NanoBananaPlugin : BaseUnityPlugin
     {
         public static NanoBananaPlugin Instance;
@@ -22,7 +22,9 @@ namespace AIROG_NanoBanana
         internal static readonly string[] PRESET_MODELS = { "gemini-2.5-flash-image", "gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview" };
         internal static readonly string[] PRESET_RES    = { "", "1K", "2K", "4K" };
 
-        public string GeminiApiKey    => PlayerPrefs.HasKey(PREF_KEY_GEMINI_API_KEY)
+        // An empty pref counts as "not set": leaving the Options key box blank saves "", which
+        // would otherwise hide a key the user put in the BepInEx config file.
+        public string GeminiApiKey    => !string.IsNullOrEmpty(PlayerPrefs.GetString(PREF_KEY_GEMINI_API_KEY, ""))
             ? PlayerPrefs.GetString(PREF_KEY_GEMINI_API_KEY)
             : Config.Bind("General", "GeminiApiKey", "", "API Key for Gemini Image Generation").Value;
         public string GeminiModel      => PlayerPrefs.HasKey(PREF_KEY_GEMINI_MODEL)

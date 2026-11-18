@@ -6,267 +6,182 @@ using UnityEngine;
 
 namespace AIROG_SkillWeb
 {
+    /// <summary>
+    /// Owns the web's lifecycle: creation (sectors + WebGenerator), binding native perk trees to
+    /// sectors, charting rings as the player reaches them, and the background AI refinement queue
+    /// that rewrites each newly charted ring's Notables/Keystones/Masteries/Confluences in the
+    /// voice of the current world.
+    /// </summary>
     public static class WebGrower
     {
         private static bool _batchQueueRunning;
         private static readonly Queue<(string sectorId, int ring)> _refinementQueue = new Queue<(string sectorId, int ring)>();
 
+        /// <summary>Largest AI batch; a vast web's outer ring can hold 15+ refinable nodes.</summary>
+        private const int MaxBatch = 10;
+
+        // ── Creation ─────────────────────────────────────────────────────────────
+
         /// <summary>
-        /// Initializes a new or migrated web. Creates the Origin, sets up sectors based on native perk trees
-        /// (or fallback defaults), seeds initial rings (Rings 1-3) as fully formed, and Ring 4 as unformed.
+        /// Builds a fresh web. Sector count is fixed here for the life of the character: one per
+        /// native perk tree, topped up with themed fallback sectors to <see cref="SkillWebConfig.SectorsAtStart"/>,
+        /// capped at 8. Perk trees that appear later bind onto existing sectors (see BindNativeTrees),
+        /// so the structure never has to be re-laid-out.
         /// </summary>
         public static void InitializeWeb(SkillWebData data, SkillWebConfig config, Dictionary<string, string> nativeTrees)
         {
             data.nodes.Clear();
             data.sectors.Clear();
+            data.InvalidateIndex();
+            // A web built from here on keeps its icons in its own seed folder (see NodeIconGen).
+            // Safe to set for a first-time web as well: it has no icons anywhere yet.
+            data.iconsPerWeb = true;
 
-            // Create Origin Node (Ring 0)
-            var origin = new WebNode
+            int treeCount = nativeTrees?.Count ?? 0;
+            int count = Mathf.Clamp(Math.Max(treeCount, config.SectorsAtStart), 3, 8);
+            int rings = WebGenerator.RingsFor(config.WebSize);
+            int charted = Mathf.Clamp(config.SeedRings, 1, rings);
+
+            var usedAttrs = new Dictionary<string, int>();
+            foreach (var a in ThemeLexicon.Attributes) usedAttrs[a] = 0;
+
+            if (nativeTrees != null)
             {
-                id = "origin",
-                type = WebNodeType.Basic,
-                name = "Origin",
-                description = "The core of your mechanical constellation.",
-                sectorId = null,
-                ring = 0,
-                unlocked = true,
-                tier = 0,
-                x = 0,
-                y = 0
-            };
-            data.nodes.Add(origin);
-
-            // Determine sectors to build
-            int sectorCount = config.SectorsAtStart;
-            if (nativeTrees != null && nativeTrees.Count > 0)
-            {
-                sectorCount = Math.Max(sectorCount, nativeTrees.Count);
-            }
-
-            var sectorList = new List<WebSector>();
-
-            if (nativeTrees != null && nativeTrees.Count > 0)
-            {
-                int index = 0;
-                string[] colors = { "#E8734A", "#4A9BE8", "#7AE84A", "#E8D44A", "#C44AE8", "#4AE8C8", "#E84A7A", "#E8A84A" };
-                
                 foreach (var kvp in nativeTrees)
                 {
-                    var sector = new WebSector
+                    if (data.sectors.Count >= count) break;
+                    var (attr, alt) = NodeGenOffline.PickAttributes(kvp.Value);
+                    usedAttrs[attr]++;
+                    data.sectors.Add(new WebSector
                     {
                         id = "sector_" + kvp.Key,
                         name = kvp.Value,
                         purpose = "Anchor star discipline grown from your native perks.",
-                        colorHex = colors[index % colors.Length],
-                        deepestGeneratedRing = 0,
-                        anchorPerkTreeUuid = kvp.Key
-                    };
-                    sectorList.Add(sector);
-                    index++;
+                        attr = attr,
+                        altAttr = alt,
+                        chartedRing = charted,
+                        perkTreeUuids = new List<string> { kvp.Key },
+                    });
                 }
             }
-            else
-            {
-                // Fallback default sectors
-                string[] sectorNames = { "Vigor", "Agility", "Reason", "Subterfuge", "Presence" };
-                string[] sectorPurposes = {
-                    "Strength and physical endurance.",
-                    "Speed, precision, and quick movement.",
-                    "Magic, spellcraft, and ancient studies.",
-                    "Stealth, poison, and poison traps.",
-                    "Diplomacy, commanding voice, and bargaining."
-                };
-                string[] colors = { "#E8734A", "#4A9BE8", "#7AE84A", "#E8D44A", "#C44AE8" };
 
-                for (int i = 0; i < Math.Min(sectorCount, 5); i++)
+            // Top up with fallback themes, preferring attributes the perk trees didn't cover.
+            var pool = new List<ThemeLexicon.FallbackSector>(ThemeLexicon.FallbackSectors);
+            int fi = 0;
+            while (data.sectors.Count < count && pool.Count > 0)
+            {
+                var pick = pool.OrderBy(f => usedAttrs[f.attr]).ThenBy(f => Array.IndexOf(ThemeLexicon.FallbackSectors, f)).First();
+                pool.Remove(pick);
+                usedAttrs[pick.attr]++;
+                data.sectors.Add(new WebSector
                 {
-                    var sector = new WebSector
+                    id = "sector_fallback_" + fi++,
+                    name = pick.name,
+                    purpose = pick.purpose,
+                    attr = pick.attr,
+                    altAttr = pick.alt,
+                    chartedRing = charted,
+                });
+            }
+
+            for (int i = 0; i < data.sectors.Count; i++)
+                data.sectors[i].colorHex = ThemeLexicon.SectorColors[i % ThemeLexicon.SectorColors.Length];
+
+            WebGenerator.Generate(data, rings);
+            Debug.Log($"[SkillWeb] Generated web: {data.nodes.Count} nodes, {data.sectors.Count} sectors, {rings} rings (seed {data.layoutSeed}).");
+
+            if (config.UseAIGeneration) EnqueueInitialRefinements(data);
+        }
+
+        /// <summary>
+        /// Attaches native perk trees that no sector feeds from yet. A tree takes the first
+        /// sector with no tree (which is renamed after it), else the sector whose attribute
+        /// matches its theme, else the sector with the fewest trees. Returns true if anything changed.
+        /// </summary>
+        public static bool BindNativeTrees(SkillWebData data, Dictionary<string, string> nativeTrees)
+        {
+            if (data == null || nativeTrees == null || data.sectors.Count == 0) return false;
+            bool changed = false;
+
+            foreach (var kvp in nativeTrees)
+            {
+                if (data.sectors.Any(s => s.perkTreeUuids.Contains(kvp.Key))) continue;
+
+                var (attr, _) = NodeGenOffline.PickAttributes(kvp.Value);
+                var target = data.sectors.FirstOrDefault(s => s.perkTreeUuids.Count == 0)
+                          ?? data.sectors.FirstOrDefault(s => s.attr == attr)
+                          ?? data.sectors.OrderBy(s => s.perkTreeUuids.Count).First();
+
+                if (target.perkTreeUuids.Count == 0)
+                {
+                    target.name = kvp.Value;
+                    target.purpose = "Anchor star discipline grown from your native perks.";
+                    var gate = data.GetNode("gate:" + target.id);
+                    if (gate != null)
                     {
-                        id = "sector_fallback_" + i,
-                        name = sectorNames[i],
-                        purpose = sectorPurposes[i],
-                        colorHex = colors[i],
-                        deepestGeneratedRing = 0,
-                        anchorPerkTreeUuid = null
-                    };
-                    sectorList.Add(sector);
+                        gate.name = target.name;
+                        gate.description = "The Anchor Star of " + target.name + ". Perks you learn in its native perk tree feed it.";
+                    }
                 }
+                target.perkTreeUuids.Add(kvp.Key);
+                changed = true;
+                Debug.Log($"[SkillWeb] Bound native perk tree '{kvp.Value}' to sector '{target.name}'.");
             }
+            return changed;
+        }
 
-            data.sectors = sectorList;
+        // ── Charting (lazy growth) ───────────────────────────────────────────────
 
-            // Align sector angles
-            WebLayout.AlignSectors(data.sectors);
+        /// <summary>
+        /// Reveals the next ring of every sector whose outermost charted ring holds an allocated
+        /// (or pending) node, repeatedly, and queues AI refinement for each newly charted ring.
+        /// Idempotent; call after any allocation and on load. Returns the sectors that grew.
+        /// </summary>
+        public static List<WebSector> EnsureFrontierCharted(SkillWebData data, SkillWebConfig config, ICollection<string> pending = null)
+        {
+            var grown = new List<WebSector>();
+            if (data == null) return grown;
 
-            // Generate seeded rings (Rings 1 to SeedRings) as fully formed
             foreach (var sector in data.sectors)
             {
-                for (int r = 1; r <= config.SeedRings; r++)
+                while (sector.chartedRing < data.maxRing)
                 {
-                    GenerateRingForSectorOffline(data, sector, r, isPlaceholder: false);
-                }
-                
-                // Ring 4 (SeedRings + 1) as Unformed Preview
-                GenerateRingForSectorOffline(data, sector, config.SeedRings + 1, isPlaceholder: true);
-            }
+                    int frontier = sector.chartedRing;
+                    bool reached = data.nodes.Exists(n =>
+                        n.ring == frontier && n.ring > 0 &&
+                        (n.sectorId == sector.id || n.sectorId2 == sector.id) &&
+                        (n.unlocked || (pending != null && pending.Contains(n.id))));
+                    if (!reached) break;
 
-            // Position all nodes deterministically
-            RepositionAndRewire(data);
-
-            // Trigger AI refinement queue for initial formed sectors if enabled
-            if (config.UseAIGeneration)
-            {
-                EnqueueInitialRefinements(data);
-            }
-        }
-
-        /// <summary>
-        /// Converts the current unformed preview ring into fully formed nodes, and spawns the next unformed preview ring.
-        /// </summary>
-        public static void GrowSector(SkillWebData data, WebSector sector, SkillWebConfig config)
-        {
-            if (data == null || sector == null) return;
-            
-            int unformedRing = sector.deepestGeneratedRing; // current unformed ring to ignite
-            
-            // 1. Ignite the unformed ring: overwrite placeholder data with real offline stats
-            var placeholderNodes = data.nodes.FindAll(n => n.sectorId == sector.id && n.ring == unformedRing && n.name == "Unformed Star");
-            for (int i = 0; i < placeholderNodes.Count; i++)
-            {
-                var placeholder = placeholderNodes[i];
-                var realOfflineNode = NodeGenOffline.GenerateNode(placeholder.id, placeholder.type, sector, unformedRing, i, data.layoutSeed);
-                
-                placeholder.name = realOfflineNode.name;
-                placeholder.description = realOfflineNode.description;
-                placeholder.stats = realOfflineNode.stats;
-                placeholder.traits = realOfflineNode.traits;
-                placeholder.keystoneRule = realOfflineNode.keystoneRule;
-                placeholder.tier = realOfflineNode.tier;
-                placeholder.aiRefined = false;
-            }
-
-            // 2. Generate the next Ring as the new unformed preview ring
-            int nextUnformedRing = unformedRing + 1;
-            GenerateRingForSectorOffline(data, sector, nextUnformedRing, isPlaceholder: true);
-            
-            RepositionAndRewire(data);
-
-            // 3. Trigger AI refinement for the newly ignited ring in background
-            if (config.UseAIGeneration)
-            {
-                EnqueueRefinement(sector.id, unformedRing);
-            }
-        }
-
-        /// <summary>
-        /// Ignites the frontier for every sector: whenever the outermost *formed* ring
-        /// (deepestGeneratedRing - 1, since the deepest ring is always the unformed preview)
-        /// contains a player-unlocked node, its unformed preview ring is grown into real nodes.
-        /// This is the single source of truth for lazy growth — call it after any unlock and on
-        /// load. Idempotent, and it self-heals saves whose frontier never advanced. Anchor nodes
-        /// are ignored: growth is driven only by nodes the player actually purchased.
-        /// </summary>
-        public static void EnsureFrontierIgnited(SkillWebData data, SkillWebConfig config)
-        {
-            if (data == null) return;
-            foreach (var sector in data.sectors)
-            {
-                // Guard against any pathological runaway; in practice this grows at most one ring.
-                for (int guard = 0; guard < 32; guard++)
-                {
-                    int frontier = sector.deepestGeneratedRing - 1; // outermost formed ring
-                    if (frontier < 1) break;
-
-                    bool frontierReached = data.nodes.Exists(n =>
-                        n.sectorId == sector.id && n.ring == frontier &&
-                        n.unlocked && n.type != WebNodeType.Anchor && n.name != "Unformed Star");
-
-                    if (!frontierReached) break;
-                    GrowSector(data, sector, config);
+                    sector.chartedRing++;
+                    if (!grown.Contains(sector)) grown.Add(sector);
+                    if (config.UseAIGeneration) EnqueueRefinement(sector.id, sector.chartedRing);
                 }
             }
-        }
-
-        /// <summary>
-        /// Generates nodes for a specific sector and ring using the offline lexicon.
-        /// </summary>
-        private static void GenerateRingForSectorOffline(SkillWebData data, WebSector sector, int ring, bool isPlaceholder = false)
-        {
-            if (ring > sector.deepestGeneratedRing)
-            {
-                sector.deepestGeneratedRing = ring;
-            }
-
-            var recipe = GetRingRecipe(ring);
-            for (int i = 0; i < recipe.Count; i++)
-            {
-                string nodeId = Guid.NewGuid().ToString();
-                var node = NodeGenOffline.GenerateNode(nodeId, recipe[i], sector, ring, i, data.layoutSeed);
-                
-                if (isPlaceholder)
-                {
-                    node.name = "Unformed Star";
-                    node.description = "A faint, unformed star at the edge of the constellation. Ignite adjacent stars to reveal it.";
-                    node.stats.Clear();
-                    node.traits.Clear();
-                    node.keystoneRule = null;
-                    node.tier = 0;
-                    node.aiRefined = false;
-                }
-
-                data.nodes.Add(node);
-            }
-        }
-
-        private static List<WebNodeType> GetRingRecipe(int ring)
-        {
-            var types = new List<WebNodeType>();
-            if (ring == 1 || ring == 2)
-            {
-                types.Add(WebNodeType.Basic);
-                types.Add(WebNodeType.Basic);
-                types.Add(WebNodeType.Basic);
-            }
-            else if (ring == 3 || ring == 4)
-            {
-                types.Add(WebNodeType.Basic);
-                types.Add(WebNodeType.Basic);
-                types.Add(WebNodeType.Notable);
-            }
-            else if (ring == 5)
-            {
-                types.Add(WebNodeType.Keystone);
-                types.Add(WebNodeType.Notable);
-            }
-            else // ring 6+
-            {
-                if ((ring - 5) % 3 == 0)
-                {
-                    types.Add(WebNodeType.Keystone);
-                    types.Add(WebNodeType.Notable);
-                }
-                else
-                {
-                    types.Add(WebNodeType.Basic);
-                    types.Add(WebNodeType.Basic);
-                    types.Add(WebNodeType.Notable);
-                }
-            }
-            return types;
+            return grown;
         }
 
         // ── AI Refinement Queue ──────────────────────────────────────────────────
 
+        static bool Refinable(WebNode n) =>
+            n.type == WebNodeType.Notable || n.type == WebNodeType.Keystone ||
+            n.type == WebNodeType.Mastery || n.type == WebNodeType.Confluence;
+
         public static void EnqueueInitialRefinements(SkillWebData data)
         {
             foreach (var sector in data.sectors)
-            {
-                // Refine rings 1 to deepest-1 (since deepest is the unformed preview ring)
-                for (int r = 1; r < sector.deepestGeneratedRing; r++)
-                {
+                for (int r = 1; r <= sector.chartedRing; r++)
                     EnqueueRefinement(sector.id, r);
-                }
-            }
+        }
+
+        /// <summary>
+        /// Drops queued (sector, ring) refinements. They are keyed by sector id only, so after a
+        /// different save loads or the web is regenerated they would point at whatever sector
+        /// happens to reuse that id.
+        /// </summary>
+        public static void ClearRefinementQueue()
+        {
+            lock (_refinementQueue) _refinementQueue.Clear();
         }
 
         public static void EnqueueRefinement(string sectorId, int ring)
@@ -274,24 +189,31 @@ namespace AIROG_SkillWeb
             lock (_refinementQueue)
             {
                 if (!_refinementQueue.Contains((sectorId, ring)))
-                {
                     _refinementQueue.Enqueue((sectorId, ring));
-                }
 
                 if (!_batchQueueRunning)
-                {
                     _ = ProcessRefinementQueueAsync();
-                }
             }
         }
 
         private static async Task ProcessRefinementQueueAsync()
         {
             _batchQueueRunning = true;
+            int failedInARow = 0;
             try
             {
                 while (true)
                 {
+                    // Unfinished rings are re-queued on every load, so a backend that is down or
+                    // returning rubbish must not be sent the whole web again each time: after two
+                    // failed requests in a row, give up until the next session.
+                    if (failedInARow >= 2)
+                    {
+                        Debug.LogWarning("[SkillWeb] AI refinement is failing; the remaining rings keep their generated text for now.");
+                        ClearRefinementQueue();
+                        break;
+                    }
+
                     (string sectorId, int ring) target;
                     lock (_refinementQueue)
                     {
@@ -307,50 +229,47 @@ namespace AIROG_SkillWeb
                     var sector = data.GetSector(target.sectorId);
                     if (sector == null) continue;
 
-                    // Find all offline-generated nodes in this cell that are NOT placeholders
-                    var offlineNodes = data.nodes.FindAll(n => n.sectorId == target.sectorId && n.ring == target.ring && !n.aiRefined && n.type != WebNodeType.Anchor && n.name != "Unformed Star");
-                    if (offlineNodes.Count == 0) continue;
+                    var pendingNodes = data.nodes.FindAll(n =>
+                        n.sectorId == target.sectorId && n.ring == target.ring && !n.aiRefined && Refinable(n));
+                    if (pendingNodes.Count == 0) continue;
 
-                    var batchTargets = offlineNodes.Select(n => (n.id, n.type)).ToList();
-                    var existingSectorNodes = data.nodes.FindAll(n => n.sectorId == target.sectorId);
-
-                    Debug.Log($"[SkillWeb] AI refining batch for sector {sector.name} Ring {target.ring} ({offlineNodes.Count} nodes)...");
-
-                    var aiNodes = await NodeGenAI.GenerateRingBatchAsync(
-                        manager, 
-                        sector, 
-                        target.ring, 
-                        batchTargets, 
-                        existingSectorNodes, 
-                        data.layoutSeed);
-
-                    if (aiNodes != null && aiNodes.Count > 0)
+                    for (int start = 0; start < pendingNodes.Count; start += MaxBatch)
                     {
-                        foreach (var aiNode in aiNodes)
+                        var batch = pendingNodes.GetRange(start, Math.Min(MaxBatch, pendingNodes.Count - start));
+                        Debug.Log($"[SkillWeb] AI refining {sector.name} ring {target.ring} ({batch.Count} nodes)...");
+
+                        var infos = await NodeGenAI.RefineBatchAsync(manager, data, sector, target.ring, batch);
+                        if (infos == null || infos.Count == 0)
                         {
-                            var oldNode = data.GetNode(aiNode.id);
-                            if (oldNode != null)
-                            {
-                                // Overwrite stats, name, description, traits, keystoneRule
-                                oldNode.name = aiNode.name;
-                                oldNode.description = aiNode.description;
-                                oldNode.stats = aiNode.stats;
-                                oldNode.traits = aiNode.traits;
-                                oldNode.keystoneRule = aiNode.keystoneRule;
-                                oldNode.aiRefined = true;
-                            }
+                            if (++failedInARow >= 2) break;
+                            continue;
+                        }
+                        failedInARow = 0;
+
+                        // The player may have loaded another save while the request was in flight.
+                        if (!ReferenceEquals(plugin.Data, data)) break;
+                        // ...or regenerated this one: same data object, brand-new nodes that reuse
+                        // the old ids. Writing the reply onto them would mislabel the new web.
+                        if (batch.Exists(b => data.GetNode(b.id) != b)) break;
+
+                        foreach (var info in infos)
+                        {
+                            var node = data.GetNode(info.id);
+                            if (node == null) continue;
+                            node.name = info.name;
+                            node.description = info.description;
+                            node.stats = info.stats;
+                            node.traits = info.traits;
+                            node.keystoneRule = info.keystoneRule;
+                            if (!string.IsNullOrEmpty(info.abilityName)) node.abilityName = info.abilityName;
+                            if (info.masteryOptions != null && info.masteryOptions.Count > 0) node.masteryOptions = info.masteryOptions;
+                            node.aiRefined = true;
                         }
 
-                        // AI refinement only overwrites name/description/stats/traits/keystoneRule — never
-                        // ring/sectorId/type — so positions and edges are unaffected; a full repack here
-                        // was pure wasted work on top of the perk-buy/upgrade path that already does it.
-                        plugin.SaveData();
-
-                        // Refresh UI if it is active in the game
-                        if (SkillWebUI.Instance != null && SkillWebUI.Instance.gameObject.activeSelf)
-                        {
+                        // Refinement only rewrites content, never structure, so no re-layout.
+                        plugin.RecalculateAfterContentChange();
+                        if (SkillWebUI.Instance != null && SkillWebUI.Instance.IsOpen)
                             SkillWebUI.Instance.Refresh();
-                        }
                     }
                 }
             }
@@ -362,19 +281,6 @@ namespace AIROG_SkillWeb
             {
                 _batchQueueRunning = false;
             }
-        }
-
-        // ── Reposition and Wireframe ──────────────────────────────────────────────
-
-        public static void RepositionAndRewire(SkillWebData data)
-        {
-            if (data == null) return;
-
-            // Pack every (sector, ring) cell so nodes can't land on top of each other
-            WebLayout.LayoutNodes(data);
-
-            // Rebuild wireframe connections
-            WebLayout.GenerateEdges(data);
         }
     }
 }

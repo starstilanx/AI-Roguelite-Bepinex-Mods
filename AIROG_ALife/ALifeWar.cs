@@ -139,6 +139,8 @@ namespace AIROG_ALife
         /// <summary>Drop ledger entries for wars that ended by other means (peace, exhaustion).</summary>
         public static void Upkeep()
         {
+            // Switched off for this save is not "the wars ended": keep the ledgers for its return.
+            if (!ALifePlugin.WorldSwitchedOn()) return;
             var liveKeys = new HashSet<string>(ALifeWorldBridge.GetActiveWars()
                 .Select(w => ALifeWorldBridge.GetWarKey(w.ActorUuid, w.TargetUuid))
                 .Where(k => k != null));

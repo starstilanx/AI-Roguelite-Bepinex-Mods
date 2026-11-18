@@ -9,8 +9,10 @@ namespace AIROG_GenContext
     public static class ContextManager
     {
         // Token Budget Settings
-        public const int MAX_TOTAL_TOKENS = 2048; 
-        public const int CHAR_LIMIT_PER_TOKEN = 4; 
+        public const int MAX_TOTAL_TOKENS = 2048;
+        public const int CHAR_LIMIT_PER_TOKEN = 4;
+        // How far a single provider may overrun what is left of the budget before its block is dropped.
+        private const int OVERRUN_GRACE_TOKENS = 768;
 
         // Instantiated Providers
         private static List<IContextProvider> _providers = new List<IContextProvider>();
@@ -27,7 +29,9 @@ namespace AIROG_GenContext
             _providers.Add(new ContextProviders.WorldContextProvider());
             _providers.Add(new ContextProviders.GrandStrategyProvider());
             _providers.Add(new ContextProviders.SettlementProvider());
-            _providers.Add(new ContextProviders.SkillWebProvider());
+            // (No Skill Web provider here: the old built-in "Skill Web Traits" one read a
+            // SkillWeb.json schema that no longer exists and has been removed. AIROG_SkillWeb
+            // registers its own "Skill Web Constellation" provider.)
             _providers.Add(new ContextProviders.InsightProvider());
             
             // Sort by priority (Higher first)
@@ -35,13 +39,15 @@ namespace AIROG_GenContext
 
             LoadConfig();
 
+            // The provider map is now the GLOBAL DEFAULT layer of the per-save mod switches.
+            ModToggles.BindDefaults(_enabledProviders);
+
             // Default defaults
             if (!_globalSettings.ContainsKey("NemesisSystem")) _globalSettings["NemesisSystem"] = true;
             if (!_globalSettings.ContainsKey("NemesisLooting")) _globalSettings["NemesisLooting"] = true;
             if (!_globalSettings.ContainsKey("DisableTruncation")) _globalSettings["DisableTruncation"] = false;
             if (!_globalSettings.ContainsKey("DMNotes")) _globalSettings["DMNotes"] = true;
             if (!_globalSettings.ContainsKey("RRCompat")) _globalSettings["RRCompat"] = false;
-            if (!_globalSettings.ContainsKey("AffixAsStatusEffect")) _globalSettings["AffixAsStatusEffect"] = false;
         }
 
         public static List<IContextProvider> GetProviders() => _providers;
@@ -56,17 +62,16 @@ namespace AIROG_GenContext
             Debug.Log($"[GenContext] External provider registered: {provider.Name} (priority {provider.Priority})");
         }
 
-        public static bool IsProviderEnabled(string name)
-        {
-            if (_enabledProviders.ContainsKey(name)) return _enabledProviders[name];
-            return true; // Default enabled
-        }
+        /// <summary>
+        /// Whether a provider - and the mod behind it - is switched on for the current save.
+        /// Same answer as <see cref="ModToggles.IsEnabled"/>; kept for existing callers.
+        /// </summary>
+        public static bool IsProviderEnabled(string name) => ModToggles.IsEnabled(name);
 
-        public static void SetProviderEnabled(string name, bool enabled)
-        {
-            _enabledProviders[name] = enabled;
-            SaveConfig();
-        }
+        /// <summary>Switches a provider's mod on/off for the current save (see <see cref="ModToggles"/>).</summary>
+        public static void SetProviderEnabled(string name, bool enabled) => ModToggles.SetEnabled(name, enabled);
+
+        internal static void SaveConfigInternal() => SaveConfig();
 
         public static bool GetGlobalSetting(string key)
         {
@@ -98,7 +103,10 @@ namespace AIROG_GenContext
                     try 
                     {
                         var config = Newtonsoft.Json.JsonConvert.DeserializeObject<ConfigWrapper>(json);
-                        if (config != null)
+                        // An old-format file (a bare name->bool map) also deserializes into a
+                        // non-null wrapper, just with both members null. Returning on that used to
+                        // skip the legacy fallback below and discard the player's old toggles.
+                        if (config != null && (config.Providers != null || config.GlobalSettings != null))
                         {
                             if (config.Providers != null) _enabledProviders = config.Providers;
                             if (config.GlobalSettings != null) _globalSettings = config.GlobalSettings;
@@ -136,39 +144,89 @@ namespace AIROG_GenContext
         {
             if (string.IsNullOrEmpty(__result)) return;
 
+            // This runs inside the game's prompt builder. Whatever goes wrong in here may cost the
+            // injected context, never the prompt.
+            try
+            {
+                int currentTokens;
+                string injection = BuildInjection(__result, out currentTokens);
+                if (injection.Length > 0)
+                {
+                    __result += "\n\n[CONTEXT INJECTION]\n" + injection;
+                    Debug.Log($"[GenContext] Injected {currentTokens} estimated tokens of context.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[GenContext] Context injection failed; the prompt goes out without it: {ex}");
+            }
+        }
+
+        private static string BuildInjection(string prompt, out int currentTokens)
+        {
             StringBuilder sb = new StringBuilder();
-            int currentTokens = 0;
+            currentTokens = 0;
 
             bool disableTruncation = GetGlobalSetting("DisableTruncation");
 
             foreach (var provider in _providers)
             {
-                // Check if enabled
-                if (!IsProviderEnabled(provider.Name)) continue;
-
                 if (!disableTruncation && currentTokens >= MAX_TOTAL_TOKENS) break;
 
-                // Use int.MaxValue / 4 when truncation disabled (avoids overflow when providers multiply by 4)
-                // Clamp to Math.Max(1, ...) so providers never receive 0 or negative token budgets
-                int remainingTokens = disableTruncation
-                    ? int.MaxValue / 4
-                    : Math.Max(1, MAX_TOTAL_TOKENS - currentTokens);
-                string ctx = provider.GetContext(__result, remainingTokens);
-
-                
-                if (!string.IsNullOrEmpty(ctx))
+                // One provider per try: a mod whose provider throws loses its own block for this
+                // prompt, and every other mod's context still goes in.
+                string name = "(unnamed)";
+                try
                 {
+                    name = provider.Name;
+
+                    // Check if enabled
+                    if (!IsProviderEnabled(name)) continue;
+
+                    // Use int.MaxValue / 4 when truncation disabled (avoids overflow when providers multiply by 4)
+                    // Clamp to Math.Max(1, ...) so providers never receive 0 or negative token budgets
+                    int remainingTokens = disableTruncation
+                        ? int.MaxValue / 4
+                        : Math.Max(1, MAX_TOTAL_TOKENS - currentTokens);
+                    string ctx = provider.GetContext(prompt, remainingTokens);
+                    if (string.IsNullOrEmpty(ctx)) continue;
+
+                    if (!disableTruncation && !FitsBudget(ctx, remainingTokens, name)) continue;
+
+                    // Providers do not all end their block with a line break; without one the next
+                    // provider's header ran on from the last word of this one.
+                    if (sb.Length > 0 && sb[sb.Length - 1] != '\n') sb.Append('\n');
                     sb.Append(ctx);
                     currentTokens += ctx.Length / CHAR_LIMIT_PER_TOKEN;
                 }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[GenContext] Context provider '{name}' failed and was left out of this prompt: {ex}");
+                }
             }
 
-            // Appending to the prompt
-            if (sb.Length > 0)
-            {
-                __result += "\n\n[CONTEXT INJECTION]\n" + sb.ToString();
-                Debug.Log($"[GenContext] Injected {currentTokens} estimated tokens of context.");
-            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Holds a provider to the budget it was given. Providers are told how much is left, but
+        /// nothing checked what they returned, so one that ignored it could take the cap and any
+        /// amount beyond it.
+        ///
+        /// The block is never cut here: the manager cannot tell prose from a hidden-tag
+        /// instruction, and half an instruction is worse than none. A provider may therefore run
+        /// over by up to <see cref="OVERRUN_GRACE_TOKENS"/> (Reverie's dream directive does so on
+        /// purpose rather than be truncated); a block bigger than that is left out of this prompt.
+        /// The injection as a whole can thus never exceed MAX_TOTAL_TOKENS + OVERRUN_GRACE_TOKENS.
+        /// </summary>
+        private static bool FitsBudget(string ctx, int remainingTokens, string providerName)
+        {
+            int allowedChars = (remainingTokens + OVERRUN_GRACE_TOKENS) * CHAR_LIMIT_PER_TOKEN;
+            if (ctx.Length <= allowedChars) return true;
+
+            Debug.LogWarning($"[GenContext] Context provider '{providerName}' returned {ctx.Length} characters with " +
+                             $"{remainingTokens * CHAR_LIMIT_PER_TOKEN} left in the budget; left out of this prompt.");
+            return false;
         }
     }
 }

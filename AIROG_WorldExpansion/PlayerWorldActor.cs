@@ -30,6 +30,7 @@ namespace AIROG_WorldExpansion
             if (_selfInflicted || __instance == null) return;
             try
             {
+                if (!ModSwitch.Enabled) return;
                 ReactToRepChange(__instance, delta);
             }
             catch (Exception e)
@@ -43,6 +44,10 @@ namespace AIROG_WorldExpansion
             var state = WorldData.CurrentState;
             string uuid = faction.uuid;
             string name = faction.GetPrettyName();
+
+            // The native Faction object outlives its fall, so the AI can still dock rep with it;
+            // a faction that no longer exists must not answer with a bounty.
+            if (state.EliminatedFactions.Contains(uuid)) return;
 
             if (delta <= -BIG_REP_DELTA)
             {

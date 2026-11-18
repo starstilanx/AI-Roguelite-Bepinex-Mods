@@ -44,6 +44,7 @@ namespace AIROG_ALife
             {
                 try
                 {
+                    if (!ALifePlugin.SwitchedOn()) return;
                     OnPlayerArrived(__instance, newPl);
                 }
                 catch (Exception ex)

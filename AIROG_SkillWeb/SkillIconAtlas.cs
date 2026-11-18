@@ -179,9 +179,9 @@ namespace AIROG_SkillWeb
                 // Rarity fit: reserve the dramatic art for the nodes that earn it.
                 if (node.type == WebNodeType.Keystone || node.type == WebNodeType.Confluence)
                     score += def.epic;
-                else if (node.type == WebNodeType.Notable && def.epic == 1)
+                else if ((node.type == WebNodeType.Notable || node.type == WebNodeType.Mastery) && def.epic == 1)
                     score += 1;
-                else if (node.type == WebNodeType.Basic && def.epic == 2)
+                else if ((node.type == WebNodeType.Basic || node.type == WebNodeType.Travel) && def.epic == 2)
                     score -= 3;
 
                 // Stable per-node jitter spreads ties across the candidate set so a Strength

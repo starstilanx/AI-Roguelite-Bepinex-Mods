@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Console test harness for the wildcard engine. Not a mod and not shipped. From the repo
+       root, run it with "dotnet run" and the project option pointing at this file (see the
+       header of Program.cs for the exact command). It compiles the engine sources by link and
+       targets the same framework as the mod, so the code under test is exactly what ships.
+       No Unity, BepInEx or game references. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>WildcardEngineTests</AssemblyName>
+    <RootNamespace>WildcardEngineTests</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <OutputPath>bin\Debug\net472\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Engine\*.cs" Link="Engine\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

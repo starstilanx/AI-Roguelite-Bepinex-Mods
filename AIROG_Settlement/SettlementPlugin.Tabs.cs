@@ -94,7 +94,9 @@ namespace AIROG_Settlement
 
             var actions = new List<(string name, string desc, Func<bool> canAfford, Action execute)>
             {
-                ("Deposit Gold", "Give 50 personal gold", new Func<bool>(() => SS.I.hackyManager.playerCharacter.pcGameEntity.numGold >= 50), new Action(() => {
+                // GetNumGold(), not pcGameEntity.numGold: pcGameEntity is the legacy player object
+                // and is null in every save that was not migrated from an old build.
+                ("Deposit Gold", "Give 50 personal gold", new Func<bool>(() => SS.I.hackyManager.playerCharacter.GetNumGold() >= 50), new Action(() => {
                     SS.I.hackyManager.playerCharacter.IncrGold(-50);
                     CurrentSettlement.AddResource("Gold", 50);
                 })),
@@ -169,8 +171,13 @@ namespace AIROG_Settlement
 
                 btn.onClick.AddListener(() =>
                 {
-                    act.execute();
-                    SaveSettlementData();
+                    // Re-check: the row was drawn when the tab opened, and an event outcome or
+                    // another trade may have spent the stock since.
+                    if (act.canAfford())
+                    {
+                        act.execute();
+                        SaveSettlementData();
+                    }
                     RefreshTradeTab();
                     UpdateOverviewUI();
                 });
@@ -355,12 +362,18 @@ namespace AIROG_Settlement
                 return;
             }
 
-            for (int i = 0; i < CurrentSettlement.Residents.Count && i < 6; i++)
+            // Six 48px rows fill the frame. Civic Planning lifts the cap to 8, so past six the rows
+            // are tightened to keep every resident on screen (the tab has no scrolling).
+            int shown = Math.Min(CurrentSettlement.Residents.Count, 8);
+            bool compact = shown > 6;
+            float pitch = compact ? 288f / shown : 48f;
+
+            for (int i = 0; i < shown; i++)
             {
                 var resident = CurrentSettlement.Residents[i];
-                float rowY = 152f + i * 48f;
+                float rowY = 152f + i * pitch;
 
-                SettlementUIHelper.CreateUIElement($"Row_{i}", content, 309, rowY, 397, 44, null,
+                SettlementUIHelper.CreateUIElement($"Row_{i}", content, 309, rowY, 397, pitch - 4f, null,
                     new Color(0.08f, 0.08f, 0.14f, 0.75f));
 
                 GameObject nameObj = new GameObject($"Name_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
@@ -371,7 +384,7 @@ namespace AIROG_Settlement
                 nameTxt.fontStyle = FontStyles.Bold;
                 nameTxt.alignment = TextAlignmentOptions.Left;
                 nameTxt.color = Color.white;
-                SettlementUIHelper.SetRect(nameObj.GetComponent<RectTransform>(), 314, rowY + 4, 220, 20);
+                SettlementUIHelper.SetRect(nameObj.GetComponent<RectTransform>(), 314, rowY + (compact ? 1 : 4), 220, compact ? 17 : 20);
 
                 GameObject jobObj = new GameObject($"Job_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
                 jobObj.transform.SetParent(content, false);
@@ -380,7 +393,7 @@ namespace AIROG_Settlement
                 jobTxt.fontSize = 11;
                 jobTxt.alignment = TextAlignmentOptions.Left;
                 jobTxt.color = new Color(0.72f, 0.72f, 0.72f);
-                SettlementUIHelper.SetRect(jobObj.GetComponent<RectTransform>(), 314, rowY + 26, 220, 16);
+                SettlementUIHelper.SetRect(jobObj.GetComponent<RectTransform>(), 314, rowY + (compact ? 17 : 26), 220, compact ? 14 : 16);
 
                 // Happiness readout
                 GameObject hapObj = new GameObject($"Hap_{i}", typeof(RectTransform), typeof(TextMeshProUGUI));
@@ -394,7 +407,7 @@ namespace AIROG_Settlement
                 hapTxt.color = resident.Happiness >= 70 ? new Color(0.55f, 0.95f, 0.55f)
                              : resident.Happiness >= 45 ? new Color(0.95f, 0.9f, 0.6f)
                              : new Color(0.95f, 0.5f, 0.5f);
-                SettlementUIHelper.SetRect(hapObj.GetComponent<RectTransform>(), 560, rowY + 10, 140, 24);
+                SettlementUIHelper.SetRect(hapObj.GetComponent<RectTransform>(), 560, rowY + (pitch - 4f - 24f) * 0.5f, 140, 24);
             }
         }
 

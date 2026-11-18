@@ -35,7 +35,10 @@ namespace AIROG_Settlement
                 ID = "raid", Title = "Bandit Raid",
                 FlavorText = "A band of raiders has been spotted approaching the settlement's stores.",
                 Condition = s => GoldOf(s) >= 10,
-                GetWeight = s => s.HasBuilding("barracks") ? 1.5f : 3f,
+                // Fortifications' description promises "Raiders grow rarer"; only the fight-back
+                // bonus below was ever wired up.
+                GetWeight = s => (s.HasBuilding("barracks") ? 1.5f : 3f)
+                               * (s.Researched.Contains("fortifications") ? 0.5f : 1f),
                 Choices = new List<SettlementEventChoice>
                 {
                     new SettlementEventChoice

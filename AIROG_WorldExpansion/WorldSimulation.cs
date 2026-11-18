@@ -22,6 +22,27 @@ namespace AIROG_WorldExpansion
         public static void OnTurnHappened(GameplayManager __instance, int numTurns, long secs)
         {
             if (__instance == null) return;
+            // The game also raises this with numTurns == 0 for every enemy attack, encounter
+            // round, plot hook and task result. No world time passes then - and ticking anyway
+            // re-rolled war peace checks (and rewrote the save file) once per enemy action.
+            if (numTurns <= 0) return;
+            if (!ModSwitch.Enabled) return;
+
+            // InvokeTurnHappened runs inside the game's turn resolution: an exception escaping
+            // this postfix would abort the player's turn.
+            try
+            {
+                Tick(__instance, numTurns);
+            }
+            catch (System.Exception e)
+            {
+                UnityEngine.Debug.LogError($"[WorldExpansion] World tick failed: {e}");
+            }
+        }
+
+        private static void Tick(GameplayManager __instance, int numTurns)
+        {
+            WorldData.EnsureStateForCurrentSave();
 
             var state = WorldData.CurrentState;
             state.CurrentTurn += numTurns;
