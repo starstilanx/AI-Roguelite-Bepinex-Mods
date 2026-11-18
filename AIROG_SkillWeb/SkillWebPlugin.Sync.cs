@@ -20,17 +20,19 @@ namespace AIROG_SkillWeb
         public void SyncBonuses()
         {
             if (_syncing) return;
-            if (Data == null) LoadSaveData();
+            if (!ModSwitch.Enabled) return; // switched off for this save: the stored web is left exactly as it is
+            // Also reload when Data is a previous save's web (see DataIsForActiveSave).
+            if (Data == null || !DataIsForActiveSave()) LoadSaveData();
             if (Data == null) return;
 
-            var actor = CurrentActor();
+            var actor = WebOwner();
             var pdata = actor?.playableData;
             if (pdata?.perkTrees == null) return;
 
             _syncing = true;
             try
             {
-                // Step 1: scan native trees and learned/active perks.
+                // Step 1: scan native trees and learned/engaged perks.
                 var nativeTrees = new Dictionary<string, string>();
                 var learnedByTree = new Dictionary<string, List<PerkNode>>();
                 var activePerkUuids = new HashSet<string>();
@@ -44,6 +46,12 @@ namespace AIROG_SkillWeb
                     {
                         if (pn == null || !pn.isLearned) continue;
                         learned.Add(pn);
+                        // Under Perks v2 isActivated means "enabled passive" - the game refuses to
+                        // activate an ACTIVE-type perk - and enabled passives are a limited choice
+                        // (maxActivePerks), which is what the multiplier rewards. Active-type perks
+                        // deliberately do not earn it: "is on the 16-slot hotbar" would be nearly
+                        // free, and the game does not refresh anything when the hotbar changes, so
+                        // the bonus would sit stale until some unrelated sync.
                         if (pn.isActivated) activePerkUuids.Add(pn.uuid);
                     }
                     learnedByTree[pt.uuid] = learned;
@@ -82,10 +90,15 @@ namespace AIROG_SkillWeb
                         {
                             var pb = EnsurePerkBonus(pn);
                             bool active = activePerkUuids.Contains(pn.uuid);
-                            float mult = active ? SkillConfig.ActiveBonusMultiplier : 1f;
+                            // Perks v2 perks have ranks 1-3 bought with perk points (0 = granted by
+                            // the story, not yet invested in). Each rank past the first adds
+                            // PerkRankBonusStep of the perk's base bonus to its Anchor Star.
+                            int rank = Mathf.Clamp(pn.rank, 0, PerksV2.MAX_RANK);
+                            float mult = (active ? SkillConfig.ActiveBonusMultiplier : 1f)
+                                       * (1f + Mathf.Max(0, rank - 1) * Mathf.Max(0f, SkillConfig.PerkRankBonusStep));
                             foreach (var kv in pb.stats)
                                 gate.stats[kv.Key] = (gate.stats.TryGetValue(kv.Key, out float v) ? v : 0f) + kv.Value * mult;
-                            gate.feedingPerks.Add(new FeedingPerk { perkUuid = pn.uuid, name = pn.GetPrettyName(), active = active, stats = pb.stats });
+                            gate.feedingPerks.Add(new FeedingPerk { perkUuid = pn.uuid, name = pn.GetPrettyName(), active = active, rank = rank, stats = pb.stats });
                             if (active) gate.hasActivePerk = true;
                         }
                     }
@@ -123,12 +136,17 @@ namespace AIROG_SkillWeb
 
         private PerkBonus EnsurePerkBonus(PerkNode pn)
         {
-            if (Data.perkBonuses.TryGetValue(pn.uuid, out var pb) && pb != null) return pb;
+            if (Data.perkBonuses.TryGetValue(pn.uuid, out var pb) && pb != null)
+            {
+                // Still only heuristic (the request was interrupted or failed in an earlier session): try once more.
+                if (!pb.aiRefined && SkillConfig.UseAIGeneration && _refineRequested.Add(pn.uuid)) _refineQueue.Enqueue(pn);
+                return pb;
+            }
             pb = new PerkBonus { perkUuid = pn.uuid, perkName = pn.GetPrettyName() };
             pb.stats = PerkStatDeriver.Heuristic(pn.GetPrettyName(), pn.GetPotentiallyNullDescription() ?? "", SkillConfig.HeuristicBudget);
             pb.derived = true;
             Data.perkBonuses[pn.uuid] = pb;
-            if (SkillConfig.UseAIGeneration) _refineQueue.Enqueue(pn);
+            if (SkillConfig.UseAIGeneration && _refineRequested.Add(pn.uuid)) _refineQueue.Enqueue(pn);
             return pb;
         }
 
@@ -137,6 +155,9 @@ namespace AIROG_SkillWeb
         {
             if (Data == null) return;
             RecalculateStats();
+            // A Keystone or Confluence that already granted its perk may just have been renamed:
+            // the perk on the hotbar follows its node (unless the player renamed it themselves).
+            if (!_syncing) SyncAbilities();
             SaveData();
         }
 

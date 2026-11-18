@@ -63,15 +63,21 @@ namespace AIROG_SkillWeb
         private static string PlayerContext(GameplayManager manager)
         {
             if (manager == null) return "Player";
-            var pc = manager.playerCharacter;
-            string playerName = pc?.pcGameEntity?.playerName ?? "Player";
-            string level = (pc?.playerLevel ?? 1).ToString();
+            // Read the live character (GameCharacter + PlayableCharacterData). PlayerCharacter's
+            // pcGameEntity / playerLevel are pre-entity-system leftovers: null or frozen at their
+            // new-game values on any current save, which sent every request "Player, level 1, no skills".
+            var owner = SkillWebPlugin.WebOwner();
+            string playerName = owner?.GetPrettyName();
+            if (string.IsNullOrWhiteSpace(playerName)) playerName = "Player";
+            string level = SkillWebPlugin.OwnerLevel().ToString();
             string background = manager.playerBackgroundText ?? "";
 
             string skills = "";
-            if (pc?.pcGameEntity?.skillsDict != null)
-                foreach (var kvp in pc.pcGameEntity.skillsDict)
-                    skills += "  - " + kvp.Value.skillName + " (Lv " + kvp.Value.level + ")\n";
+            var skillsDict = owner?.playableData?.skillsDict;
+            if (skillsDict != null)
+                foreach (var kvp in skillsDict)
+                    if (kvp.Value != null && kvp.Value.level > 0)
+                        skills += "  - " + kvp.Value.skillName + " (Lv " + kvp.Value.level + ")\n";
 
             return
                 "Name: " + playerName + "\n" +

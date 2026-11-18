@@ -15,12 +15,15 @@ namespace AIROG_SkillWeb
         /// <summary>If true, AI is used to refine/generate names, attributes, and lore; otherwise, only offline heuristics are used.</summary>
         public bool UseAIGeneration = true;
 
-        /// <summary>Compatibility bridge for legacy config files mapping to UseAIGeneration.</summary>
+        /// <summary>Compatibility bridge for legacy config files mapping to UseAIGeneration. Read, never written.</summary>
         public bool UseAIStatDerivation
         {
             get => UseAIGeneration;
             set => UseAIGeneration = value;
         }
+
+        /// <summary>Newtonsoft conditional-serialization hook: keeps the alias out of the written file.</summary>
+        public bool ShouldSerializeUseAIStatDerivation() => false;
 
         /// <summary>Scales all Resonance points earned.</summary>
         public float ResonanceMultiplier = 1.0f;
@@ -28,8 +31,17 @@ namespace AIROG_SkillWeb
         /// <summary>Safety cap on the total bonus contributed to any single attribute.</summary>
         public float MaxBonusPerAttribute = 50.0f;
 
-        /// <summary>Bonus multiplier applied to adjacent nodes when an Anchor Star's native perk is active.</summary>
+        /// <summary>
+        /// Bonus multiplier for a native passive perk you have ENABLED (the game's "enabled passives",
+        /// limited in number) and for the web nodes touching that perk's Anchor Star.
+        /// </summary>
         public float ActiveBonusMultiplier = 1.5f;
+
+        /// <summary>
+        /// Extra share of a native perk's attribute bonus per perk rank above the first
+        /// (Perks v2 ranks 1-3). 0.5 means rank 2 feeds its Anchor Star x1.5 and rank 3 x2. 0 turns rank scaling off.
+        /// </summary>
+        public float PerkRankBonusStep = 0.5f;
 
         /// <summary>Maximum number of simultaneously active Keystones.</summary>
         public int MaxActiveKeystones = 3;

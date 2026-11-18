@@ -48,9 +48,18 @@ namespace AIROG_SkillWeb
 
         // ── Usable ability grant (Keystone / Confluence nodes) ────────────────────
         public string abilityName;              // name of the granted ability; falls back to the node name
-        public string grantedAbilityUuid;      // stable uuid of the minted usable GameAbility
+        /// <summary>
+        /// Uuid of the ACTIVE PerkNode this node grants (Perks v2; the perk lives in the owner's
+        /// legacyPerks). STABLE: once assigned it is kept even while the perk does not exist
+        /// (node refunded, mod switched off), and the perk is re-created under the same uuid. That
+        /// way its cached art is found again, and an action the game replays after Undo/Retry
+        /// still resolves to it.
+        /// </summary>
+        public string grantedPerkUuid;
+        public string grantedPerkName;          // the name SkillWeb last gave that perk; lets a player's own rename be told apart
+        public string grantedAbilityUuid;       // pre-Perks-v2 saves only: uuid of the old GameAbility; moved to grantedPerkUuid on first sync
         public string grantedAbilityDesc;       // AI-generated ability flavor/rules text (cached)
-        public int abilityCooldownRemaining;    // persisted cooldown so it survives save/load
+        public int abilityCooldownRemaining;    // mirror of the perk's cooldown, used if the perk is removed and granted again
 
         // ── Runtime-only (rebuilt by SyncBonuses) ─────────────────────────────────
         /// <summary>Gate only: learned native perks feeding this Anchor Star, for the UI.</summary>
@@ -78,6 +87,7 @@ namespace AIROG_SkillWeb
         public string perkUuid;
         public string name;
         public bool active;
+        public int rank;
         public Dictionary<string, float> stats;
     }
 
@@ -134,6 +144,22 @@ namespace AIROG_SkillWeb
         public int turnsSurvived;
         public Dictionary<string, long> economyLedger = new Dictionary<string, long>();
         public Dictionary<string, PerkBonus> perkBonuses = new Dictionary<string, PerkBonus>();
+        /// <summary>
+        /// Uuid of every native PerkNode SkillWeb has EVER granted in this save. Entries are never
+        /// removed, on purpose. The game saves perks itself and rolls them back on Undo/Retry (and
+        /// on a crash before the next game save), but this file is not rolled back with it - so a
+        /// perk SkillWeb took away can reappear in the character's perk list with nothing here
+        /// pointing at it. Any legacy perk whose uuid is in this list and that no allocated node
+        /// currently claims is SkillWeb's and gets taken back on the next sync. Without the list,
+        /// "refund, then Undo" was a permanent free ability plus the refunded Resonance.
+        /// </summary>
+        public List<string> everGrantedPerkUuids = new List<string>();
+
+        /// <summary>
+        /// True when this web's icons live in icons\&lt;layoutSeed&gt;\ only. False for webs made
+        /// before that layout existed, whose icons sit directly in icons\ and are still read from there.
+        /// </summary>
+        public bool iconsPerWeb;
 
         [JsonIgnore]
         public Dictionary<SS.PlayerAttribute, float> CachedStats = new Dictionary<SS.PlayerAttribute, float>();
@@ -157,6 +183,16 @@ namespace AIROG_SkillWeb
                         if (data.sectors == null) data.sectors = new List<WebSector>();
                         if (data.economyLedger == null) data.economyLedger = new Dictionary<string, long>();
                         if (data.perkBonuses == null) data.perkBonuses = new Dictionary<string, PerkBonus>();
+                        if (data.everGrantedPerkUuids == null) data.everGrantedPerkUuids = new List<string>();
+                        // A hand-edited or truncated file can leave holes; every loop over nodes assumes none.
+                        data.nodes.RemoveAll(n => n == null);
+                        data.sectors.RemoveAll(s => s == null);
+                        foreach (var n in data.nodes)
+                        {
+                            if (n.edges == null) n.edges = new List<string>();
+                            if (n.stats == null) n.stats = new Dictionary<string, float>();
+                            if (n.traits == null) n.traits = new List<string>();
+                        }
                         foreach (var s in data.sectors)
                             if (s.perkTreeUuids == null) s.perkTreeUuids = new List<string>();
 

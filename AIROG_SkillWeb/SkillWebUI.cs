@@ -161,6 +161,7 @@ namespace AIROG_SkillWeb
             ClearPending();
             _selected = null;
             _hovered = null;
+            _armed = ArmedAction.None;
             _pathPreview.Clear();
             if (_window != null) _window.SetActive(false);
             if (_cardCanvas != null) _cardCanvas.gameObject.SetActive(false);
@@ -834,10 +835,18 @@ namespace AIROG_SkillWeb
             var mouse = Mouse.current;
             var kb = Keyboard.current;
 
+            // An armed Refund/Regenerate button quietly disarms if the second click never comes.
+            if (_armed != ArmedAction.None && Time.realtimeSinceStartup > _armedUntil)
+            {
+                _armed = ArmedAction.None;
+                if (_data != null) RefreshSidebar();
+            }
+
             if (kb != null && !(_search != null && _search.isFocused))
             {
                 if (kb.escapeKey.wasPressedThisFrame)
                 {
+                    SkillWebPatches.EscConsumedFrame = Time.frameCount;
                     if (_selected != null) { _selected = null; RebuildCard(); RestyleAll(); }
                     else { Close(); return; }
                 }
@@ -1254,7 +1263,7 @@ namespace AIROG_SkillWeb
 
         void RefreshHeader()
         {
-            int level = _manager?.playerCharacter?.playerLevel ?? 1;
+            int level = SkillWebPlugin.OwnerLevel(); // not PlayerCharacter.playerLevel: that legacy field is never updated
             int allocated = _data.nodes.Count(n => n.unlocked && n.ring > 0);
             _subtitle.text = $"Level {level}  ·  {allocated} of {_data.nodes.Count - 1 - _data.sectors.Count} nodes allocated";
             _resonanceText.text = Available.ToString();
@@ -1343,6 +1352,74 @@ namespace AIROG_SkillWeb
             if (other != 0) LedgerRow(ledger, "Other deeds", "+" + other);
             int spent = _data.nodes.Where(n => n.unlocked && n.ring > 0).Sum(n => WebGraph.TotalSpent(n));
             LedgerRow(ledger, "Spent on the web", "-" + spent);
+
+            // MANAGE
+            // Both actions need a second click: they are placed inline (a game modal would open
+            // BEHIND this window, whose canvas sorts above the game's) and one of them is not undoable.
+            var manage = Section("MANAGE THE WEB");
+            int invested = SkillWebPlugin.Instance.TotalInvested();
+            Para(manage, "Both return every point of Resonance you have spent, Keystones included.", CTextDim);
+
+            bool refundArmed = _armed == ArmedAction.RefundAll;
+            var refundBtn = NewButton("RefundAll", manage,
+                refundArmed ? $"Click again to refund {invested} Resonance" : "Refund everything",
+                refundArmed ? ButtonStyle.Cyan : ButtonStyle.Ghost, 13);
+            Pref(refundBtn.gameObject, -1, 40);
+            SetEnabled(refundBtn, invested > 0);
+            refundBtn.onClick.AddListener(() => OnManageClicked(ArmedAction.RefundAll));
+
+            bool regenArmed = _armed == ArmedAction.Regenerate;
+            var regenBtn = NewButton("Regenerate", manage,
+                regenArmed ? "Click again: this web will be replaced" : "Regenerate the web",
+                regenArmed ? ButtonStyle.Cyan : ButtonStyle.Ghost, 13);
+            Pref(regenBtn.gameObject, -1, 40);
+            regenBtn.onClick.AddListener(() => OnManageClicked(ArmedAction.Regenerate));
+
+            Para(manage, "Regenerating builds a brand-new web from a new seed, using the size and sector settings in " +
+                         "SkillWebConfig.json. Your earned Resonance and native perks carry over; the old web is kept as " +
+                         "SkillWeb.json.regen.bak in the save folder.", CTextDim);
+        }
+
+        enum ArmedAction { None, RefundAll, Regenerate }
+        ArmedAction _armed = ArmedAction.None;
+        float _armedUntil;
+        const float ArmSeconds = 5f;
+
+        void OnManageClicked(ArmedAction action)
+        {
+            if (_armed != action || Time.realtimeSinceStartup > _armedUntil)
+            {
+                _armed = action;
+                _armedUntil = Time.realtimeSinceStartup + ArmSeconds;
+                RefreshSidebar();
+                return;
+            }
+
+            _armed = ArmedAction.None;
+            var plugin = SkillWebPlugin.Instance;
+            if (action == ArmedAction.RefundAll)
+            {
+                int refunded = plugin.RefundEverything();
+                ClearPending();
+                _selected = null;
+                Toast(refunded >= 0 ? $"Every node refunded. {refunded} Resonance returned." : "Could not refund the web.");
+            }
+            else
+            {
+                int refunded = plugin.RegenerateWeb();
+                if (refunded >= 0)
+                {
+                    OnWebReplaced();
+                    _data = plugin.Data;
+                    Refresh();
+                    Canvas.ForceUpdateCanvases();
+                    FrameCharted();
+                    Toast($"A new web has been generated. {refunded} Resonance returned.");
+                    return;
+                }
+                Toast("Could not regenerate the web. Nothing was changed.");
+            }
+            Refresh();
         }
 
         RectTransform Section(string title)
@@ -1821,10 +1898,17 @@ namespace AIROG_SkillWeb
             if (_iconCache.TryGetValue(node.id, out Sprite cached) && cached != null) return cached;
             if (_iconMissUntil.TryGetValue(node.id, out float until) && Time.realtimeSinceStartup < until) return null;
 
-            string path = NodeIconGen.GetIconPath(node);
-            if (!File.Exists(path))
+            string path = NodeIconGen.FindIconFile(node);
+            if (path == null)
             {
                 _iconMissUntil[node.id] = Time.realtimeSinceStartup + 10f; // re-check later: a gen may be in flight
+                return null;
+            }
+            if (path.EndsWith(".webp", StringComparison.OrdinalIgnoreCase))
+            {
+                // The game's own image backends save .webp, which Unity's LoadImage cannot read.
+                // Decode it with the game's decoder (async); the node restyles when it is ready.
+                if (_webpDecoding.Add(node.id)) _ = DecodeWebpIconAsync(node, path);
                 return null;
             }
             var tex = new Texture2D(2, 2);
@@ -1833,6 +1917,58 @@ namespace AIROG_SkillWeb
             var sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
             _iconCache[node.id] = sprite;
             return sprite;
+        }
+
+        readonly HashSet<string> _webpDecoding = new HashSet<string>();
+
+        async System.Threading.Tasks.Task DecodeWebpIconAsync(WebNode node, string path)
+        {
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                // nonReadable: false - KnockOutBackground reads the pixels back.
+                Texture2D tex = await WebpUtils.DecodeToTextureAsync(bytes, nonReadable: false);
+                if (tex == null) return;
+                if (this == null) { Destroy(tex); return; } // window destroyed while decoding: nobody else will free it
+
+                // The web can be regenerated mid-decode; ids are reused, so make sure this is still that node.
+                if (_data == null || !ReferenceEquals(_data.GetNode(node.id), node)) { Destroy(tex); return; }
+
+                KnockOutBackground(tex);
+                _iconCache[node.id] = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+                if (IsOpen && _widgets.TryGetValue(node.id, out var w) && ReferenceEquals(w.node, node)) StyleNode(w);
+            }
+            catch (Exception ex)
+            {
+                // Undecodable file: stop retrying every frame, look again in five minutes.
+                Debug.LogWarning($"[SkillWeb] Could not decode icon for '{node.name}': {ex.Message}");
+                _iconMissUntil[node.id] = Time.realtimeSinceStartup + 300f;
+            }
+            finally
+            {
+                _webpDecoding.Remove(node.id);
+            }
+        }
+
+        /// <summary>
+        /// The web behind this window was replaced in place (regenerated): same data object, new
+        /// nodes that reuse the old ids. Forget everything keyed by node id and rebuild on the next Refresh.
+        /// </summary>
+        public void OnWebReplaced()
+        {
+            ClearPending();
+            _selected = null;
+            _hovered = null;
+            _pathPreview.Clear();
+            foreach (var s in _iconCache.Values)
+            {
+                if (s == null) continue;
+                if (s.texture != null) Destroy(s.texture);
+                Destroy(s);
+            }
+            _iconCache.Clear();
+            _iconMissUntil.Clear();
+            _builtFor = null; // forces BuildWeb on the next Refresh/Show
         }
 
         /// <summary>

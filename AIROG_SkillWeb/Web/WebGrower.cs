@@ -33,6 +33,9 @@ namespace AIROG_SkillWeb
             data.nodes.Clear();
             data.sectors.Clear();
             data.InvalidateIndex();
+            // A web built from here on keeps its icons in its own seed folder (see NodeIconGen).
+            // Safe to set for a first-time web as well: it has no icons anywhere yet.
+            data.iconsPerWeb = true;
 
             int treeCount = nativeTrees?.Count ?? 0;
             int count = Mathf.Clamp(Math.Max(treeCount, config.SectorsAtStart), 3, 8);
@@ -171,6 +174,16 @@ namespace AIROG_SkillWeb
                     EnqueueRefinement(sector.id, r);
         }
 
+        /// <summary>
+        /// Drops queued (sector, ring) refinements. They are keyed by sector id only, so after a
+        /// different save loads or the web is regenerated they would point at whatever sector
+        /// happens to reuse that id.
+        /// </summary>
+        public static void ClearRefinementQueue()
+        {
+            lock (_refinementQueue) _refinementQueue.Clear();
+        }
+
         public static void EnqueueRefinement(string sectorId, int ring)
         {
             lock (_refinementQueue)
@@ -186,10 +199,21 @@ namespace AIROG_SkillWeb
         private static async Task ProcessRefinementQueueAsync()
         {
             _batchQueueRunning = true;
+            int failedInARow = 0;
             try
             {
                 while (true)
                 {
+                    // Unfinished rings are re-queued on every load, so a backend that is down or
+                    // returning rubbish must not be sent the whole web again each time: after two
+                    // failed requests in a row, give up until the next session.
+                    if (failedInARow >= 2)
+                    {
+                        Debug.LogWarning("[SkillWeb] AI refinement is failing; the remaining rings keep their generated text for now.");
+                        ClearRefinementQueue();
+                        break;
+                    }
+
                     (string sectorId, int ring) target;
                     lock (_refinementQueue)
                     {
@@ -215,10 +239,18 @@ namespace AIROG_SkillWeb
                         Debug.Log($"[SkillWeb] AI refining {sector.name} ring {target.ring} ({batch.Count} nodes)...");
 
                         var infos = await NodeGenAI.RefineBatchAsync(manager, data, sector, target.ring, batch);
-                        if (infos == null || infos.Count == 0) continue;
+                        if (infos == null || infos.Count == 0)
+                        {
+                            if (++failedInARow >= 2) break;
+                            continue;
+                        }
+                        failedInARow = 0;
 
                         // The player may have loaded another save while the request was in flight.
                         if (!ReferenceEquals(plugin.Data, data)) break;
+                        // ...or regenerated this one: same data object, brand-new nodes that reuse
+                        // the old ids. Writing the reply onto them would mislabel the new web.
+                        if (batch.Exists(b => data.GetNode(b.id) != b)) break;
 
                         foreach (var info in infos)
                         {
