@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Console test harness for the pure schedule logic. Not part of the shipped plugin:
+    it compiles ..\Logic\*.cs by link and references nothing from Unity or the game.
+
+    Run it from the repo root with "dotnet run" and this file as the project
+    (the exact command is at the top of Program.cs; a double hyphen cannot be
+    written inside an XML comment). The exit code is the number of failed checks.
+
+    It builds an .exe, not a DLL, so tools\patch-audit.ps1 finds nothing of this
+    name to audit.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>SchedulesLogicTests</AssemblyName>
+    <RootNamespace>AIROG_Schedules.Tests</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\Logic\*.cs" Link="Logic\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>
