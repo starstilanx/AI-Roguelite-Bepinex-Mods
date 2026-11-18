@@ -21,6 +21,7 @@ namespace AIROG_NanoBanana
         public static void Prefix(MainMenu __instance)
         {
             NanoBananaPlugin._optionsOpenInProgress = true;
+            Patch_OnImageGenerationDropdownChanged.CaptureOriginals(__instance);
             bool isGemini = PlayerPrefs.GetInt("PREF_KEY_NANO_BANANA_ACTIVE", 0) == 1
                          || SS.I.imageGenerationMode == (SS.ImageGenerationMode)99;
             NanoBananaPlugin.Log.LogInfo($"[NanoBanana] Options Prefix: isGemini={isGemini}, mode={SS.I.imageGenerationMode}, activeFlag={PlayerPrefs.GetInt("PREF_KEY_NANO_BANANA_ACTIVE",0)}");
@@ -68,6 +69,10 @@ namespace AIROG_NanoBanana
     {
         public static void Postfix(MainMenu __instance)
         {
+            // Harmony postfixes are skipped when the original (or an earlier postfix) throws, so
+            // a fault inside Options() would strand this guard and mute our dropdown handler.
+            NanoBananaPlugin._optionsOpenInProgress = false;
+
             // Guard: dropdown may be null if SaveCurrentPrefs is called outside the Options screen
             if (__instance == null || __instance.imageGenerationDropdown == null) return;
 
@@ -81,7 +86,7 @@ namespace AIROG_NanoBanana
                 var keyInputField = __instance.customerKeySlotForImgGen?.inputField;
                 if (keyInputField == null || __instance.imgGenPresetDropdown == null) return;
 
-                string val = keyInputField.text;
+                string val = (keyInputField.text ?? "").Trim();
                 PlayerPrefs.SetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, val);
 
                 int presetInd = __instance.imgGenPresetDropdown.value;
@@ -129,11 +134,59 @@ namespace AIROG_NanoBanana
     {
         private static string _originalKeyLabel = null;
         private static string _originalPlaceholder = null;
-        private static bool _hidWomboStyle = false;
-        private static bool _hidNaiModel = false;
-        private static bool _hidStableHordeKey = false;
         private static bool _hidSubStatusRow = false;
-        private static bool _hidAirlImgGenStyle = false;
+        private static bool _tookOverKeyRow = false;
+        private static MainMenu _capturedFor = null;
+
+        /// <summary>
+        /// Records the shared key row's stock label and placeholder once per MainMenu, from the
+        /// Options prefix, i.e. before any backend has relabelled it. Capturing lazily at
+        /// takeover time picked up another custom backend's label when switching straight from
+        /// OpenAI/Vertex to Gemini, and later "restored" that onto the subscription key box.
+        /// </summary>
+        internal static void CaptureOriginals(MainMenu menu)
+        {
+            try
+            {
+                if (menu == null || _capturedFor == menu) return;
+                _capturedFor = menu;
+                _hidSubStatusRow = false;
+                _tookOverKeyRow = false;
+
+                var slot = menu.customerKeySlotForImgGen;
+                if (slot == null) return;
+                _originalKeyLabel = FindKeyLabel(slot)?.text;
+                _originalPlaceholder = (slot.inputField?.placeholder as TMP_Text)?.text;
+            }
+            catch (System.Exception ex)
+            {
+                NanoBananaPlugin.Log.LogError($"[NanoBanana] CaptureOriginals failed: {ex.Message}");
+            }
+        }
+
+        private static TMP_Text FindKeyLabel(CustomerKeySlot slot)
+        {
+            Transform inputFieldTf = slot.inputField != null ? slot.inputField.transform : null;
+            return slot.transform
+                .GetComponentsInChildren<TMP_Text>(true)
+                .FirstOrDefault(t =>
+                    (inputFieldTf == null || !t.transform.IsChildOf(inputFieldTf)) &&
+                    t != slot.subStatusTxt);
+        }
+
+        /// <summary>
+        /// Puts a stock text back: the captured copy first, then, where the label is driven by
+        /// a LocalizeStringEvent, a re-localise on top (the captured copy may predate
+        /// localisation or a language change).
+        /// </summary>
+        private static void RestoreText(TMP_Text txt, string captured)
+        {
+            if (txt == null) return;
+            if (captured != null) txt.text = captured;
+            MonoBehaviour localizer = txt.GetComponents<MonoBehaviour>()
+                .FirstOrDefault(c => c != null && c.GetType().Name == "LocalizeStringEvent");
+            localizer?.GetType().GetMethod("RefreshString", System.Type.EmptyTypes)?.Invoke(localizer, null);
+        }
 
         public static void ApplyUiState(MainMenu __instance)
         {
@@ -179,12 +232,11 @@ namespace AIROG_NanoBanana
                         }
                     }
 
-                    // Hide AIRL/Obsidian-only image style dropdown (activated by SAPPHIRE init path)
-                    if (__instance.airlImgGenStyleTrans != null && __instance.airlImgGenStyleTrans.gameObject.activeSelf && !_hidAirlImgGenStyle)
-                    {
+                    // Hide AIRL/Obsidian-only image style dropdown (activated by SAPPHIRE init path).
+                    // Unconditional: Options() re-shows it on every open, so a "hidden once" flag
+                    // left it visible from the second open on.
+                    if (__instance.airlImgGenStyleTrans != null)
                         __instance.airlImgGenStyleTrans.gameObject.SetActive(false);
-                        _hidAirlImgGenStyle = true;
-                    }
 
                     // Update placeholder and load our key
                     var geminiInputField = __instance.customerKeySlotForImgGen?.inputField;
@@ -193,7 +245,6 @@ namespace AIROG_NanoBanana
                         var placeholder = geminiInputField.placeholder as TMP_Text;
                         if (placeholder != null)
                         {
-                            if (_originalPlaceholder == null) _originalPlaceholder = placeholder.text;
                             placeholder.text = "Enter your Gemini API Key";
                         }
                         string currentKey = PlayerPrefs.GetString(NanoBananaPlugin.PREF_KEY_GEMINI_API_KEY, "");
@@ -203,24 +254,18 @@ namespace AIROG_NanoBanana
                     // Change the row label from "Customer key" to "Gemini API Key".
                     if (__instance.customerKeySlotForImgGen != null)
                     {
-                        var slot = __instance.customerKeySlotForImgGen;
-                        Transform inputFieldTf = slot.inputField != null ? slot.inputField.transform : null;
-                        TMP_Text labelComponent = slot.transform
-                            .GetComponentsInChildren<TMP_Text>(true)
-                            .FirstOrDefault(t =>
-                                (inputFieldTf == null || !t.transform.IsChildOf(inputFieldTf)) &&
-                                t != slot.subStatusTxt);
+                        TMP_Text labelComponent = FindKeyLabel(__instance.customerKeySlotForImgGen);
                         if (labelComponent != null)
                         {
-                            if (_originalKeyLabel == null) _originalKeyLabel = labelComponent.text;
                             labelComponent.text = "Gemini API Key";
                         }
+                        _tookOverKeyRow = true;
                     }
 
                     // Hide irrelevant elements
-                    if (__instance.womboStyleHolder != null && __instance.womboStyleHolder.gameObject.activeSelf) { __instance.womboStyleHolder.gameObject.SetActive(false); _hidWomboStyle = true; }
-                    if (__instance.naiModelTransform != null && __instance.naiModelTransform.gameObject.activeSelf) { __instance.naiModelTransform.gameObject.SetActive(false); _hidNaiModel = true; }
-                    if (__instance.stableHordeKeyTransform != null && __instance.stableHordeKeyTransform.gameObject.activeSelf) { __instance.stableHordeKeyTransform.gameObject.SetActive(false); _hidStableHordeKey = true; }
+                    if (__instance.womboStyleHolder != null) __instance.womboStyleHolder.gameObject.SetActive(false);
+                    if (__instance.naiModelTransform != null) __instance.naiModelTransform.gameObject.SetActive(false);
+                    if (__instance.stableHordeKeyTransform != null) __instance.stableHordeKeyTransform.gameObject.SetActive(false);
 
                     // Show standard elements
                     if (__instance.imgGenTweakHolder != null) __instance.imgGenTweakHolder.gameObject.SetActive(true);
@@ -239,73 +284,58 @@ namespace AIROG_NanoBanana
                 }
                 else
                 {
-                    // Restore subscription status row
-                    if (_hidSubStatusRow && __instance.customerKeySlotForImgGen?.subStatusTxt != null)
-                    {
-                        var subStatus = __instance.customerKeySlotForImgGen.subStatusTxt;
-                        Transform rowParent = subStatus.transform.parent;
-                        bool inSubRow = rowParent != null && rowParent != __instance.customerKeySlotForImgGen.transform;
-                        (inSubRow ? rowParent.gameObject : subStatus.gameObject).SetActive(true);
-                        _hidSubStatusRow = false;
+                    // Resolved through the game's (patched) mapper, so another mod's row answers for itself.
+                    var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    SS.ImageGenerationMode selectedMode = method != null
+                        ? (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind })
+                        : SS.ImageGenerationMode.DISABLED;
 
-                        if (!inSubRow)
+                    if (_tookOverKeyRow)
+                    {
+                        _tookOverKeyRow = false;
+
+                        // A custom mode from another mod (OpenAI 97, Vertex 98) owns the shared key
+                        // row now and relabels and refills it in its own postfix, which may run
+                        // before or after this one; undoing ours would put the stock label over
+                        // its key box.
+                        bool otherCustomBackend = !System.Enum.IsDefined(typeof(SS.ImageGenerationMode), selectedMode);
+                        var slot = __instance.customerKeySlotForImgGen;
+                        if (!otherCustomBackend && slot != null)
                         {
-                            foreach (Transform child in __instance.customerKeySlotForImgGen.transform)
+                            // Restore subscription status row
+                            if (_hidSubStatusRow && slot.subStatusTxt != null)
                             {
-                                var t = child.GetComponent<TMP_Text>();
-                                if (t != null && t != subStatus && t.text.ToLower().Contains("subscription"))
+                                var subStatus = slot.subStatusTxt;
+                                Transform rowParent = subStatus.transform.parent;
+                                bool inSubRow = rowParent != null && rowParent != slot.transform;
+                                (inSubRow ? rowParent.gameObject : subStatus.gameObject).SetActive(true);
+
+                                if (!inSubRow)
                                 {
-                                    t.gameObject.SetActive(true);
-                                    break;
+                                    foreach (Transform child in slot.transform)
+                                    {
+                                        var t = child.GetComponent<TMP_Text>();
+                                        if (t != null && t != subStatus && t.text.ToLower().Contains("subscription"))
+                                        {
+                                            t.gameObject.SetActive(true);
+                                            break;
+                                        }
+                                    }
                                 }
                             }
+
+                            RestoreText(slot.inputField?.placeholder as TMP_Text, _originalPlaceholder);
+                            RestoreText(FindKeyLabel(slot), _originalKeyLabel);
                         }
+                        _hidSubStatusRow = false;
                     }
 
-                    // Restore AIRL image style dropdown
-                    if (_hidAirlImgGenStyle && __instance.airlImgGenStyleTrans != null)
-                    {
-                        __instance.airlImgGenStyleTrans.gameObject.SetActive(true);
-                        _hidAirlImgGenStyle = false;
-                    }
-
-                    // Restore placeholder
-                    if (_originalPlaceholder != null && __instance.customerKeySlotForImgGen?.inputField?.placeholder is TMP_Text ph)
-                    {
-                        ph.text = _originalPlaceholder;
-                        _originalPlaceholder = null;
-                    }
-
-                    // Restore label
-                    if (_originalKeyLabel != null && __instance.customerKeySlotForImgGen != null)
-                    {
-                        var slot = __instance.customerKeySlotForImgGen;
-                        Transform inputFieldTf = slot.inputField != null ? slot.inputField.transform : null;
-                        TMP_Text labelComponent = slot.transform
-                            .GetComponentsInChildren<TMP_Text>(true)
-                            .FirstOrDefault(t =>
-                                (inputFieldTf == null || !t.transform.IsChildOf(inputFieldTf)) &&
-                                t != slot.subStatusTxt);
-                        if (labelComponent != null)
-                        {
-                            labelComponent.text = _originalKeyLabel;
-                            _originalKeyLabel = null;
-                        }
-                    }
-
-                    // Restore visibility of elements we previously hid
-                    if (_hidWomboStyle && __instance.womboStyleHolder != null) { __instance.womboStyleHolder.gameObject.SetActive(true); _hidWomboStyle = false; }
-                    if (_hidNaiModel && __instance.naiModelTransform != null) { __instance.naiModelTransform.gameObject.SetActive(true); _hidNaiModel = false; }
-                    if (_hidStableHordeKey && __instance.stableHordeKeyTransform != null) { __instance.stableHordeKeyTransform.gameObject.SetActive(true); _hidStableHordeKey = false; }
+                    // Row visibility is not restored here: the game's own handler has already set
+                    // every row for the new mode before this postfix runs.
 
                     // Restore original customer key value if switching back to SAPPHIRE
-                    var method = __instance.GetType().GetMethod("GetImageGenerationModeByDropdownInd", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (method != null)
-                    {
-                        SS.ImageGenerationMode selectedMode = (SS.ImageGenerationMode)method.Invoke(__instance, new object[] { ind });
-                        if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeySlotForImgGen?.inputField != null)
-                            __instance.customerKeySlotForImgGen.inputField.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
-                    }
+                    if (selectedMode == SS.ImageGenerationMode.SAPPHIRE && __instance.customerKeySlotForImgGen?.inputField != null)
+                        __instance.customerKeySlotForImgGen.inputField.SetTextWithoutNotify(PlayerPrefs.GetString("PREF_KEY_CUSTOMER_KEY2"));
                 }
             }
             catch (System.Exception ex)
@@ -488,33 +518,79 @@ namespace AIROG_NanoBanana
         [HarmonyPrefix]
         public static bool Prefix(string s, MainMenu __instance)
         {
-            // Detect if Gemini is active in the dropdown
-            int ind = __instance.imageGenerationDropdown.value;
-            bool isGemini = ind >= 0 && ind < __instance.imageGenerationDropdown.options.Count &&
-                            __instance.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
+            if (!GeminiSelection.IsSelected(__instance)) return true;
 
-            if (isGemini)
+            // A subscription key typed into one of the other boxes (edits to the Gemini box are
+            // stopped in Patch_CustomerKeySlot_OnTxtInputChanged and never get here). The
+            // original mirrors it into every box, which would overwrite the Gemini key; mirror
+            // it into every box but ours instead.
+            if (__instance.customerKeySlots != null)
             {
-                // Decouple ImgGen box (Gemini) from Text/Audio (Sapphire)
-                GameObject selected = EventSystem.current?.currentSelectedGameObject;
-                var imgKeyField = __instance.customerKeySlotForImgGen?.inputField;
-                if (imgKeyField != null && selected != null && selected == imgKeyField.gameObject)
+                foreach (CustomerKeySlot slot in __instance.customerKeySlots)
                 {
-                    // User is typing in THE GEMINI BOX.
-                    // We DO NOT want to sync this to Sapphire fields.
-                    return false;
+                    if (slot != null && slot != __instance.customerKeySlotForImgGen && slot.inputField != null)
+                        slot.inputField.SetTextWithoutNotify(s);
                 }
-
-                // User is typing in one of the SAPPHIRE boxes (Text or Audio).
-                // We sync them to each other, but NOT to the Gemini box.
-                if (__instance.customerKeyTxtInput != null && __instance.customerKeyTxtInput.gameObject == selected)
-                    __instance.customerKeyTxtInputForAudioGen.SetTextWithoutNotify(s);
-                if (__instance.customerKeyTxtInputForAudioGen != null && __instance.customerKeyTxtInputForAudioGen.gameObject == selected)
-                    __instance.customerKeyTxtInput.SetTextWithoutNotify(s);
-
-                return false; // Skip original method to avoid touching customerKeyTxtInputForImgGen
             }
-            return true; // Use default behavior for other modes
+            return false;
+        }
+    }
+
+    internal static class GeminiSelection
+    {
+        public static bool IsSelected(MainMenu menu)
+        {
+            if (menu == null || menu.imageGenerationDropdown == null) return false;
+            int ind = menu.imageGenerationDropdown.value;
+            return ind >= 0 && ind < menu.imageGenerationDropdown.options.Count &&
+                   menu.imageGenerationDropdown.options[ind].text == "Gemini (Nano Banana)";
+        }
+
+        /// <summary>True for the image-gen key box while it is holding the Gemini key.</summary>
+        public static bool OwnsSlot(CustomerKeySlot slot)
+        {
+            if (slot == null) return false;
+            MainMenu menu = slot.menu != null ? slot.menu : SS.I?.hackyMenu;
+            return menu != null && slot == menu.customerKeySlotForImgGen && IsSelected(menu);
+        }
+    }
+
+    // The image-gen key box is a CustomerKeySlot whose inspector-wired callbacks treat its text
+    // as the AI Roguelite subscription key. While it holds the Gemini key both must be stopped.
+
+    [HarmonyPatch(typeof(CustomerKeySlot), "OnTxtInputChanged")]
+    public static class Patch_CustomerKeySlot_OnTxtInputChanged
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(CustomerKeySlot __instance)
+        {
+            // Would copy the Gemini key into the text/video/audio/TTS subscription key boxes.
+            return !GeminiSelection.OwnsSlot(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(CustomerKeySlot), "OnEndEdit")]
+    public static class Patch_CustomerKeySlot_OnEndEdit
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(CustomerKeySlot __instance)
+        {
+            // Would set SS.I.customerKey to the Gemini key and re-check the subscription with
+            // it, i.e. send the Gemini key to the game's own servers as a customer key.
+            return !GeminiSelection.OwnsSlot(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(MainMenu), "OnImageGenTextFieldChanged")]
+    public static class Patch_OnImageGenTextFieldChanged
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(MainMenu __instance)
+        {
+            // The original re-selects the settings preset matching the prompt boxes, falling
+            // back to the last entry ("Custom"). Our preset dropdown lists models, so editing
+            // any prompt box silently switched the model to the last one (the 4K preset).
+            return !GeminiSelection.IsSelected(__instance);
         }
     }
 }

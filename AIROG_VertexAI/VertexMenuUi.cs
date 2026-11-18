@@ -25,6 +25,17 @@ namespace AIROG_VertexAI
             clone.name = name;
             clone.transform.SetSiblingIndex(template.GetSiblingIndex() + 1);
 
+            // The game's setting labels carry a LocalizeStringEvent that rewrites the text with
+            // the template's own caption whenever the row is enabled, and (since the 11/18
+            // build) a SettingHint with the template's tooltip. Neither belongs on our row.
+            foreach (MonoBehaviour behaviour in clone.GetComponentsInChildren<MonoBehaviour>(true))
+            {
+                if (behaviour == null) continue;
+                string typeName = behaviour.GetType().Name;
+                if (typeName == "LocalizeStringEvent" || typeName == "LocalizeDropdown" || typeName == "SettingHint")
+                    Object.DestroyImmediate(behaviour);
+            }
+
             foreach (TMP_InputField field in clone.GetComponentsInChildren<TMP_InputField>(true))
             {
                 DisablePersistentListeners(field.onValueChanged);

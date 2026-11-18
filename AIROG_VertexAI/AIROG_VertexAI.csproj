@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_VertexAI</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite adding Google Vertex AI (express mode) as a text-generation and image-generation backend.</Description>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>

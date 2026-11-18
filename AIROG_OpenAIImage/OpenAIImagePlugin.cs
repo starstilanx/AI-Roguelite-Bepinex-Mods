@@ -12,7 +12,7 @@ namespace AIROG_OpenAIImage
     /// live in OpenAIImageMenuPatches.cs (Options UI) and OpenAIImageGenerationPatches.cs
     /// (AIAsker interception); the HTTP call lives in OpenAIImageClient.cs.
     /// </summary>
-    [BepInPlugin("com.airog.openaiimage", "OpenAI Image", "2.0.0")]
+    [BepInPlugin("com.airog.openaiimage", "OpenAI Image", "2.0.1")]
     public class OpenAIImagePlugin : BaseUnityPlugin
     {
         public static OpenAIImagePlugin Instance;

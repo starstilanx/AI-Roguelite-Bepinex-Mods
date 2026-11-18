@@ -103,6 +103,10 @@ namespace AIROG_OpenAIImage
 
                 ModelFamily fam = FamilyOf(model);
 
+                // Resolved before the request, like the game's own clients: the save folder can
+                // change while the request is in flight (quit to menu, load another save).
+                string filePathNoExt = imgPathNoExtOverride ?? geArg.GetImgPathNoExt(imgGenInfo.imgType);
+
                 JObject body = new JObject
                 {
                     ["model"]  = model,
@@ -176,7 +180,7 @@ namespace AIROG_OpenAIImage
                     if (request.result != UnityWebRequest.Result.Success)
                     {
                         OpenAIImagePlugin.Log.LogError(
-                            $"OpenAIImage: API error ({request.responseCode}): {request.error}\n{Preview(request.downloadHandler.text)}");
+                            $"OpenAIImage: API error ({request.responseCode}): {request.error}\n{Preview(request.downloadHandler.text, apiKey)}");
                         return GameEntity.ImgGenState.REGULAR_FAILED;
                     }
 
@@ -203,11 +207,13 @@ namespace AIROG_OpenAIImage
                     if (imageBytes == null || imageBytes.Length == 0)
                     {
                         OpenAIImagePlugin.Log.LogError(
-                            $"OpenAIImage: no image data in response: {Preview(request.downloadHandler.text)}");
+                            $"OpenAIImage: no image data in response: {Preview(request.downloadHandler.text, apiKey)}");
                         return GameEntity.ImgGenState.REGULAR_FAILED;
                     }
 
-                    string filePathNoExt = imgPathNoExtOverride ?? geArg.GetImgPathNoExt(imgGenInfo.imgType);
+                    // The entity's save was unloaded while we waited; its folder is no longer ours to write to.
+                    if (Utils.GenTargetAbandoned(geArg)) return GameEntity.ImgGenState.REGULAR_FAILED;
+
                     string fullPath = filePathNoExt + ".png";
 
                     string dir = Path.GetDirectoryName(fullPath);
@@ -249,9 +255,11 @@ namespace AIROG_OpenAIImage
             }
         }
 
-        private static string Preview(string s)
+        /// <summary>Response text for the log. Some compatible servers echo the key back in their error body.</summary>
+        private static string Preview(string s, string apiKey)
         {
             if (string.IsNullOrEmpty(s)) return "(empty)";
+            if (!string.IsNullOrEmpty(apiKey) && apiKey.Length > 5) s = s.Replace(apiKey, "[redacted]");
             return s.Length > 800 ? s.Substring(0, 800) + "...[truncated]" : s;
         }
     }

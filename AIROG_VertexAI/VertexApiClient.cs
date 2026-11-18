@@ -26,14 +26,17 @@ namespace AIROG_VertexAI
 
         private static readonly object _gateLock = new object();
         private static SemaphoreSlim _gate;
+        private static SemaphoreSlim _imageGate;
         private static int _gateSize;
 
         /// <summary>
         /// Throttles concurrent Vertex calls. Background AI tasks can reach this from
         /// several threads at once, so the lazy init is locked — two threads racing here
         /// would otherwise each build a semaphore and neither would throttle the other.
+        /// Images queue separately from text: on one shared gate the player's turn waited
+        /// behind whichever image was generating, which can take the better part of a minute.
         /// </summary>
-        private static SemaphoreSlim Gate()
+        private static SemaphoreSlim Gate(bool image)
         {
             int want = Math.Max(1, VertexAIPlugin.Catalogue?.maxConcurrentRequests ?? 1);
             lock (_gateLock)
@@ -41,9 +44,10 @@ namespace AIROG_VertexAI
                 if (_gate == null || _gateSize != want)
                 {
                     _gate = new SemaphoreSlim(want, want);
+                    _imageGate = new SemaphoreSlim(want, want);
                     _gateSize = want;
                 }
-                return _gate;
+                return image ? _imageGate : _gate;
             }
         }
 
@@ -234,7 +238,7 @@ namespace AIROG_VertexAI
         /// HttpException (the game's own type, so existing error handling applies) on
         /// transport errors, non-2xx responses, and malformed JSON.
         /// </summary>
-        public static async Task<JObject> PostGenerateContent(string model, JObject body, CancellationToken ct)
+        public static async Task<JObject> PostGenerateContent(string model, JObject body, CancellationToken ct, bool imageRequest = false)
         {
             string apiKey = VertexAIPlugin.CachedApiKey;
             if (string.IsNullOrEmpty(apiKey))
@@ -245,7 +249,7 @@ namespace AIROG_VertexAI
 
             VertexAIPlugin.Log.LogInfo($"[VertexAI] POST {url} ({body.ToString(Newtonsoft.Json.Formatting.None).Length} bytes)");
 
-            SemaphoreSlim gate = Gate();
+            SemaphoreSlim gate = Gate(imageRequest);
             await gate.WaitAsync(ct);
             string respStr;
             try
@@ -280,7 +284,7 @@ namespace AIROG_VertexAI
                 throw new HttpException($"Vertex AI blocked the prompt (blockReason={blockReason}). " +
                                         "Try lowering safetyThreshold in airog_vertexai_models.json, or a different model.");
 
-            JToken candidate = response["candidates"]?[0];
+            JToken candidate = FirstCandidate(response);
             if (candidate == null)
                 throw new HttpException($"Vertex AI returned no candidates. Response: {Truncate(response.ToString(), 600)}");
 
@@ -319,7 +323,7 @@ namespace AIROG_VertexAI
                 return null;
             }
 
-            JToken parts = response["candidates"]?[0]?["content"]?["parts"];
+            JToken parts = FirstCandidate(response)?["content"]?["parts"];
             if (parts != null)
             {
                 foreach (JToken part in parts)
@@ -341,9 +345,19 @@ namespace AIROG_VertexAI
                 }
             }
 
-            string finishReason = response["candidates"]?[0]?["finishReason"]?.ToString() ?? "UNKNOWN";
+            string finishReason = FirstCandidate(response)?["finishReason"]?.ToString() ?? "UNKNOWN";
             failureReason = $"no image in response (finishReason={finishReason}): {Truncate(response.ToString(), 600)}";
             return null;
+        }
+
+        /// <summary>
+        /// candidates[0], or null. Indexing a JArray that came back empty throws rather than
+        /// returning null, which reached the player as a crash report instead of an error message.
+        /// </summary>
+        private static JToken FirstCandidate(JObject response)
+        {
+            JArray candidates = response["candidates"] as JArray;
+            return candidates != null && candidates.Count > 0 ? candidates[0] : null;
         }
 
         public static string Truncate(string s, int max)

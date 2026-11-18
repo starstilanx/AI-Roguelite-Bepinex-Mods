@@ -33,6 +33,10 @@ namespace AIROG_Sapi5
             {
                 Debug.Log($"[SAPI5] GenerateAndQueueTtsAsync called. turnTxt length: {turnTxt?.Length ?? -1}");
 
+                // Clients play the audio the host broadcasts (as the original does); generating
+                // here as well would speak every turn twice.
+                if (MpSession.IsClient) return;
+
                 List<TtsHelper.TtsSegment> segments = await TtsHelper.GenerateTtsSegments(manager, turnTxt);
                 Debug.Log($"[SAPI5] Extracted {segments.Count} tts segments.");
 
@@ -47,7 +51,9 @@ namespace AIROG_Sapi5
                 {
                     string voiceName = GetSapi5VoiceForRole(seg.role, manager);
                     Debug.Log($"[SAPI5] Speaking as {seg.role} with voice: {voiceName}");
-                    tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(seg.text, true), voiceName));
+                    // Newlines to spaces first, as the game does: KeepWordishChars drops them
+                    // outright, gluing the words on either side of a paragraph break together.
+                    tasks.Add(Sapi5Client.Instance.GenerateTts(Utils.KeepWordishChars(Utils.ReplaceNewlinesWSpaces(seg.text ?? ""), true), voiceName));
                 }
 
                 string[] uuids = await Task.WhenAll(tasks);
@@ -93,6 +99,10 @@ namespace AIROG_Sapi5
                     ? Sapi5Plugin.VoiceMale.Value
                     : Sapi5Plugin.VoiceFemale.Value;
             }
+
+            // Roles the game's TTS script uses for speakers who are not a known character.
+            if (role == "NEW_MALE") return Sapi5Plugin.VoiceMale.Value;
+            if (role == "NEW_FEMALE") return Sapi5Plugin.VoiceFemale.Value;
 
             TtsVoiceProfile profile = TtsHelper.FindCharacterByName(role, manager)?.ttsVoiceProfile;
             List<string> tags = profile?.tags;
