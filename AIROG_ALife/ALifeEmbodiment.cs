@@ -222,11 +222,46 @@ namespace AIROG_ALife
             }
         }
 
+        // ── Undo / Retry ─────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Undo and Retry roll the game back to a snapshot through LoadGame, but A-Life's own
+        /// state is not in that snapshot. The case that shows: the player arrives, a band
+        /// materializes, the player retries the turn. The bodies spawned on that arrival are
+        /// gone with the rollback while the record still says "embodied", and the retried
+        /// arrival then retired the band as "scattered, and never seen again". A band whose
+        /// every body was rolled away is simply virtual again and may be met (and announced)
+        /// afresh. Bands the player deleted by hand are still retired on arrival as before -
+        /// that happens during play, not across a rollback.
+        /// </summary>
+        public static void ReconcileRollback(GameplayManager manager)
+        {
+            if (manager == null || manager.currentPlace == null) return;
+            if (SS.I?.uuidToGameEntityMap == null || SS.I.uuidToGameEntityMap.Count == 0) return;
+
+            foreach (var squad in ALifeData.State.Squads)
+            {
+                if (!squad.IsEmbodied || squad.MemberUuids.Count == 0) continue;
+                if (squad.MemberUuids.Any(uuid => ResolveMember(uuid) != null)) continue;
+                squad.IsEmbodied = false;
+                squad.MemberUuids.Clear();
+                if (squad.Leader != null) squad.Leader.Uuid = null;
+                squad.LastAnnouncedTurn = -999; // the old notice was rolled out of the game log too
+            }
+
+            // The player is wherever the snapshot put them; don't "depart" a place they were
+            // rolled out of (that handed its bands the peaceful-visit bonus).
+            string top = manager.currentPlace.GetTopLvlPlace()?.uuid;
+            if (top != null) ALifeData.State.LastPlayerTopUuid = top;
+        }
+
         public static string SafePlayerName(GameplayManager manager)
         {
             try
             {
-                string n = manager?.playerCharacter?.name;
+                // Not playerCharacter.name: PlayerCharacter is a MonoBehaviour, so that is the scene
+                // object's name ("PlayerCharacter"), which bands then "remembered" as the player.
+                string n = manager?.playerCharacter?.GetPlayerNameWFallback();
                 return string.IsNullOrEmpty(n) ? "the stranger" : n;
             }
             catch { return "the stranger"; }

@@ -20,7 +20,7 @@ namespace AIROG_GrandStrategy
         private static void BuildPanel(MapModal modal)
         {
             ClearPanel(modal);
-            if (modal.mapViewTrans == null || modal.manager == null) return;
+            if (modal.mapViewTrans == null || modal.Manager() == null) return;
             TMP_FontAsset font = modal.voronoiWorldTitle != null ? modal.voronoiWorldTitle.font : null;
 
             GameObject panel = new GameObject(PANEL_NAME, typeof(RectTransform));
@@ -49,7 +49,7 @@ namespace AIROG_GrandStrategy
 
         private static void Populate(MapModal modal, GameObject panel, TMP_FontAsset font)
         {
-            GameplayManager manager = modal.manager;
+            GameplayManager manager = modal.Manager();
             var s = GrandStrategyData.State;
             Themes.EnsureTheme(s, manager); // legacy saves: pick a theme the first time the panel opens
             var L = GrandStrategyData.L;
@@ -65,7 +65,8 @@ namespace AIROG_GrandStrategy
                 AddButton(frow, font, "FOUND DOMINION HERE", () =>
                 {
                     string pname = null;
-                    try { pname = SS.I?.hackyManager?.playerCharacter?.name; } catch { }
+                    // Not playerCharacter.name (the scene object's name, since PlayerCharacter is a MonoBehaviour).
+                    try { pname = SS.I?.hackyManager?.playerCharacter?.GetPlayerNameWFallback(); } catch { }
                     string dname = string.IsNullOrWhiteSpace(pname) ? "New Dominion" : $"Dominion of {pname}";
                     _lastResult = DominionManager.FoundDominion(manager, dname);
                     Click(modal);

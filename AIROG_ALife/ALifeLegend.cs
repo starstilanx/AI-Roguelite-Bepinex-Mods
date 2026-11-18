@@ -36,6 +36,7 @@ namespace AIROG_ALife
                 try
                 {
                     if (ALifeEmbodiment.ApplyingOfflineCasualties) return;
+                    if (!ALifePlugin.SwitchedOn()) return;
                     OnRealDeath(__instance);
                 }
                 catch (Exception ex)

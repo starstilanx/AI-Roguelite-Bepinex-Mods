@@ -13,9 +13,13 @@ namespace AIROG_GrandStrategy
     {
         public const string PLUGIN_GUID = "com.airog.grandstrategy";
         public const string PLUGIN_NAME = "Grand Strategy";
-        public const string PLUGIN_VERSION = "0.6.0";
+        public const string PLUGIN_VERSION = "0.6.1";
 
         public static GrandStrategyPlugin Instance { get; private set; }
+
+        // Set from the mod-switch callbacks, which run inside whichever call raised them; the
+        // UI is re-synced from Update() instead, on the main thread and outside that call.
+        private static volatile bool _switchUiDirty;
 
         private void Awake()
         {
@@ -25,22 +29,57 @@ namespace AIROG_GrandStrategy
             Harmony.CreateAndPatchAll(typeof(GrandStrategyPlugin));
             Harmony.CreateAndPatchAll(typeof(DominionManager));
             Harmony.CreateAndPatchAll(typeof(DominionUI));
+
+            ModSwitch.Hook(() => _switchUiDirty = true);
+        }
+
+        private void Update()
+        {
+            if (!_switchUiDirty) return;
+            _switchUiDirty = false;
+            try
+            {
+                var manager = SS.I?.hackyManager;
+                if (manager != null) DominionUI.ApplyModSwitch(manager.mapModal);
+            }
+            catch (Exception e)
+            {
+                UnityEngine.Debug.LogWarning($"[GrandStrategy] Could not apply the mod switch to the UI: {e.Message}");
+            }
         }
 
         [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]
         [HarmonyPostfix]
-        public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+        // No injected args on purpose: SaveIO.WriteSaveFile's first parameter became MmCtxGetter in
+        // the 07/28 build, and a postfix that still declares it as GameplayManager is a type
+        // mismatch Harmony does not check (it shows up as invalid IL, not as a patch error).
+        public static void Postfix_WriteSaveFile()
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                GrandStrategyData.Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+            try
+            {
+                if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                    GrandStrategyData.Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+            }
+            catch (Exception e)
+            {
+                UnityEngine.Debug.LogError($"[GrandStrategy] Save hook failed: {e.Message}");
+            }
         }
 
         [HarmonyPatch(typeof(GameplayManager), "LoadGame")]
         [HarmonyPostfix]
         public static void Postfix_LoadGame(GameplayManager __instance)
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                GrandStrategyData.Load(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+            try
+            {
+                if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                    GrandStrategyData.Load(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+                DominionUI.ResetSessionState();
+            }
+            catch (Exception e)
+            {
+                UnityEngine.Debug.LogError($"[GrandStrategy] Load hook failed: {e.Message}");
+            }
         }
 
         [HarmonyPatch(typeof(MainMenu), "NewGame")]
@@ -48,6 +87,7 @@ namespace AIROG_GrandStrategy
         public static void Postfix_NewGame(MainMenu __instance)
         {
             GrandStrategyData.Reset();
+            DominionUI.ResetSessionState();
         }
 
         [HarmonyPatch(typeof(GameplayManager), "ProcessConsoleCommand")]

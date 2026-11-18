@@ -154,7 +154,11 @@ namespace AIROG_Mythic
             [HarmonyPostfix]
             public static void Postfix(GameCharacter __instance)
             {
-                try { OnDeath(__instance); }
+                try
+                {
+                    if (!MythicPlugin.SwitchedOn()) return;
+                    OnDeath(__instance);
+                }
                 catch (Exception ex) { Debug.LogWarning("[Mythic] Death tracking failed: " + ex.Message); }
             }
         }
@@ -167,7 +171,9 @@ namespace AIROG_Mythic
             if (playerTop == null) return;
 
             // Only witnessed deaths count: same top-level place as the player.
-            string chTop = ch.parentPlace?.GetTopLvlPlace()?.uuid;
+            // (Not ch.parentPlace: that legacy field is null on every character the current
+            // game creates, which made this check reject every death.)
+            string chTop = ch.parentInGameEnt?.ParentPl()?.GetTopLvlPlace()?.uuid;
             if (chTop != playerTop) return;
 
             var st = MythicData.State;

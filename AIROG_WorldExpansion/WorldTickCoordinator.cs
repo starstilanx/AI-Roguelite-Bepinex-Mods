@@ -102,8 +102,10 @@ namespace AIROG_WorldExpansion
                 {
                     var claimedByAnyone = new HashSet<string>(
                         WorldData.CurrentState.Factions.Values.SelectMany(f => f.ClaimedPlaceUuids));
+                    // Private dwellings (new in the 11/18 build - a home, a hideout) are not
+                    // territory a faction would plant its flag on behind the player's back
                     var unowned = topPlaces
-                        .Where(p => p != null && p.faction == null && !claimedByAnyone.Contains(p.uuid))
+                        .Where(p => p != null && p.faction == null && !p.isPrivateDwelling && !claimedByAnyone.Contains(p.uuid))
                         .ToList();
                     // First pick is random; the rest cluster around it so the faction
                     // starts with a contiguous homeland instead of scattered blotches

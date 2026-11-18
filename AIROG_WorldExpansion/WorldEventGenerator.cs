@@ -42,7 +42,12 @@ namespace AIROG_WorldExpansion
         {
             try
             {
+                var stateAtStart = WorldData.CurrentState;
                 string desc = await TryGenerateAIMajorEvent(manager);
+
+                // The AI call can outlive the save it was made for (exit to menu, load another
+                // save): don't write this world's event into a different one.
+                if (!ReferenceEquals(stateAtStart, WorldData.CurrentState)) return;
 
                 WorldData.LogEvent(desc, "MAJOR");
                 WorldData.CurrentState.MajorEventHistory.Add(desc);
@@ -56,6 +61,9 @@ namespace AIROG_WorldExpansion
                     new List<string> { "Major", "Global", WorldData.CurrentState.CurrentSeason });
 
                 WorldEventsUI.MarkDirty();
+                // This lands after the turn's own save; without it the event would not reach
+                // GenContext (which reads the file) until a full turn later.
+                WorldData.SaveToCurrentDir();
                 Debug.Log($"[WorldExpansion] Major Event logged: {desc}");
             }
             catch (Exception ex)
@@ -87,12 +95,22 @@ namespace AIROG_WorldExpansion
                     .Select(kv => $"{kv.Value.Name} [{kv.Value.Tag}]");
                 string factionsSummary = topFactions.Any() ? string.Join(", ", topFactions) : "unknown factions";
 
+                // The setting's own description is what tells the model the genre; without it
+                // (and with the word "fantasy" in the prompt) every world got plagues and mages.
+                string univDesc = "";
+                try
+                {
+                    univDesc = manager.GetCurrentUniverse()?.GetPotentiallyNullDescription() ?? "";
+                    if (univDesc.Length > 300) univDesc = univDesc.Substring(0, 300);
+                }
+                catch { }
+
                 string prompt =
-                    $"You are the narrator of a persistent fantasy world called \"{univName}\" ({worldName}). " +
+                    $"You are the narrator of a persistent world called \"{univName}\" ({worldName}). {univDesc}\n" +
                     $"Generate a single dramatic major world event (2-3 sentences) that is happening right now. " +
                     $"Season: {season}. Economy: {economy}. Active wars: {warsSummary}. " +
                     $"Major factions: {factionsSummary}. " +
-                    $"Make it feel organic and specific to this world's context. " +
+                    $"Make it feel organic and specific to this world's context, genre and technology level (never assume medieval fantasy). " +
                     $"Return only the event description text, nothing else.";
 
                 string raw = await AIAsker.GenerateTxtNoTryStrStyle(

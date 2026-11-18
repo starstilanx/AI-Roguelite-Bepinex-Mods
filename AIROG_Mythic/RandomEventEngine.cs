@@ -14,25 +14,64 @@ namespace AIROG_Mythic
     /// </summary>
     public static class RandomEventEngine
     {
+        /// <summary>
+        /// True while the turn being processed carries one of the game's own random events
+        /// (the native "suggested events" drawn into the story prompt on arrivals and
+        /// continue-without-input turns, new in the 11/18/2026 build). The director stands down
+        /// for that turn: its events are left out of that prompt, it does not roll at the end of
+        /// that turn, and an arrival is not scene-tested on top of a native arrival event.
+        /// </summary>
+        public static bool NativeEventThisTurn;
+
+        // The game assigns the draw the same way (interacterInfo.randomEventDraw = MaybeDraw(...)),
+        // at most once per single-player turn, before that turn's story prompt is built.
+        [HarmonyPatch(typeof(RandomEvents), nameof(RandomEvents.MaybeDraw))]
+        public static class Patch_NativeRandomEvent
+        {
+            [HarmonyPostfix]
+            public static void Postfix(RandomEvents.Draw __result)
+            {
+                NativeEventThisTurn = __result != null;
+            }
+        }
+
         [HarmonyPatch(typeof(GameplayManager), "InvokeTurnHappened")]
         public static class Patch_TurnHappened
         {
             [HarmonyPostfix]
             public static void Postfix(GameplayManager __instance, int numTurns, long secs)
             {
-                try { OnTurn(__instance, numTurns); }
+                bool nativeEvent = NativeEventThisTurn;
+                // Cleared by the player's own turn tick only: a 0-turn tick nested inside that turn
+                // (a death scene, a task result) must not end the stand-down early.
+                if (numTurns > 0) NativeEventThisTurn = false;
+                try
+                {
+                    if (!MythicPlugin.SwitchedOn()) return;
+                    OnTurn(__instance, numTurns, nativeEvent);
+                    // Written every tick, not only when the game saves: Undo/Retry go through
+                    // LoadGame, whose postfix re-reads this file. With the default autosave (on
+                    // location change) that file could be many turns old, so every retry rewound
+                    // the director and dropped any ruling or event queued since.
+                    if (numTurns > 0) MythicData.SaveToCurrentDir();
+                }
                 catch (Exception ex) { Debug.LogError("[Mythic] Turn tick failed: " + ex); }
             }
         }
 
-        public static void OnTurn(GameplayManager manager, int numTurns)
+        public static void OnTurn(GameplayManager manager, int numTurns, bool nativeEventThisTurn = false)
         {
             var st = MythicData.State;
-            st.CurrentTurn += Math.Max(1, numTurns);
+            if (numTurns > 0) st.CurrentTurn += numTurns;
 
             ChaosEngine.OnTurnSignals(manager);
+            // The game reports enemy attacks, encounter rounds, plot hooks and task results as
+            // 0-turn ticks. Counting each as a turn let a three-enemy fight burn the event
+            // cooldown and a queued event's whole injection window between two player actions.
+            if (numTurns <= 0) return;
             MythicData.ExpirePending();
 
+            if (nativeEventThisTurn) return; // one unplanned development per turn
             if (!(MythicPlugin.CfgEnableRandomEvents?.Value ?? true)) return;
             if (st.CurrentTurn - st.LastEventTurn < (MythicPlugin.CfgEventCooldownTurns?.Value ?? 8)) return;
             if (st.SceneEventCount >= (MythicPlugin.CfgMaxEventsPerScene?.Value ?? 2)) return;
@@ -154,6 +193,7 @@ namespace AIROG_Mythic
             {
                 Place top = manager?.currentPlace?.GetTopLvlPlace();
                 if (top == null || SS.I?.uuidToGameEntityMap == null) return null;
+                var playable = manager.scenarioState?.allPlayableCharacters;
                 var candidates = new List<GameCharacter>();
                 foreach (var ge in SS.I.uuidToGameEntityMap.Values)
                 {
@@ -161,7 +201,12 @@ namespace AIROG_Mythic
                     if (gc == null) continue;
                     if (gc.characterType != GameCharacter.CharacterType.NPC) continue;
                     if (gc.corpseState != GameCharacter.CorpseState.NONE) continue;
-                    if (gc.parentPlace?.GetTopLvlPlace()?.uuid != top.uuid) continue;
+                    // GameCharacter.parentPlace is a legacy field the game no longer assigns
+                    // (null on every character made since entities moved to InGameEntity);
+                    // the live location is the parent entity's place.
+                    if (gc.parentInGameEnt?.ParentPl()?.GetTopLvlPlace()?.uuid != top.uuid) continue;
+                    // Player characters are typed NPC too - the director must not script them.
+                    if (gc.IsMainPlayer() || (playable != null && playable.Contains(gc))) continue;
                     candidates.Add(gc);
                 }
                 if (candidates.Count == 0) return null;

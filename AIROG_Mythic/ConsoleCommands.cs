@@ -31,6 +31,7 @@ namespace AIROG_Mythic
                 if (upper == "MYTHIC EVENT")
                 {
                     string log = RandomEventEngine.FireEvent(__instance, forced: true);
+                    MythicData.SaveToCurrentDir(); // survives an Undo/Retry before the next turn tick
                     Modal(log + "\n\nIt will color the next few AI generations.");
                     return false;
                 }
@@ -42,6 +43,7 @@ namespace AIROG_Mythic
                         int old = MythicData.State.ChaosFactor;
                         MythicData.State.ChaosFactor = cf;
                         MythicData.LogLine($"CF set by hand: {old} -> {cf}");
+                        MythicData.SaveToCurrentDir();
                         Modal($"Chaos Factor: {old} -> {cf} (effective {ChaosEngine.EffectiveCF()})");
                     }
                     else Modal("Usage: MYTHIC CF <1-9>");
@@ -113,6 +115,7 @@ namespace AIROG_Mythic
 
             sb.AppendLine();
             sb.AppendLine("The ruling is now established fact — the AI will honor it over the next couple of turns.");
+            MythicData.SaveToCurrentDir();
             Modal(sb.ToString());
         }
 
@@ -158,6 +161,11 @@ namespace AIROG_Mythic
 
         private static void Modal(string text)
         {
+            // The commands stay usable with the per-save switch off, but nothing they queue is
+            // injected until it is back on - say so rather than promise the AI will honor it.
+            if (!MythicPlugin.SwitchedOn())
+                text = "[Mythic Director is switched OFF for this save (Mods checklist). Nothing below reaches the AI " +
+                       "until it is switched back on.]\n\n" + text;
             MessageModal.I.ShowModal(text, false, true);
         }
     }

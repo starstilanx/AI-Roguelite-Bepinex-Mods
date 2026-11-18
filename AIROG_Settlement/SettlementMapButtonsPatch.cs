@@ -13,12 +13,20 @@ namespace AIROG_Settlement
     {
         public static void Postfix(MapLocationDetails __instance)
         {
+            // Runs on every map redraw; never let it break the native details panel
+            try { UpdateButtons(__instance); }
+            catch (System.Exception e) { SettlementPlugin.Log?.LogWarning($"Settlement map buttons failed: {e.Message}"); }
+        }
+
+        private static void UpdateButtons(MapLocationDetails __instance)
+        {
             if (__instance == null || __instance.place == null || __instance.enterButtonTrans == null) return;
             if (SettlementPlugin.Instance == null) return;
 
             Transform parent = __instance.enterButtonTrans.parent;
             bool isSettlement = SettlementPlugin.Instance.IsSettlement(__instance.place);
-            bool enterActive = __instance.enterButtonTrans.gameObject.activeSelf;
+            // Both buttons follow the native Enter button, and vanish with the per-save mod switch
+            bool enterActive = __instance.enterButtonTrans.gameObject.activeSelf && ModSwitch.Enabled;
 
             // ---- Establish Settlement button ----
             var existingEstablish = parent.Find("EstablishSettlementButton");

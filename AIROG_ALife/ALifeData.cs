@@ -20,9 +20,19 @@ namespace AIROG_ALife
 
         public static ALifeState State = new ALifeState();
 
+        /// <summary>
+        /// Save folder the in-memory State belongs to. Null = a fresh state (plugin start, New
+        /// Game) that adopts the first save folder it is written to. State is never written to
+        /// any other folder: from the moment the game points at a different save until our
+        /// LoadGame postfix has read that save's file, memory still holds the PREVIOUS save's
+        /// squads, and any write in that window replaces the new save's world with them.
+        /// </summary>
+        private static string _stateDir;
+
         public static void Reset()
         {
             State = new ALifeState();
+            _stateDir = null;
             Debug.Log("[ALife] State reset.");
         }
 
@@ -42,8 +52,11 @@ namespace AIROG_ALife
 
         public static void SaveToCurrentDir()
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
+            string dir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
+            if (_stateDir == null) _stateDir = dir;
+            else if (!string.Equals(_stateDir, dir, StringComparison.OrdinalIgnoreCase)) return;
+            Save(dir);
         }
 
         public static void Load(string saveDir)
@@ -64,6 +77,10 @@ namespace AIROG_ALife
             {
                 Debug.LogWarning("[ALife] Load failed, resetting: " + ex.Message);
                 Reset();
+            }
+            finally
+            {
+                _stateDir = saveDir;
             }
         }
 

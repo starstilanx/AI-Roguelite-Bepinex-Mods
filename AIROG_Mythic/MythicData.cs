@@ -20,9 +20,26 @@ namespace AIROG_Mythic
 
         public static MythicState State = new MythicState();
 
+        /// <summary>
+        /// True from the start of GameplayManager.LoadGame until our postfix has read the save's
+        /// file. LoadGame re-enters the current place (ApplyLocationChange) and may autosave before
+        /// that postfix runs, i.e. while State still belongs to whatever was loaded before.
+        /// </summary>
+        public static bool Loading;
+
+        /// <summary>
+        /// Save folder the in-memory State belongs to. Null = a fresh state (plugin start, New
+        /// Game) that adopts the first save folder it is written to. State is never written to
+        /// any other folder: from the moment the game points at a different save until our
+        /// LoadGame postfix has read that save's file, memory still holds the previous save's
+        /// director, and writing it out would overwrite the new save's file with it.
+        /// </summary>
+        private static string _stateDir;
+
         public static void Reset()
         {
             State = new MythicState { ChaosFactor = MythicPlugin.CfgStartingCF?.Value ?? 5 };
+            _stateDir = null;
             Debug.Log("[Mythic] State reset.");
         }
 
@@ -42,8 +59,11 @@ namespace AIROG_Mythic
 
         public static void SaveToCurrentDir()
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
-                Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg));
+            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
+            string dir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
+            if (_stateDir == null) _stateDir = dir;
+            else if (!string.Equals(_stateDir, dir, StringComparison.OrdinalIgnoreCase)) return;
+            Save(dir);
         }
 
         public static void Load(string saveDir)
@@ -64,6 +84,10 @@ namespace AIROG_Mythic
             {
                 Debug.LogWarning("[Mythic] Load failed, resetting: " + ex.Message);
                 Reset();
+            }
+            finally
+            {
+                _stateDir = saveDir;
             }
         }
 

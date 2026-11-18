@@ -53,10 +53,46 @@ namespace AIROG_ALife
             catch { }
         }
 
+        /// <summary>Re-apply the per-save switch to the live journal (tab present when on, gone when off).</summary>
+        public static void ApplySwitch()
+        {
+            GameplayManager manager = SS.I != null ? SS.I.hackyManager : null;
+            if (manager == null) return; // main menu
+            InjectIntoJournalModal(manager.journalModal);
+        }
+
+        /// <summary>
+        /// Takes the tab out of the journal while A-Life is switched off for this save. Removed,
+        /// not SetActive(false): JournalModal.UnsetTabTransesAndBtns runs
+        /// GetComponentInChildren&lt;Image&gt;() on every tab button, and that skips inactive
+        /// objects - a merely hidden button would hand the game a null on every tab click.
+        /// Button and page go together so the game's index pairing of the two lists holds.
+        /// </summary>
+        private static void RemoveFromJournalModal(JournalModal modal)
+        {
+            Transform btn = modal.tabBtnsHolder.Find(BTN_NAME);
+            Transform view = modal.tabTransesHolder.Find(VIEW_NAME);
+            if (btn == null && view == null) return;
+            bool wasOpen = view != null && view.gameObject.activeSelf;
+            if (btn != null) UnityEngine.Object.DestroyImmediate(btn.gameObject);
+            if (view != null) UnityEngine.Object.DestroyImmediate(view.gameObject);
+            _contentObj = null;
+            if (wasOpen && modal.IsShowing())
+            {
+                try { modal.OnQuestsTabClicked(clickedByUser: false); } // don't leave an empty journal
+                catch (Exception ex) { Debug.LogWarning("[ALife] Could not fall back to the quests tab: " + ex.Message); }
+            }
+        }
+
         public static void InjectIntoJournalModal(JournalModal modal)
         {
             if (!ALifePlugin.CfgRumorsTab.Value) return;
             if (modal == null || modal.tabBtnsHolder == null || modal.tabTransesHolder == null) return;
+            if (!ALifePlugin.SwitchedOn())
+            {
+                RemoveFromJournalModal(modal);
+                return;
+            }
 
             Transform view = modal.tabTransesHolder.Find(VIEW_NAME);
             if (view == null)

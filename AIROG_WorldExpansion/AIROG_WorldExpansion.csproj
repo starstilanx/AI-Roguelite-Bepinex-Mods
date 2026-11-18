@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_WorldExpansion</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite to introduce faction simulation and world events.</Description>
-    <Version>1.4.1</Version>
+    <Version>1.5.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>..\AIROG_GenContext\bin\Debug\net472\</OutputPath>
@@ -85,6 +85,11 @@
     </Reference>
     <Reference Include="UnityEngine.ImageConversionModule">
       <HintPath>..\AIRL\libs\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- GenContext reference for the per-save mod switch (soft dependency at runtime, see ModSwitch.cs) -->
+    <Reference Include="AIROG_GenContext">
+      <HintPath>..\AIROG_GenContext\bin\Debug\net472\AIROG_GenContext.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

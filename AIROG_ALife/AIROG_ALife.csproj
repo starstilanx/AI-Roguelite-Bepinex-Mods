@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_ALife</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite that simulates STALKER-style A-Life: persistent offline squads that travel, fight, and die across the world map.</Description>
-    <Version>2.3.1</Version>
+    <Version>2.4.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>

@@ -3,6 +3,7 @@ using HarmonyLib;
 using UnityEngine;
 using System.IO;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace AIROG_WorldExpansion
@@ -12,9 +13,13 @@ namespace AIROG_WorldExpansion
     {
         public const string PLUGIN_GUID = "com.airog.worldexpansion";
         public const string PLUGIN_NAME = "World Expansion";
-        public const string PLUGIN_VERSION = "1.4.1";
+        public const string PLUGIN_VERSION = "1.5.0";
 
         public static WorldExpansionPlugin Instance { get; private set; }
+
+        // Set from the mod-switch callbacks, which run inside whichever call raised them; the
+        // UI is re-synced from Update() instead, on the main thread and outside that call.
+        private static volatile bool _switchUiDirty;
 
         private void Awake()
         {
@@ -30,16 +35,49 @@ namespace AIROG_WorldExpansion
             Harmony.CreateAndPatchAll(typeof(PlayerWorldActor));
             Harmony.CreateAndPatchAll(typeof(StrategicMapUI));
             Harmony.CreateAndPatchAll(typeof(FactionCourtSystem));
+
+            ModSwitch.Hook(() => _switchUiDirty = true);
+        }
+
+        private void Update()
+        {
+            if (!_switchUiDirty) return;
+            _switchUiDirty = false;
+            try
+            {
+                var manager = SS.I?.hackyManager;
+                if (manager == null) return;
+                WorldEventsUI.ApplyModSwitch(manager.journalModal);
+                StrategicMapUI.ApplyModSwitch(manager.mapModal);
+
+                // If Lore is the journal's selected tab, swap it between the category view and the
+                // native list now (any other time the game redraws it when the tab is clicked)
+                var lore = manager.journalModal != null ? manager.journalModal.lorebookView : null;
+                if (lore != null && lore.gameObject.activeSelf && manager.scenarioState != null) lore.Redraw();
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[WorldExpansion] Could not apply the mod switch to the UI: {e.Message}");
+            }
         }
 
         [HarmonyPatch(typeof(SaveIO), "WriteSaveFile")]
         [HarmonyPostfix]
-        public static void Postfix_WriteSaveFile(GameplayManager manager, bool clean)
+        // No injected args: WriteSaveFile's first parameter is MmCtxGetter since the 07/28 build,
+        // so declaring it as GameplayManager was an unchecked type mismatch.
+        public static void Postfix_WriteSaveFile()
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+            try
             {
-                string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
-                WorldData.Save(saveDir);
+                if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                {
+                    string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
+                    WorldData.Save(saveDir);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[WorldExpansion] Save hook failed: {e.Message}");
             }
         }
 
@@ -47,19 +85,45 @@ namespace AIROG_WorldExpansion
         [HarmonyPostfix]
         public static void Postfix_LoadGame(GameplayManager __instance)
         {
-            if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+            try
             {
-                string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
-                WorldData.Load(saveDir);
-                WorldEventsUI.MarkDirty();
+                if (SS.I != null && !string.IsNullOrEmpty(SS.I.saveSubDirAsArg))
+                {
+                    string saveDir = Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg);
+                    WorldData.Load(saveDir);
+                    WorldEventsUI.MarkDirty();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[WorldExpansion] Load hook failed: {e.Message}");
             }
         }
-        
+
+        // The game deletes every image in the save folder that no live entity owns when it saves
+        // on exit ("auto-clean saves", on by default). Lore images belong to no entity, so they
+        // were wiped each time the player returned to the main menu.
+        [HarmonyPatch(typeof(SaveIO), "CleanOrphanAssetFiles", new Type[] { typeof(string), typeof(HashSet<string>) })]
+        [HarmonyPrefix]
+        public static void Prefix_CleanOrphanAssetFiles(HashSet<string> keepUuids)
+        {
+            try
+            {
+                if (keepUuids == null || WorldData.CurrentState?.LoreExtras == null) return;
+                foreach (var extra in WorldData.CurrentState.LoreExtras.Values)
+                    if (extra != null && !string.IsNullOrEmpty(extra.ImageUuid)) keepUuids.Add(extra.ImageUuid);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[WorldExpansion] Could not protect lore images from save cleaning: {e.Message}");
+            }
+        }
+
         [HarmonyPatch(typeof(GameplayManager), "ProcessConsoleCommand")]
         [HarmonyPrefix]
         public static bool Prefix_ProcessConsoleCommand(string txt, GameplayManager __instance)
         {
-            string cmd = txt.ToUpperInvariant();
+            string cmd = (txt ?? "").Trim().ToUpperInvariant();
             if (cmd == "WORLD_SIM_TEST")
             {
                 WorldSimulation.RunMinorTick(__instance);
@@ -137,12 +201,12 @@ namespace AIROG_WorldExpansion
         [HarmonyPostfix]
         public static void Postfix_GetItemGoldValForBuying(GameItem item, ref long __result)
         {
-            if (WorldData.CurrentState != null && WorldData.CurrentState.Market != null)
+            if (WorldData.CurrentState != null && WorldData.CurrentState.Market != null && ModSwitch.Enabled)
             {
                 // Apply global multiplier
                 float mult = WorldData.CurrentState.Market.PriceMultiplier;
                 // Apply type modifier if checked (simplified for now)
-                
+
                 __result = (long)(__result * mult);
             }
         }
@@ -151,7 +215,7 @@ namespace AIROG_WorldExpansion
         [HarmonyPostfix]
         public static void Postfix_GetItemGoldValForSelling(GameItem item, ref long __result)
         {
-            if (WorldData.CurrentState != null && WorldData.CurrentState.Market != null)
+            if (WorldData.CurrentState != null && WorldData.CurrentState.Market != null && ModSwitch.Enabled)
             {
                 float mult = WorldData.CurrentState.Market.SellMultiplier;
                 __result = (long)(__result * mult);

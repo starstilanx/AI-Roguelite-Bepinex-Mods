@@ -26,6 +26,7 @@ namespace AIROG_ALife
             {
                 try
                 {
+                    if (!ALifePlugin.SwitchedOn()) return;
                     OnTurn(__instance, numTurns);
                 }
                 catch (Exception ex)
@@ -39,6 +40,10 @@ namespace AIROG_ALife
         {
             if (!ALifePlugin.CfgEnableSim.Value) return;
             if (manager == null || manager.currentPlace == null) return;
+            // The game reports enemy attacks, encounter rounds and task results as 0-turn ticks.
+            // Running the pass on those re-rolled spawns, battles and NPC migration once per
+            // enemy action with no time passing.
+            if (numTurns <= 0) return;
 
             var state = ALifeData.State;
             state.CurrentTurn += numTurns;
@@ -50,17 +55,33 @@ namespace AIROG_ALife
             string playerTopUuid = manager.currentPlace.GetTopLvlPlace()?.uuid;
             if (state.LastPlayerTopUuid == null) state.LastPlayerTopUuid = playerTopUuid;
 
-            foreach (var s in state.Squads) ALifeEmbodiment.Sanitize(s);
-            PruneInvalidSquads(topPlaces);
-            ALifeLegend.DecayTick(numTurns);
-            ALifeWar.Upkeep();
-            SeedSquads(manager, topPlaces, playerTopUuid);
-            ALifeLifecycle.Tick(manager, numTurns, playerTopUuid);
-            ALifeLifecycle.FeudTick(manager, numTurns, playerTopUuid);
-            MoveSquads(manager, playerTopUuid, numTurns);
-            ResolveEncounters(manager, playerTopUuid);
-            MaybeMigrateNamedNpc(manager, topPlaces, playerTopUuid);
-            ALifeKnowledge.Tick(playerTopUuid);
+            // Bands standing in a different world than the one the player is in sit the pass out
+            // and are put back afterwards. The travel graph and place list below only cover the
+            // current world, so the prune step used to delete every band - leaders, feuds,
+            // chronicles and all - on the first turn after the player crossed to another world.
+            var here = new HashSet<string>(topPlaces.Select(p => p.uuid));
+            var elsewhere = state.Squads
+                .Where(s => !here.Contains(s.CurrentPlaceUuid) && ALifeGraph.PlaceByUuid(s.CurrentPlaceUuid) != null)
+                .ToList();
+            foreach (var s in elsewhere) state.Squads.Remove(s);
+            try
+            {
+                foreach (var s in state.Squads) ALifeEmbodiment.Sanitize(s);
+                PruneInvalidSquads(topPlaces);
+                ALifeLegend.DecayTick(numTurns);
+                ALifeWar.Upkeep();
+                SeedSquads(manager, topPlaces, playerTopUuid);
+                ALifeLifecycle.Tick(manager, numTurns, playerTopUuid);
+                ALifeLifecycle.FeudTick(manager, numTurns, playerTopUuid);
+                MoveSquads(manager, playerTopUuid, numTurns);
+                ResolveEncounters(manager, playerTopUuid);
+                MaybeMigrateNamedNpc(manager, topPlaces, playerTopUuid);
+                ALifeKnowledge.Tick(playerTopUuid);
+            }
+            finally
+            {
+                state.Squads.AddRange(elsewhere);
+            }
 
             ALifeData.SaveToCurrentDir();
         }
@@ -100,8 +121,10 @@ namespace AIROG_ALife
             {
                 archetype = SquadArchetype.WARBAND;
                 var warFacUuids = wars.SelectMany(w => new[] { w.ActorUuid, w.TargetUuid }).Distinct().ToList();
-                faction = factions.FirstOrDefault(f => warFacUuids.Contains(f.uuid))
-                          ?? factions[Rng.Next(factions.Count)];
+                // Any belligerent, not the first one in the game's faction list - that gave one
+                // side of every war all the warbands and the other side none.
+                var atWar = factions.Where(f => warFacUuids.Contains(f.uuid)).ToList();
+                faction = atWar.Count > 0 ? atWar[Rng.Next(atWar.Count)] : factions[Rng.Next(factions.Count)];
             }
             else if (roll < 0.30) archetype = SquadArchetype.HUNTERS;
             else if (roll < 0.45) archetype = SquadArchetype.RAIDERS;
@@ -611,6 +634,7 @@ namespace AIROG_ALife
                 ALifeData.State.Squads.SelectMany(s => s.MemberUuids));
 
             var followers = manager.scenarioState?.followers ?? new List<GameCharacter>();
+            var playable = manager.scenarioState?.allPlayableCharacters ?? new List<GameCharacter>();
             var candidates = new List<GameCharacter>();
             foreach (var kv in SS.I.uuidToGameEntityMap.ToList())
             {
@@ -620,16 +644,21 @@ namespace AIROG_ALife
                 if (ch.corpseState != GameCharacter.CorpseState.NONE) continue;
                 if (ch.isMerchant) continue;                       // don't move shops out from under the player
                 if (followers.Contains(ch)) continue;
+                // Player characters are typed NPC too, and on a travel turn the player's own
+                // entity is still parented to the place just left when this tick runs.
+                if (playable.Contains(ch) || ch.IsMainPlayer()) continue;
                 if (squadMemberUuids.Contains(ch.uuid)) continue;  // squad members move with their squad
-                if (ch.parentPlace == null) continue;
-                Place top = ch.parentPlace.GetTopLvlPlace();
+                // Where the character really is. (ch.parentPlace is a legacy field the game no
+                // longer assigns - null on every current character - so testing it skipped
+                // everyone and migration never happened.)
+                Place top = ch.parentInGameEnt?.ParentPl()?.GetTopLvlPlace();
                 if (top == null || top.uuid == playerTopUuid) continue; // never move NPCs the player can see
                 candidates.Add(ch);
             }
             if (candidates.Count == 0) return;
 
             GameCharacter npc = candidates[Rng.Next(candidates.Count)];
-            Place fromTop = npc.parentPlace.GetTopLvlPlace();
+            Place fromTop = npc.parentInGameEnt.ParentPl().GetTopLvlPlace();
             Place dest = ALifeGraph.RandomNeighbor(fromTop.uuid);
             if (dest == null || dest.uuid == playerTopUuid) return;
 

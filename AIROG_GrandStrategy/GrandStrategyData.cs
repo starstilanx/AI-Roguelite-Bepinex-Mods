@@ -14,15 +14,55 @@ namespace AIROG_GrandStrategy
         // so no flavor string ever NREs on a pre-theme save.
         public static ThemeLexicon L => State?.Lex ?? Themes.Build("GENERIC");
 
+        // Save folder State was loaded from, or first saved into (null = a fresh state not tied
+        // to a save yet). State outlives scene changes, so without this it could be written into
+        // whichever folder the game points at now - including a save that is still loading,
+        // before our load hook has swapped the previous save's dominion out.
+        private static string _stateDir;
+
         public static void Reset()
         {
             State = new DominionState();
+            _stateDir = null;
+        }
+
+        private static string NormalizeDir(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return dir;
+            try { dir = Path.GetFullPath(dir); } catch { }
+            return dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        private static string CurrentSaveDir()
+        {
+            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return null;
+            return Path.Combine(SS.I.saveTopLvlDir ?? "", SS.I.saveSubDirAsArg);
+        }
+
+        /// If the in-memory dominion belongs to a different save than the one being played (a
+        /// game started through a path that ran neither our load hook nor our new-game reset),
+        /// swap it for this save's own data. Called from the strategic tick.
+        public static void EnsureStateForCurrentSave()
+        {
+            string dir = CurrentSaveDir();
+            if (dir == null || _stateDir == null) return;
+            if (string.Equals(_stateDir, NormalizeDir(dir), StringComparison.OrdinalIgnoreCase)) return;
+            Debug.LogWarning("[GrandStrategy] Dominion data in memory belongs to another save; loading this save's data instead.");
+            Load(dir);
         }
 
         public static void Save(string dir, bool quiet = false)
         {
             try
             {
+                string normalized = NormalizeDir(dir);
+                if (_stateDir == null) _stateDir = normalized;
+                else if (!string.Equals(_stateDir, normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    Debug.LogWarning($"[GrandStrategy] Not saving: dominion data in memory belongs to another save ({_stateDir}).");
+                    return;
+                }
+
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 string path = Path.Combine(dir, "grand_strategy_data.json");
                 File.WriteAllText(path, JsonConvert.SerializeObject(State, Formatting.Indented));
@@ -38,12 +78,17 @@ namespace AIROG_GrandStrategy
         // so this must be called whenever dominion state changes mid-session (not just on game save).
         public static void SaveToCurrentDir(bool quiet = true)
         {
-            if (SS.I == null || string.IsNullOrEmpty(SS.I.saveSubDirAsArg)) return;
-            Save(Path.Combine(SS.I.saveTopLvlDir, SS.I.saveSubDirAsArg), quiet);
+            // In the main menu saveSubDirAsArg is the new-game staging folder, whose files the
+            // game copies into the next new save.
+            if (SS.I == null || SS.I.hackyManager == null) return;
+            string dir = CurrentSaveDir();
+            if (dir == null) return;
+            Save(dir, quiet);
         }
 
         public static void Load(string dir)
         {
+            _stateDir = NormalizeDir(dir);
             try
             {
                 string path = Path.Combine(dir, "grand_strategy_data.json");

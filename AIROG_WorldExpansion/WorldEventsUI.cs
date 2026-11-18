@@ -20,21 +20,87 @@ namespace AIROG_WorldExpansion
         [HarmonyPostfix]
         public static void Postfix_JournalModal_Init(JournalModal __instance)
         {
-            InjectIntoJournalModal(__instance);
+            // JournalModal.Init runs inside GameplayManager.LoadGame: an exception escaping here
+            // would abort loading the save.
+            try
+            {
+                ApplyModSwitch(__instance);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[WorldExpansion] World News tab injection failed: {e}");
+            }
         }
 
         [HarmonyPatch(typeof(JournalModal), "UnsetTabTransesAndBtns")]
         [HarmonyPostfix]
         public static void Postfix_UnsetTabTransesAndBtns(JournalModal __instance)
         {
-            Transform tabBtn = __instance.tabBtnsHolder.Find("WorldNewsTabButton");
-            if (tabBtn != null)
+            // Called on every journal tab switch; never let our tab break the native ones
+            try
             {
-                var img = tabBtn.GetComponentInChildren<Image>();
-                if (img != null) img.color = Utils.GetColorFromStr(JournalModal.UNSELECTED_TAB_COLOR_STR);
+                Transform tabBtn = __instance.tabBtnsHolder.Find("WorldNewsTabButton");
+                if (tabBtn != null)
+                {
+                    var img = tabBtn.GetComponentInChildren<Image>();
+                    if (img != null) img.color = Utils.GetColorFromStr(JournalModal.UNSELECTED_TAB_COLOR_STR);
+                }
+                Transform view = __instance.tabTransesHolder.Find("WorldNewsTabView_Mod");
+                if (view != null) view.gameObject.SetActive(false);
             }
-            Transform view = __instance.tabTransesHolder.Find("WorldNewsTabView_Mod");
-            if (view != null) view.gameObject.SetActive(false);
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[WorldExpansion] World News tab reset failed: {e.Message}");
+            }
+        }
+
+        /// Puts the World News tab into the journal when the mod is on for this save (and
+        /// re-wires it - see InjectIntoJournalModal), takes it out when the mod is off.
+        public static void ApplyModSwitch(JournalModal modal)
+        {
+            if (modal == null || modal.tabBtnsHolder == null || modal.tabTransesHolder == null) return;
+            if (ModSwitch.Enabled) InjectIntoJournalModal(modal);
+            else RemoveFromJournalModal(modal);
+        }
+
+        // Removed, not SetActive(false): JournalModal.UnsetTabTransesAndBtns runs
+        // GetComponentInChildren<Image>() on every tab button, and that call skips inactive
+        // objects - a merely hidden button would hand the game a null on every tab click.
+        // Button and page go together because the game pairs the two lists by index.
+        private static void RemoveFromJournalModal(JournalModal modal)
+        {
+            Transform btn  = modal.tabBtnsHolder.Find("WorldNewsTabButton");
+            Transform view = modal.tabTransesHolder.Find("WorldNewsTabView_Mod");
+            if (btn == null && view == null) return;
+
+            bool wasOpen = view != null && view.gameObject.activeSelf;
+            if (btn != null)  Object.DestroyImmediate(btn.gameObject);
+            if (view != null) Object.DestroyImmediate(view.gameObject);
+            _contentObj = null;
+
+            if (!wasOpen) return;
+            // Our page was the selected tab: fall back to quests so the journal is not left blank
+            try
+            {
+                if (modal.IsShowing())
+                {
+                    modal.OnQuestsTabClicked(clickedByUser: false);
+                }
+                else
+                {
+                    // Journal closed (the usual case - the Mods checklist is opened from the HUD):
+                    // just mark the quests page as the selected one; the game refreshes it when
+                    // the journal next opens. No OnQuestsTabClicked here - it walks the tab
+                    // buttons, which are all inactive while the journal is closed.
+                    if (modal.questsTabView != null) modal.questsTabView.gameObject.SetActive(true);
+                    if (modal.questsTabButtonImg != null)
+                        modal.questsTabButtonImg.color = Utils.GetColorFromStr(JournalModal.SELECTED_TAB_COLOR_STR);
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[WorldExpansion] Could not switch the journal back to quests: {e.Message}");
+            }
         }
 
         public static void InjectIntoJournalModal(JournalModal modal)
@@ -215,7 +281,21 @@ namespace AIROG_WorldExpansion
                 var curPlace = SS.I?.hackyManager?.currentPlace;
                 var topPlace = curPlace?.GetTopLvlPlace() ?? curPlace;
                 var owner    = topPlace?.faction ?? curPlace?.faction;
-                if (owner != null && topPlace != null)
+
+                // The player's dominion has no native faction, so its holdings are read from the
+                // claim list (see StrategicMapUI.ResolveOwnership)
+                var dominion = topPlace == null ? default(KeyValuePair<string, FactionExtData>)
+                    : state.Factions.FirstOrDefault(kv => kv.Value.Tag == "Player Dominion"
+                        && !state.EliminatedFactions.Contains(kv.Key)
+                        && kv.Value.ClaimedPlaceUuids.Contains(topPlace.uuid));
+                if (dominion.Value != null)
+                {
+                    bool atWar = state.ActiveWars.Values.Any(
+                        w => w.ActorUuid == dominion.Key || w.TargetUuid == dominion.Key);
+                    CreateTextEntry($"You are in <b>{topPlace.GetPrettyName()}</b> — a holding of your dominion, {dominion.Value.Name}{(atWar ? "  <color=#FF8888>⚔ at war</color>" : "")}",
+                        21, new Color(0.85f, 0.85f, 0.7f));
+                }
+                else if (owner != null && topPlace != null && !state.EliminatedFactions.Contains(owner.uuid))
                 {
                     bool ownerAtWar = state.ActiveWars.Values.Any(
                         w => w.ActorUuid == owner.uuid || w.TargetUuid == owner.uuid);
