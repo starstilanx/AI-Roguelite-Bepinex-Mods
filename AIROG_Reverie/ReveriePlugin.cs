@@ -10,7 +10,7 @@ namespace AIROG_Reverie
     {
         public const string PLUGIN_GUID    = "com.airog.reverie";
         public const string PLUGIN_NAME    = "AIROG Reverie";
-        public const string PLUGIN_VERSION = "1.0.0";
+        public const string PLUGIN_VERSION = "1.0.1";
 
         public static ReveriePlugin Instance { get; private set; }
 
@@ -21,6 +21,7 @@ namespace AIROG_Reverie
 
             Harmony.CreateAndPatchAll(typeof(ReverieInterceptor.Patch_DoConvoTextFieldSubmission));
             Harmony.CreateAndPatchAll(typeof(ReverieInterceptor.Patch_GenerateTxtNoTryStrStyle));
+            Harmony.CreateAndPatchAll(typeof(ReverieInterceptor.Patch_GenerateTxtFromTxtAndImg));
             Harmony.CreateAndPatchAll(typeof(ReverieInterceptor.Patch_ReadSaveFile));
             Harmony.CreateAndPatchAll(typeof(ReverieInterceptor.Patch_WriteSaveFile));
             Harmony.CreateAndPatchAll(typeof(ReverieInterceptor.Patch_DoNewGame));
@@ -31,7 +32,7 @@ namespace AIROG_Reverie
             // Register with GenContext if present (soft dependency — inert without it)
             try
             {
-                AIROG_GenContext.ContextManager.RegisterProvider(new ReverieProvider());
+                RegisterProvider();
                 Logger.LogInfo("[Reverie] ReverieProvider registered with GenContext.");
             }
             catch (System.Exception ex)
@@ -39,6 +40,12 @@ namespace AIROG_Reverie
                 Logger.LogWarning($"[Reverie] GenContext not available — the dream layer is disabled. ({ex.Message})");
             }
         }
+
+        // Own method so a missing GenContext assembly fails here, inside the caller's try, and
+        // not while Awake itself is being compiled.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void RegisterProvider()
+            => AIROG_GenContext.ContextManager.RegisterProvider(new ReverieProvider());
 
         // ---- Console commands ----
 
@@ -48,16 +55,32 @@ namespace AIROG_Reverie
             [HarmonyPrefix]
             public static bool Prefix(string txt, GameplayManager __instance)
             {
-                string cmd = txt.ToUpperInvariant().Trim();
+                // Every mod's console commands hang off this one prefix chain: never throw out of it.
+                try
+                {
+                    return !Handle((txt ?? "").ToUpperInvariant().Trim());
+                }
+                catch (System.Exception ex)
+                {
+                    UnityEngine.Debug.LogError($"[Reverie] Console command error: {ex.Message}");
+                    return true;
+                }
+            }
 
+            /// <summary>True if the command was one of ours.</summary>
+            private static bool Handle(string cmd)
+            {
                 if (cmd == "REVERIE_TEST")
                 {
                     // Force a dream to begin immediately (bypasses roll + cooldown)
-                    if (ReverieManager.State.Phase == DreamPhase.Dreaming)
-                    MessageModal.I.ShowModal("Already dreaming.", false, true);
+                    if (!ReverieManager.Active)
+                        // Starting one anyway would print the falling-asleep line for a dream nobody narrates
+                        MessageModal.I.ShowModal("Reverie is switched off for this save (Mods checklist).", false, true);
+                    else if (ReverieManager.State.Phase == DreamPhase.Dreaming)
+                        MessageModal.I.ShowModal("Already dreaming.", false, true);
                     else
                         ReverieManager.BeginDream();
-                    return false;
+                    return true;
                 }
 
                 if (cmd == "REVERIE_WAKE")
@@ -71,7 +94,7 @@ namespace AIROG_Reverie
                     }
                     else
                         MessageModal.I.ShowModal("Not dreaming.", false, true);
-                    return false;
+                    return true;
                 }
 
                 if (cmd == "REVERIE_STATUS")
@@ -93,10 +116,10 @@ namespace AIROG_Reverie
                         $"Haunting: {(haunting != null ? haunting.Text : "none")}\n" +
                         $"Dreams: {st.TotalDreams} ({st.TotalTriumphs} triumphs, {st.TotalNightmares} nightmares)",
                         false, true);
-                    return false;
+                    return true;
                 }
 
-                return true;
+                return false;
             }
         }
     }

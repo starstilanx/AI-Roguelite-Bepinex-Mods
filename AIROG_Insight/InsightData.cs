@@ -22,9 +22,27 @@ namespace AIROG_Insight
         /// <summary>Player interactions taken while at a place, keyed by place UUID.</summary>
         public Dictionary<string, int> PlaceInteractionCounts { get; set; } = new Dictionary<string, int>();
 
+        /// <summary>
+        /// UUID of the NPC the turn in progress is aimed at (null: nobody). Stored in the file
+        /// because the GenContext provider that asks the AI for an insight only ever sees this file.
+        /// </summary>
+        public string ActiveNpcUuid { get; set; }
+
         private static InsightData _instance;
         public static InsightData Instance => _instance ?? (_instance = new InsightData());
-        public static void ResetInstance() => _instance = new InsightData();
+
+        /// <summary>
+        /// The save folder the data in memory belongs to. It is only ever written back there:
+        /// between "the game points at another save" and "our load hook ran" the data in memory is
+        /// still the previous save's.
+        /// </summary>
+        public static string OwnerDir { get; private set; }
+
+        public static void ResetInstance(string saveDir)
+        {
+            _instance = new InsightData();
+            OwnerDir = saveDir;
+        }
 
         /// <summary>Appends a new insight layer to an NPC's accumulated insight text, keeping the tail under the cap.</summary>
         public void AddNpcInsight(string uuid, string insightText)
@@ -55,7 +73,7 @@ namespace AIROG_Insight
 
         public void Load(string saveDir)
         {
-            _instance = new InsightData();
+            ResetInstance(saveDir);
             if (string.IsNullOrEmpty(saveDir)) return;
             string path = Path.Combine(saveDir, "insight_data.json");
             if (File.Exists(path))

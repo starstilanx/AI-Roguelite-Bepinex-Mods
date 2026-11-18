@@ -11,29 +11,53 @@ namespace AIROG_Reverie
 
         public string GetContext(string prompt, int maxTokens)
         {
-            var state = ReverieManager.State;
-            if (state == null || maxTokens <= 0) return "";
-
-            var sb = new StringBuilder();
-
-            if (state.Phase == DreamPhase.Dreaming && state.CurrentDream != null)
-                BuildDreamDirective(sb, state);
-            else
+            try
             {
-                if (state.PendingWake != WakeOutcome.None)
-                    BuildWakeDirective(sb, state);
-                BuildAwakeContext(sb, state);
+                var state = ReverieManager.State;
+                if (state == null || maxTokens <= 0 || !ReverieManager.Active) return "";
+
+                var sb = new StringBuilder();
+
+                if (state.Phase == DreamPhase.Dreaming && state.CurrentDream != null)
+                    BuildDreamDirective(sb, state);
+                else
+                {
+                    if (state.PendingWake != WakeOutcome.None)
+                        BuildWakeDirective(sb, state);
+                    BuildAwakeContext(sb, state);
+                }
+
+                string result = sb.ToString().TrimEnd();
+                if (result.Length == 0) return "";
+
+                // The dream directive is all-or-nothing: a truncated rule block is worse than none,
+                // but in practice Priority 96 means we run near the top of the budget.
+                int maxChars = maxTokens >= int.MaxValue / 4 ? int.MaxValue : maxTokens * 4;
+                if (result.Length > maxChars && state.Phase != DreamPhase.Dreaming)
+                    result = result.Substring(0, maxChars);
+                return result;
             }
+            catch (System.Exception ex)
+            {
+                // Runs inside the game's prompt builder: a throw here would lose the whole turn.
+                UnityEngine.Debug.LogError($"[Reverie] Context build error: {ex.Message}");
+                return "";
+            }
+        }
 
-            string result = sb.ToString().TrimEnd();
-            if (result.Length == 0) return "";
-
-            // The dream directive is all-or-nothing: a truncated rule block is worse than none,
-            // but in practice Priority 96 means we run near the top of the budget.
-            int maxChars = maxTokens >= int.MaxValue / 4 ? int.MaxValue : maxTokens * 4;
-            if (result.Length > maxChars && state.Phase != DreamPhase.Dreaming)
-                result = result.Substring(0, maxChars);
-            return result;
+        /// <summary>
+        /// The specialized (non-unified) story call is capped at a couple of hundred output tokens,
+        /// sized for the narration alone: a block asked for at the END of the reply is the first
+        /// thing that cap cuts off, and then the dream never advances. There the block goes first.
+        /// </summary>
+        private static bool BlockGoesFirst()
+        {
+            try
+            {
+                var manager = SS.I != null ? SS.I.hackyManager : null;
+                return manager != null && !manager.IsUnifiedFlow();
+            }
+            catch { return false; }
         }
 
         private static void BuildDreamDirective(StringBuilder sb, ReverieState state)
@@ -56,7 +80,9 @@ namespace AIROG_Reverie
             sb.AppendLine("- Bold, clever, or self-aware action raises lucidity and progress; panic, denial, or being overwhelmed lowers lucidity.");
             if (climax)
                 sb.AppendLine("- THIS IS THE FINAL DREAM-TURN. Bring the dream to its climax and force the confrontation with the dream's heart NOW.");
-            sb.AppendLine("[DREAM INSTRUCTION: At the very end of your response, append a hidden block in exactly this format:]");
+            sb.AppendLine(BlockGoesFirst()
+                ? "[DREAM INSTRUCTION: Begin your response with a hidden block in exactly this format, and only then write the narration:]"
+                : "[DREAM INSTRUCTION: At the very end of your response, append a hidden block in exactly this format:]");
             sb.AppendLine("<DREAM_STATE>");
             sb.AppendLine("lucidity_delta: [-1 if the dreamer lost their grip this turn, 1 if they gained it, else 0]");
             sb.AppendLine("progress: [0-100, how close the dreamer now is to confronting the dream's heart]");

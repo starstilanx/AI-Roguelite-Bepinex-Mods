@@ -3,7 +3,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>AIROG_Insight</AssemblyName>
     <Description>A BepInEx plugin for AI Roguelite to add Insight mechanics.</Description>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <OutputPath>bin\Debug\net472\</OutputPath>
@@ -40,6 +40,11 @@
     </Reference>
     <Reference Include="netstandard">
       <HintPath>..\AIRL\libs\netstandard.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- GenContext reference for the per-save mod switch (ModToggles); soft at runtime, see ModSwitch.cs -->
+    <Reference Include="AIROG_GenContext">
+      <HintPath>..\AIROG_GenContext\bin\Debug\net472\AIROG_GenContext.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>
