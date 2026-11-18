@@ -11,7 +11,7 @@
 #
 #   AIROG_HistoryTab       - disabled in-game (.dll.disabled); stale vs the current build
 #   AIROG_DeepgramTTS      - not deployed
-#   AIROG_Sapi5            - not deployed (broken by the 06/15 TTS API change)
+#   AIROG_Sapi5            - not deployed (needs System.Speech.dll beside the plugin; Unity's Mono does not ship it)
 #   AIROG_PresetExporter   - not deployed
 #   AIROG_WomboStyles      - not deployed
 #   AIRL_TokenCount        - superseded by AIROG_TokenModifierPlugin in the same folder
@@ -69,10 +69,13 @@ $mods = [ordered]@{
     'AIROG_RandomOrg'           = 'AIROG_RandomOrg\AIROG_RandomOrg.csproj'
     'AIROG_Reverie'             = 'AIROG_Reverie\AIROG_Reverie.csproj'
     'AIROG_ScenePace'           = 'AIROG_ScenePace\AIROG_ScenePace.csproj'
+    'AIROG_Schedules'           = 'AIROG_Schedules\AIROG_Schedules.csproj'
     'AIROG_Settlement'          = 'AIROG_Settlement\AIROG_Settlement.csproj'
     'AIROG_SkillWeb'            = 'AIROG_SkillWeb\AIROG_SkillWeb.csproj'
+    'AIROG_TavernImport'        = 'AIROG_TavernImport\AIROG_TavernImport.csproj'
     'AIROG_TokenModifierPlugin' = 'AIROG_TokenCount\AIRL_TokenCount\AIROG_TokenModifierPlugin.csproj'
     'AIROG_VertexAI'            = 'AIROG_VertexAI\AIROG_VertexAI.csproj'
+    'AIROG_Wildcards'           = 'AIROG_Wildcards\AIROG_Wildcards.csproj'
     'AIROG_WorldExpansion'      = 'AIROG_WorldExpansion\AIROG_WorldExpansion.csproj'
     'StableHordeDetector'       = 'AIROG_StableHordeDetector\StableHordeDetector.csproj'
 }
